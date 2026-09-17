@@ -21,6 +21,7 @@ import (
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
+	"deploy-boss/internal/console"
 	"deploy-boss/internal/ctl"
 	"deploy-boss/internal/ports"
 	"deploy-boss/internal/proxy"
@@ -148,34 +149,59 @@ func (c CLI) daemon(args []string) error {
 		return err
 	}
 	defer control.Close()
-	var proxyServer *http.Server
+	servers := make([]*http.Server, 0, 2)
+	defer func() {
+		for _, server := range servers {
+			_ = server.Close()
+		}
+	}()
 	if cfg.Proxy.Listen != "" {
 		handler, err := proxy.New(cfg, manager, requestLogs)
 		if err != nil {
 			return err
 		}
-		listener, err := net.Listen("tcp", cfg.Proxy.Listen)
+		server, err := startHTTPServer("proxy", cfg.Proxy.Listen, handler)
 		if err != nil {
-			return fmt.Errorf("proxy listen: %w", err)
+			return err
 		}
-		proxyServer = &http.Server{Addr: cfg.Proxy.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-		go func() {
-			if err := proxyServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("proxy: %v", err)
-			}
-		}()
+		servers = append(servers, server)
+	}
+	if cfg.Management.Listen != "" {
+		handler, err := console.New(cfg, manager, requestLogs)
+		if err != nil {
+			return fmt.Errorf("management console: %w", err)
+		}
+		server, err := startHTTPServer("management console", cfg.Management.Listen, handler)
+		if err != nil {
+			return err
+		}
+		servers = append(servers, server)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("boss daemon ready: socket=%s proxy=%s", cfg.Socket, cfg.Proxy.Listen)
+	log.Printf("boss daemon ready: socket=%s proxy=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Listen)
 	<-ctx.Done()
-	if proxyServer != nil {
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = proxyServer.Shutdown(shutdown)
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, server := range servers {
+		_ = server.Shutdown(shutdown)
 	}
 	return nil
+}
+
+func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("%s listen: %w", name, err)
+	}
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("%s: %v", name, err)
+		}
+	}()
+	return server, nil
 }
 
 func pruneLoop(ctx context.Context, logs *reqlog.Manager, manager *super.Manager, at string) {

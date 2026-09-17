@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Deploy Boss</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Deploy Boss home">
+        <span class="brand-mark" aria-hidden="true">DB</span>
+        <span>
+          <strong>Deploy Boss</strong>
+          <small>single-host operations</small>
+        </span>
+      </a>
+      <div class="operator">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="viewer">Connecting...</span>
+        <button class="quiet-button" id="logout" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Management console</p>
+          <h1 id="page-title">Your services, at a glance.</h1>
+          <p class="lede">Live process health, traffic, and controls for every configured app.</p>
+        </div>
+        <div class="toolbar">
+          <span class="refresh-status" id="refresh-status">Waiting for daemon</span>
+          <button class="secondary-button" id="refresh" type="button">Refresh</button>
+          <button class="primary-button" id="rescan" type="button">Rescan apps</button>
+        </div>
+      </section>
+
+      <section class="summary" aria-label="Fleet summary">
+        <article class="summary-card">
+          <span>Configured</span>
+          <strong id="total-apps">-</strong>
+          <small>applications</small>
+        </article>
+        <article class="summary-card">
+          <span>Running</span>
+          <strong id="running-apps">-</strong>
+          <small>healthy now</small>
+        </article>
+        <article class="summary-card">
+          <span>Attention</span>
+          <strong id="attention-apps">-</strong>
+          <small>crashed or changing</small>
+        </article>
+        <article class="summary-card">
+          <span>Traffic</span>
+          <strong id="hourly-requests">-</strong>
+          <small>requests this hour</small>
+        </article>
+      </section>
+
+      <section class="services" aria-labelledby="services-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Fleet</p>
+            <h2 id="services-title">Services</h2>
+          </div>
+          <span class="section-count" id="service-count">0 services</span>
+        </div>
+        <div class="app-grid" id="app-grid" aria-live="polite" aria-busy="true">
+          <div class="empty-state">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Loading services</strong>
+            <span>Reading live state from the daemon.</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

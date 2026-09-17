@@ -25,7 +25,6 @@ type Handler struct {
 	manager   *super.Manager
 	logs      *reqlog.Manager
 	transport *http.Transport
-	auth      *authenticator
 	starting  []byte
 	crashed   []byte
 	unknown   []byte
@@ -44,21 +43,14 @@ func New(cfg config.Config, manager *super.Manager, logs *reqlog.Manager) (*Hand
 	if err != nil {
 		return nil, err
 	}
-	auth, err := newAuthenticator(cfg)
-	if err != nil {
-		return nil, err
-	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	return &Handler{cfg: cfg, manager: manager, logs: logs, transport: transport, auth: auth, starting: starting, crashed: crashed, unknown: unknown}, nil
+	return &Handler{cfg: cfg, manager: manager, logs: logs, transport: transport, starting: starting, crashed: crashed, unknown: unknown}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	snapshot, ok := h.manager.ResolveHost(r.Host)
 	if !ok {
 		h.page(w, http.StatusNotFound, h.unknown, "")
-		return
-	}
-	if h.auth != nil && !h.auth.authorize(w, r) {
 		return
 	}
 	if snapshot.State != super.Running {

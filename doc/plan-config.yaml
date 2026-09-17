@@ -32,14 +32,14 @@ apps:
   - /apps/myapp
   - /apps/myapp-staging
 
-# Daemon-owned runtime state. Contains ports.json, <app>/<proctype>.pid, running.json.
+# Daemon-owned runtime state. Contains ports.json, process state, and the console signing key.
 # Must be writable by the boss user. Created on first run.
 state_dir: /var/lib/boss
 
 # Process logs and request logs. Contains <app>/<proctype>.log and <app>/requests.sqlite.
 log_dir: /var/log/boss
 
-# Unix socket for the control API. CLI and web UI talk here. Mode 0660, group = boss.
+# Unix socket for the control API. The CLI talks here. Mode 0660, group = boss.
 socket: /run/boss/boss.sock
 
 # --- Proxy -------------------------------------------------------------------
@@ -71,27 +71,33 @@ proxy:
     max_idle_conns_per_app: 32
     # Streaming and websockets are always passed through; no toggle.
 
+# --- Management console ------------------------------------------------------
+
+# Omit this block to disable the management console.
+# It runs on a separate listener so authentication never affects application traffic.
+management:
+  # Keep this listener on loopback and proxy a dedicated hostname to it from nginx.
+  listen: 127.0.0.1:8081
+  # Exact hostname accepted by the console and registered with AuthCog.
+  host: boss.example.com
+  auth:
+    # AuthCog realm used for login and the server-side callback exchange.
+    realm: auth.authcog.com
+    # Only these authenticated email addresses may open the console.
+    admin_emails:
+      - admin@example.com
+    # Signed console session lifetime.
+    session_ttl: 24h
+
 # --- Ports -------------------------------------------------------------------
 
 ports:
   # Inclusive range boss hands out. One port per (app, proctype). Sticky forever
-  # until `boss ports release <app>`. Range must not overlap proxy.listen.
+  # until `boss ports release <app>`. Range must not overlap either HTTP listener.
   range: [3100, 3990]
   # Before assigning a port, also check it is not currently bound on the host.
   # Guards against a port used by something boss did not start.
   check_bound: true
-
-# --- Authentication ----------------------------------------------------------
-
-# Omit admin_emails to disable authentication.
-# When enabled, boss uses the AuthCog redirect and single-use callback flow, then creates
-# a signed, host-only session after the released email matches this allowlist.
-auth:
-  # Trusted AuthCog realm host used for both login and callback exchange.
-  realm: auth.authcog.com
-  admin_emails:
-    - admin@example.com
-  session_ttl: 24h
 
 # --- Per-app defaults --------------------------------------------------------
 # Every key here can be overridden per app in deploy-boss.yaml with the same name.
@@ -272,9 +278,9 @@ running.json:
 # Map of app -> RFC3339 timestamp of the last proxied request. Flushed every
 # idle_tick so idle accounting survives a daemon restart.
 #
-# state_dir/auth.key
-# A daemon-generated 32-byte HMAC key used to sign AuthCog-backed session cookies.
-# Created with mode 0600 and never hand-edited.
+# state_dir/management-auth.key
+# Random 32-byte key used to sign management console sessions.
+# Created with mode 0600 when the console first starts.
 
 # =============================================================================
 # CLI flags that override config (highest priority, for one-off runs)

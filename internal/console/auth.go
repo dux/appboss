@@ -1,4 +1,4 @@
-package proxy
+package console
 
 import (
 	"context"
@@ -26,11 +26,12 @@ import (
 )
 
 const (
-	authCallbackPath  = "/authcog"
-	authStateCookie   = "deploy_boss_auth_state"
-	authSessionCookie = "deploy_boss_session"
-	authStateTTL      = 5 * time.Minute
-	maxAuthChallenges = 4096
+	authCallbackPath    = "/authcog"
+	authStateCookie     = "deploy_boss_console_auth_state"
+	authSessionCookie   = "deploy_boss_console_session"
+	authStateTTL        = 5 * time.Minute
+	maxAuthChallenges   = 4096
+	maxAuthResponseSize = 1 << 20
 )
 
 type authProfile struct {
@@ -39,6 +40,7 @@ type authProfile struct {
 
 type authSession struct {
 	Email     string `json:"email"`
+	CSRF      string `json:"csrf"`
 	ExpiresAt int64  `json:"expires_at"`
 }
 
@@ -49,7 +51,8 @@ type authChallenge struct {
 }
 
 type authenticator struct {
-	cfg        config.Auth
+	cfg        config.ManagementAuth
+	host       string
 	key        []byte
 	admins     map[string]bool
 	client     *http.Client
@@ -59,15 +62,13 @@ type authenticator struct {
 }
 
 func newAuthenticator(cfg config.Config) (*authenticator, error) {
-	if len(cfg.Auth.AdminEmails) == 0 {
-		return nil, nil
-	}
 	key, err := loadAuthKey(cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}
 	auth := &authenticator{
-		cfg:    cfg.Auth,
+		cfg:    cfg.Management.Auth,
+		host:   strings.ToLower(cfg.Management.Host),
 		key:    key,
 		admins: map[string]bool{},
 		client: &http.Client{
@@ -78,27 +79,38 @@ func newAuthenticator(cfg config.Config) (*authenticator, error) {
 		},
 		challenges: map[string]authChallenge{},
 	}
-	for _, email := range cfg.Auth.AdminEmails {
+	for _, email := range cfg.Management.Auth.AdminEmails {
 		auth.admins[strings.ToLower(email)] = true
 	}
 	auth.exchange = auth.exchangeProfile
 	return auth, nil
 }
 
-func (a *authenticator) authorize(w http.ResponseWriter, r *http.Request) bool {
+func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (authSession, bool) {
 	if r.URL.Path == authCallbackPath {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return authSession{}, false
+		}
 		a.callback(w, r)
-		return false
+		return authSession{}, false
 	}
-	if a.validSession(r) {
-		return true
+	if session, ok := a.validSession(r); ok {
+		return session, true
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":"authentication required"}`+"\n")
+		return authSession{}, false
 	}
 	a.startLogin(w, r)
-	return false
+	return authSession{}, false
 }
 
 func (a *authenticator) startLogin(w http.ResponseWriter, r *http.Request) {
-	destination, err := authDestination(r.Host)
+	destination, err := authDestination(r.Host, a.host)
 	if err != nil {
 		http.Error(w, "invalid authentication destination", http.StatusBadRequest)
 		return
@@ -143,23 +155,23 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	challenge, ok := a.challenges[state]
 	delete(a.challenges, state)
 	a.mu.Unlock()
-	a.clearStateCookie(w, r)
+	a.clearCookie(w, r, authStateCookie)
 	if !ok || !challenge.ExpiresAt.After(time.Now()) {
 		http.Error(w, "expired authentication callback", http.StatusBadRequest)
 		return
 	}
-	destination, err := authDestination(r.Host)
+	destination, err := authDestination(r.Host, a.host)
 	if err != nil || destination != challenge.Destination {
 		http.Error(w, "authentication destination changed", http.StatusBadRequest)
 		return
 	}
 	profile, err := a.exchange(r.Context(), challenge.Destination, callback)
 	if err != nil {
-		log.Printf("authcog exchange: %v", err)
+		log.Printf("management AuthCog exchange: %v", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
-	email := strings.ToLower(profile.Email)
+	email := strings.ToLower(strings.TrimSpace(profile.Email))
 	if !a.admins[email] {
 		http.Error(w, "email is not an administrator", http.StatusForbidden)
 		return
@@ -186,11 +198,11 @@ func (a *authenticator) exchangeProfile(ctx context.Context, destination, callba
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxAuthResponseSize))
 		return authProfile{}, fmt.Errorf("AuthCog returned %s", response.Status)
 	}
 	var profile authProfile
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&profile); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxAuthResponseSize)).Decode(&profile); err != nil {
 		return authProfile{}, err
 	}
 	if profile.Email == "" {
@@ -200,43 +212,67 @@ func (a *authenticator) exchangeProfile(ctx context.Context, destination, callba
 }
 
 func (a *authenticator) setSessionCookie(w http.ResponseWriter, r *http.Request, email string) error {
+	csrf, err := randomToken()
+	if err != nil {
+		return err
+	}
 	expires := time.Now().Add(a.cfg.SessionTTL.Value())
-	payload, err := json.Marshal(authSession{Email: email, ExpiresAt: expires.Unix()})
+	payload, err := json.Marshal(authSession{Email: email, CSRF: csrf, ExpiresAt: expires.Unix()})
 	if err != nil {
 		return err
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	signature := a.sign(encoded)
-	http.SetCookie(w, &http.Cookie{Name: authSessionCookie, Value: encoded + "." + signature, Path: "/", Expires: expires, MaxAge: int(a.cfg.SessionTTL.Value().Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: authSessionCookie, Value: encoded + "." + signature, Path: "/", Expires: expires, MaxAge: int(a.cfg.SessionTTL.Value().Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode})
 	return nil
 }
 
-func (a *authenticator) validSession(r *http.Request) bool {
+func (a *authenticator) validSession(r *http.Request) (authSession, bool) {
 	cookie, err := r.Cookie(authSessionCookie)
 	if err != nil {
-		return false
+		return authSession{}, false
 	}
 	encoded, signature, ok := strings.Cut(cookie.Value, ".")
 	if !ok {
-		return false
+		return authSession{}, false
 	}
 	expected, err := base64.RawURLEncoding.DecodeString(a.sign(encoded))
 	if err != nil {
-		return false
+		return authSession{}, false
 	}
 	actual, err := base64.RawURLEncoding.DecodeString(signature)
 	if err != nil || !hmac.Equal(actual, expected) {
-		return false
+		return authSession{}, false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		return false
+		return authSession{}, false
 	}
 	var session authSession
-	if json.Unmarshal(payload, &session) != nil || session.ExpiresAt <= time.Now().Unix() {
+	if json.Unmarshal(payload, &session) != nil || session.CSRF == "" || session.ExpiresAt <= time.Now().Unix() || !a.admins[strings.ToLower(session.Email)] {
+		return authSession{}, false
+	}
+	return session, true
+}
+
+func (a *authenticator) validCSRF(r *http.Request, session authSession) bool {
+	token := r.Header.Get("X-CSRF-Token")
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(session.CSRF)) != 1 {
 		return false
 	}
-	return a.admins[strings.ToLower(session.Email)]
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || origin.Scheme != requestScheme(r) || !strings.EqualFold(origin.Host, r.Host) {
+		return false
+	}
+	return true
+}
+
+func (a *authenticator) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	a.clearCookie(w, r, authSessionCookie)
+}
+
+func (a *authenticator) clearCookie(w http.ResponseWriter, r *http.Request, name string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode})
 }
 
 func (a *authenticator) sign(value string) string {
@@ -245,11 +281,7 @@ func (a *authenticator) sign(value string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (a *authenticator) clearStateCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: authStateCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
-}
-
-func authDestination(rawHost string) (string, error) {
+func authDestination(rawHost, expectedHost string) (string, error) {
 	host, port := rawHost, ""
 	if parsedHost, parsedPort, err := net.SplitHostPort(rawHost); err == nil {
 		host, port = parsedHost, parsedPort
@@ -257,8 +289,8 @@ func authDestination(rawHost string) (string, error) {
 		return "", errors.New("invalid host port")
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host == "" || strings.ContainsAny(host, "/\\") {
-		return "", errors.New("invalid host")
+	if host != expectedHost {
+		return "", errors.New("unexpected host")
 	}
 	destination := "/d:" + host
 	if port != "" {
@@ -271,14 +303,33 @@ func authDestination(rawHost string) (string, error) {
 }
 
 func safeRedirect(target string) string {
-	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.HasPrefix(target, authCallbackPath) {
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.Contains(target, "\\") || strings.HasPrefix(target, authCallbackPath) {
 		return "/"
 	}
 	return target
 }
 
+func requestScheme(r *http.Request) string {
+	if secureRequest(r) {
+		return "https"
+	}
+	return "http"
+}
+
 func secureRequest(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https")
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
+		return true
+	}
+	host, port := r.Host, ""
+	if parsedHost, parsedPort, err := net.SplitHostPort(r.Host); err == nil {
+		host, port = parsedHost, parsedPort
+	}
+	local := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".lvh.me") || net.ParseIP(host) != nil
+	if local {
+		value, _ := strconv.Atoi(port)
+		return value <= 999
+	}
+	return true
 }
 
 func randomToken() (string, error) {
@@ -290,7 +341,10 @@ func randomToken() (string, error) {
 }
 
 func loadAuthKey(stateDir string) ([]byte, error) {
-	path := filepath.Join(stateDir, "auth.key")
+	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(stateDir, "management-auth.key")
 	key, err := os.ReadFile(path)
 	if err == nil {
 		if len(key) != 32 {

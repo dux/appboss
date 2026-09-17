@@ -88,16 +88,16 @@ func (s Size) String() string {
 }
 
 type Config struct {
-	SourcePath string   `yaml:"-" json:"-"`
-	Apps       []string `yaml:"apps" json:"apps"`
-	StateDir   string   `yaml:"state_dir" json:"state_dir"`
-	LogDir     string   `yaml:"log_dir" json:"log_dir"`
-	Socket     string   `yaml:"socket" json:"socket"`
-	Proxy      Proxy    `yaml:"proxy" json:"proxy"`
-	Ports      Ports    `yaml:"ports" json:"ports"`
-	Auth       Auth     `yaml:"auth" json:"auth"`
-	Defaults   Defaults `yaml:"defaults" json:"defaults"`
-	Daemon     Daemon   `yaml:"daemon" json:"daemon"`
+	SourcePath string     `yaml:"-" json:"-"`
+	Apps       []string   `yaml:"apps" json:"apps"`
+	StateDir   string     `yaml:"state_dir" json:"state_dir"`
+	LogDir     string     `yaml:"log_dir" json:"log_dir"`
+	Socket     string     `yaml:"socket" json:"socket"`
+	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
+	Management Management `yaml:"management" json:"management"`
+	Ports      Ports      `yaml:"ports" json:"ports"`
+	Defaults   Defaults   `yaml:"defaults" json:"defaults"`
+	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
 }
 
 type Proxy struct {
@@ -105,6 +105,18 @@ type Proxy struct {
 	ClientIPHeaders []string `yaml:"client_ip_headers" json:"client_ip_headers"`
 	Wake            Wake     `yaml:"wake" json:"wake"`
 	Upstream        Upstream `yaml:"upstream" json:"upstream"`
+}
+
+type Management struct {
+	Listen string         `yaml:"listen" json:"listen"`
+	Host   string         `yaml:"host" json:"host"`
+	Auth   ManagementAuth `yaml:"auth" json:"auth"`
+}
+
+type ManagementAuth struct {
+	Realm       string   `yaml:"realm" json:"realm"`
+	AdminEmails []string `yaml:"admin_emails" json:"admin_emails"`
+	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
 }
 
 type Wake struct {
@@ -124,12 +136,6 @@ type Upstream struct {
 type Ports struct {
 	Range      [2]int `yaml:"range" json:"range"`
 	CheckBound bool   `yaml:"check_bound" json:"check_bound"`
-}
-
-type Auth struct {
-	Realm       string   `yaml:"realm" json:"realm"`
-	AdminEmails []string `yaml:"admin_emails" json:"admin_emails"`
-	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
 }
 
 type Defaults struct {
@@ -167,11 +173,11 @@ type Daemon struct {
 func Default() Config {
 	return Config{
 		StateDir: "/var/lib/boss", LogDir: "/var/log/boss", Socket: "/run/boss/boss.sock",
-		Proxy:    Proxy{Listen: "127.0.0.1:8080", ClientIPHeaders: []string{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
-		Ports:    Ports{Range: [2]int{3100, 3990}, CheckBound: true},
-		Auth:     Auth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)},
-		Defaults: Defaults{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"},
-		Daemon:   Daemon{IdleTick: Duration(time.Minute), AdoptPoll: Duration(5 * time.Second), ResumeRunning: true, PruneAt: "04:10", Log: "stderr", LogLevel: "info"},
+		Proxy:      Proxy{Listen: "127.0.0.1:8080", ClientIPHeaders: []string{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
+		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
+		Ports:      Ports{Range: [2]int{3100, 3990}, CheckBound: true},
+		Defaults:   Defaults{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"},
+		Daemon:     Daemon{IdleTick: Duration(time.Minute), AdoptPoll: Duration(5 * time.Second), ResumeRunning: true, PruneAt: "04:10", Log: "stderr", LogLevel: "info"},
 	}
 }
 
@@ -226,25 +232,8 @@ func (c Config) Validate() error {
 	if c.StateDir == "" || c.LogDir == "" || c.Socket == "" {
 		return errors.New("state_dir, log_dir, and socket are required")
 	}
-	if len(c.Auth.AdminEmails) > 0 {
-		if c.Auth.Realm == "" || strings.ContainsAny(c.Auth.Realm, "/:") {
-			return errors.New("auth.realm must be a hostname")
-		}
-		if c.Auth.SessionTTL <= 0 {
-			return errors.New("auth.session_ttl must be positive")
-		}
-		emails := map[string]bool{}
-		for _, email := range c.Auth.AdminEmails {
-			address, err := mail.ParseAddress(email)
-			if err != nil || !strings.EqualFold(address.Address, email) {
-				return fmt.Errorf("invalid auth.admin_emails entry %q", email)
-			}
-			normalized := strings.ToLower(address.Address)
-			if emails[normalized] {
-				return fmt.Errorf("duplicate auth.admin_emails entry %q", email)
-			}
-			emails[normalized] = true
-		}
+	if err := validateManagement(c.Management, c.Proxy.Listen, c.Ports.Range); err != nil {
+		return fmt.Errorf("management: %w", err)
 	}
 	if c.Ports.Range[0] < 1 || c.Ports.Range[1] > 65535 || c.Ports.Range[0] > c.Ports.Range[1] {
 		return fmt.Errorf("invalid ports.range %v", c.Ports.Range)
@@ -284,6 +273,74 @@ func (c Config) Validate() error {
 		return errors.New("proxy.upstream timeouts and max_idle_conns_per_app must be positive")
 	}
 	return nil
+}
+
+func validateManagement(management Management, proxyListen string, portRange [2]int) error {
+	if management.Listen == "" {
+		if management.Host != "" || len(management.Auth.AdminEmails) > 0 {
+			return errors.New("listen is required when management is configured")
+		}
+		return nil
+	}
+	_, portValue, err := net.SplitHostPort(management.Listen)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("listen has invalid port %q", portValue)
+	}
+	if management.Listen == proxyListen {
+		return errors.New("listen must differ from proxy.listen")
+	}
+	if port >= portRange[0] && port <= portRange[1] {
+		return errors.New("listen overlaps ports.range")
+	}
+	if !validHostname(management.Host) {
+		return fmt.Errorf("invalid host %q", management.Host)
+	}
+	if !validHostname(management.Auth.Realm) {
+		return fmt.Errorf("invalid auth.realm %q", management.Auth.Realm)
+	}
+	if management.Auth.SessionTTL <= 0 {
+		return errors.New("auth.session_ttl must be positive")
+	}
+	if len(management.Auth.AdminEmails) == 0 {
+		return errors.New("auth.admin_emails must contain at least one email")
+	}
+	emails := map[string]bool{}
+	for _, email := range management.Auth.AdminEmails {
+		address, err := mail.ParseAddress(email)
+		if err != nil || !strings.EqualFold(address.Address, email) {
+			return fmt.Errorf("invalid auth.admin_emails entry %q", email)
+		}
+		normalized := strings.ToLower(address.Address)
+		if emails[normalized] {
+			return fmt.Errorf("duplicate auth.admin_emails entry %q", email)
+		}
+		emails[normalized] = true
+	}
+	return nil
+}
+
+func validHostname(value string) bool {
+	if value == "" || len(value) > 253 || strings.ContainsAny(value, "/: ") {
+		return false
+	}
+	if net.ParseIP(value) != nil {
+		return true
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if !(character == '-' || character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func resolvePath(baseDir, path string) string {

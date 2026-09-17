@@ -49,6 +49,24 @@ func TestLoadAppRequiresProcfile(t *testing.T) {
 	}
 }
 
+func TestManagementRequiresAuthAndSeparateListener(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = []string{"/apps/demo"}
+	cfg.Management.Listen = "127.0.0.1:8081"
+	cfg.Management.Host = "boss.example.com"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected missing admin email error")
+	}
+	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Management.Listen = cfg.Proxy.Listen
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected shared listener error")
+	}
+}
+
 func TestParseSize(t *testing.T) {
 	got, err := ParseSize("512m")
 	if err != nil || got != 512<<20 {

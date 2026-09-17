@@ -16,7 +16,7 @@ Single static binary, one process, subcommands for daemon and CLI.
 * Every app process gets `PORT` filled in.
   Ports are sticky across restarts.
 * `boss start|stop|restart|ls|logs|ports|rescan` CLI, all with `--json`.
-* Web UI is dumb: renders `boss ls --json`, buttons shell out to `boss`.
+* The built-in management console shows live app state and controls the supervisor through its in-process API.
 * Idle apps stop after N hours without HTTP traffic and wake on the next request with a "starting, refresh in 5s" page.
 * Per-app SQLite request log written by the proxy, pruned on a schedule.
 * Works on macOS for development, Linux for production.
@@ -91,12 +91,15 @@ log_dir: /var/log/boss
 socket: /run/boss/boss.sock
 proxy:
   listen: 127.0.0.1:8080
+management:
+  listen: 127.0.0.1:8081
+  host: boss.example.com
+  auth:
+    realm: auth.authcog.com
+    admin_emails: [admin@example.com]
+    session_ttl: 24h
 ports:
   range: [3100, 3990]
-auth:
-  realm: auth.authcog.com
-  admin_emails:
-    - admin@example.com
 defaults:
   idle_stop: 6h
   stop_timeout: 20s
@@ -179,14 +182,6 @@ The app then flips from `starting` to `running`.
 Websockets and streaming pass through.
 Open connections count as activity.
 
-## Authentication
-
-When `auth.admin_emails` is non-empty, the proxy protects every configured host through AuthCog.
-It generates a one-time browser challenge, redirects to the configured AuthCog realm, consumes the matching callback challenge, and exchanges the callback hash from the server.
-Only a verified email in `admin_emails` receives a deploy-boss session.
-The session is signed with a random key stored at `state_dir/auth.key` and sent in a host-only, HTTP-only cookie.
-Local hosts such as `*.lvh.me` include their port in the AuthCog destination.
-
 ## Idle stop
 
 A ticker runs every minute.
@@ -203,7 +198,7 @@ Inserts are batched every second and rows older than `log_retention` are pruned 
 
 The daemon listens on a unix socket with a tiny JSON API.
 The CLI is the same binary talking to that socket.
-The web UI shells out to the CLI.
+The management console calls the same manager in-process and never shells out.
 
 ```
 boss daemon                       run the daemon (systemd unit, Restart=always)
@@ -218,11 +213,20 @@ boss status <app> [--json]        full detail incl. process list and restarts
 Every command accepts `--json`.
 Exit codes are meaningful for scripts.
 
-## Web UI
+## Management console
 
-The web UI is separate and dumb.
-It can be a small Sinatra app or `boss web` serving one HTML page that polls `boss ls --json` and posts to endpoints that shell out to the CLI.
-It has no state, logic, or direct socket access and is not in the first milestone.
+The daemon serves an embedded management console from a dedicated listener and hostname.
+It shows live app state, resource use, request rates, process details, and start, stop, restart, and rescan controls.
+The page refreshes app state every five seconds.
+
+AuthCog protects only the management console.
+The daemon completes the AuthCog callback server-side, checks the authenticated email against `management.auth.admin_emails`, and issues a signed host-only session cookie.
+Mutation endpoints require a per-session CSRF token and same-origin request.
+Proxied application traffic remains public and never enters the console authentication flow.
+
+nginx routes the management hostname to `management.listen` and all app hostnames to `proxy.listen`.
+The two listeners must use different ports and neither may overlap the application port range.
+The demo console is available directly at `http://boss.lvh.me:8081`; its app proxy remains at port 8080.
 
 ## lux-deploy integration
 
@@ -241,6 +245,7 @@ internal/super/           app goroutine, state machine, spawn, adopt
 internal/res/             procgroup and cgroup backends
 internal/ports/           allocator + ports.json
 internal/proxy/           reverse proxy, starting page, host table
+internal/console/         AuthCog-protected management API and embedded UI
 internal/reqlog/          sqlite writer + prune
 internal/ctl/             unix socket server + client
 internal/cli/             command implementations
@@ -255,8 +260,8 @@ deploy/nginx.conf         reference nginx snippet
    Runs on macOS.
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
 3. **Logs.** SQLite request log, prune, `boss status` shows request rates.
-4. **Ops.** systemd unit, nginx snippet, lux-deploy calls `boss restart`.
-5. **Later.** cgroup backend, web UI, per-app memory limits.
+4. **Ops.** systemd unit, nginx snippet, management console, lux-deploy calls `boss restart`.
+5. **Later.** cgroup backend and per-app memory limits.
 
 ## Open questions
 
