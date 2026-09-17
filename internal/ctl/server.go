@@ -120,8 +120,6 @@ func (s *Server) dispatch(request Request) Response {
 		data, err = s.manager.Logs(request.App, request.Process, request.Lines)
 	case "ports":
 		data = s.manager.Ports()
-	case "ports.release":
-		err = s.manager.ReleasePorts(request.App)
 	default:
 		err = fmt.Errorf("unknown method %q", request.Method)
 	}

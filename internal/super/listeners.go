@@ -36,6 +36,11 @@ func ClearPortRange(portRange [2]int, timeout time.Duration) ([]int, error) {
 	return pids, nil
 }
 
+// clearPort frees a single fixed port before a process is spawned on it.
+func clearPort(port int, timeout time.Duration) ([]int, error) {
+	return ClearPortRange([2]int{port, port}, timeout)
+}
+
 func listenerPIDs(portRange [2]int) ([]int, error) {
 	ports := strconv.Itoa(portRange[0])
 	if portRange[0] != portRange[1] {

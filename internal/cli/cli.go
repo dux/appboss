@@ -137,11 +137,7 @@ func (c CLI) daemon(args []string) error {
 	if len(cleared) > 0 {
 		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
-	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, cfg.Ports.CheckBound)
-	if err != nil {
-		return err
-	}
-	manager, invalid, err := super.New(cfg, allocator)
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil {
 		return err
 	}
@@ -377,12 +373,8 @@ func (c CLI) remote(command string, args []string, jsonOutput bool, socket strin
 			return c.follow(client, request)
 		}
 	case "ports":
-		if len(args) == 0 {
-			request.Method = "ports"
-		} else if len(args) == 2 && args[0] == "release" {
-			request.Method, request.App = "ports.release", args[1]
-		} else {
-			return errors.New("usage: dboss ports [release <app>]")
+		if len(args) != 0 {
+			return errors.New("usage: dboss ports")
 		}
 	default:
 		return fmt.Errorf("unknown command %q", command)

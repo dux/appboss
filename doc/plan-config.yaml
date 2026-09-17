@@ -17,8 +17,8 @@
 #   deploy-boss.config.yaml -> validate -> load each apps folder -> per app:
 #   deploy-boss.yaml, .env, .env.local
 #   -> validate each app (an invalid app is reported and skipped, it does not stop the daemon)
-#   -> terminate listeners in ports.range -> read ports.json -> adopt remaining
-#   pids -> start apps that were running before -> listen.
+#   -> terminate listeners in ports.range -> assign one fixed port per (app, proctype)
+#   -> start apps that were running before -> listen.
 
 # =============================================================================
 # PART 1: /etc/boss/deploy-boss.config.yaml
@@ -33,7 +33,7 @@ apps:
   - /apps/myapp
   - /apps/myapp-staging
 
-# Daemon-owned runtime state. Contains ports.json, process state, and the console signing key.
+# Daemon-owned runtime state. Contains process state and the console signing key.
 # Must be writable by the boss user. Created on first run.
 state_dir: /var/lib/boss
 
@@ -95,12 +95,11 @@ management:
 ports:
   # Inclusive range boss hands out. This range belongs exclusively to boss:
   # daemon startup and `dboss kill` terminate every listener in it before apps
-  # start. This requires `lsof`. One sticky port is assigned per (app, proctype)
-  # until `dboss ports release <app>`. The range must not overlap an HTTP listener.
+  # start, and every spawn kills whatever still holds its port. This requires
+  # `lsof`. One fixed port is assigned per (app, proctype) at daemon start, in
+  # apps order, and never changes while the daemon runs. The range must not
+  # overlap an HTTP listener.
   range: [3100, 3990]
-  # Before assigning a port, also check it is not currently bound on the host.
-  # Guards against a port used by something boss did not start.
-  check_bound: true
 
 # --- Per-app defaults --------------------------------------------------------
 # Every key here can be overridden per app in deploy-boss.yaml with the same name.
@@ -166,8 +165,6 @@ defaults:
 daemon:
   # How often the idle-stop ticker runs.
   idle_tick: 1m
-  # How often adopted (non-child) pids are polled with kill -0.
-  adopt_poll: 5s
   # On daemon start, restart apps that running.json says were running before.
   resume_running: true
   # Daily request-log prune at this local time.
@@ -258,14 +255,6 @@ processes:
 # PART 3: state files under state_dir (written by boss, read-only for humans)
 # =============================================================================
 ---
-# state_dir/ports.json
-# Sticky port table. Key is "<app>/<proctype>". Never rewritten except by
-# allocation or `dboss ports release`.
-ports.json:
-  myapp/web: 3100
-  myapp/worker: 3101
-  myapp-staging/web: 3102
-
 # state_dir/running.json
 # Apps the daemon intends to be running. Updated on every start/stop.
 # Used by daemon.resume_running after a daemon restart or reboot.
@@ -274,8 +263,7 @@ running.json:
   - myapp-staging
 
 # state_dir/<app>/<proctype>.pid
-# One line: the pid. Plus a sidecar <proctype>.cmd with the exact argv, used to
-# verify the pid before adopting it after a daemon restart.
+# One line: the pid of the running child. Removed when the process exits.
 #
 # state_dir/last_activity.json
 # Map of app -> RFC3339 timestamp of the last proxied request. Flushed every

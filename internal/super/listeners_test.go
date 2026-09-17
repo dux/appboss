@@ -60,6 +60,11 @@ func startListenerHelper(t *testing.T) (*exec.Cmd, int) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
+	return startListenerHelperOnPort(t, port), port
+}
+
+func startListenerHelperOnPort(t *testing.T, port int) *exec.Cmd {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=TestListenerHelperProcess")
 	cmd.Env = append(os.Environ(), "BOSS_TEST_LISTENER_PORT="+strconv.Itoa(port))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -81,5 +86,5 @@ func startListenerHelper(t *testing.T) (*exec.Cmd, int) {
 	if !scanner.Scan() || scanner.Text() != "ready" {
 		t.Fatalf("listener helper did not start: %q", scanner.Text())
 	}
-	return cmd, port
+	return cmd
 }

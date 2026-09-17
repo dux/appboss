@@ -41,15 +41,10 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "boss.sock")
 	cfg.Ports.Range = [2]int{32200, 32220}
-	cfg.Ports.CheckBound = false
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, invalid, err := super.New(cfg, allocator)
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil {
 		t.Fatal(err)
 	}

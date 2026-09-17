@@ -134,8 +134,7 @@ type Upstream struct {
 }
 
 type Ports struct {
-	Range      [2]int `yaml:"range" json:"range"`
-	CheckBound bool   `yaml:"check_bound" json:"check_bound"`
+	Range [2]int `yaml:"range" json:"range"`
 }
 
 type Defaults struct {
@@ -163,7 +162,6 @@ type Defaults struct {
 
 type Daemon struct {
 	IdleTick      Duration `yaml:"idle_tick" json:"idle_tick"`
-	AdoptPoll     Duration `yaml:"adopt_poll" json:"adopt_poll"`
 	ResumeRunning bool     `yaml:"resume_running" json:"resume_running"`
 	PruneAt       string   `yaml:"prune_at" json:"prune_at"`
 	Log           string   `yaml:"log" json:"log"`
@@ -175,9 +173,9 @@ func Default() Config {
 		StateDir: "/var/lib/boss", LogDir: "/var/log/boss", Socket: "/run/boss/boss.sock",
 		Proxy:      Proxy{Listen: "127.0.0.1:8080", ClientIPHeaders: []string{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
-		Ports:      Ports{Range: [2]int{3100, 3990}, CheckBound: true},
+		Ports:      Ports{Range: [2]int{3100, 3990}},
 		Defaults:   Defaults{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"},
-		Daemon:     Daemon{IdleTick: Duration(time.Minute), AdoptPoll: Duration(5 * time.Second), ResumeRunning: true, PruneAt: "04:10", Log: "stderr", LogLevel: "info"},
+		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", Log: "stderr", LogLevel: "info"},
 	}
 }
 
@@ -260,8 +258,8 @@ func (c Config) Validate() error {
 	if _, err := time.Parse("15:04", c.Daemon.PruneAt); err != nil {
 		return fmt.Errorf("daemon.prune_at: %w", err)
 	}
-	if c.Daemon.IdleTick <= 0 || c.Daemon.AdoptPoll <= 0 {
-		return errors.New("daemon idle_tick and adopt_poll must be positive")
+	if c.Daemon.IdleTick <= 0 {
+		return errors.New("daemon.idle_tick must be positive")
 	}
 	if c.Daemon.Log != "stderr" && !filepath.IsAbs(c.Daemon.Log) {
 		return errors.New("daemon.log must be stderr or an absolute path")

@@ -132,13 +132,14 @@ Per process (one per `procfile` entry):
   On exit, record the code, apply restart policy with exponential backoff, and mark the app crashed after `max_restarts` consecutive failures.
 * Stop with SIGTERM to the process group, wait `stop_timeout`, then send SIGKILL.
 * Daemon shutdown stops all app process groups concurrently and waits for them before exiting.
-* Store a pid file at `state_dir/<app>/<proctype>.pid` for adoption.
+* Store a pid file at `state_dir/<app>/<proctype>.pid` for humans and tooling.
+* Every exit, ready, and health-failed event is bound to the process that produced it.
+  An event from a process the runtime no longer tracks is dropped, so a late exit can never act on the replacement.
 
 ### Surviving a daemon restart
 
-On startup, check that each pid is alive and `/proc/<pid>/cmdline` (or `ps` on macOS) matches the expected command.
-If so, adopt it, mark it running, poll `kill -0` every 5s until it exits, then respawn it as a real child.
-Otherwise, remove the stale pid file.
+On startup, deploy-boss terminates every listener in `ports.range`, then starts fresh every app listed in `running.json`.
+Nothing is adopted: the previous children were killed on shutdown, and anything left over is stale by definition.
 
 ### Resource backend (seam for cgroups)
 
@@ -154,14 +155,15 @@ Nothing outside the app goroutine knows which backend is active.
 
 ## Ports
 
-* Allocate the first free port per (app, proctype) from `ports.range` and persist it in `state_dir/ports.json`.
-  Never reassign it while the entry exists.
+* Ports are assigned once at daemon startup and never change while the daemon runs.
+  Apps are walked in `apps` order and their proctypes in name order, so the first configured app's `web` gets `ports.range[0]`.
+  Apps added by `dboss rescan` get the next free port.
 * Always inject `PORT` into every configured process, including workers.
   There is no pinning or opt-out, and a `PORT` in `.env` is overwritten.
 * The configured range is reserved exclusively for deploy-boss apps.
   At daemon startup, deploy-boss uses `lsof` to terminate every listener in the range before starting any app.
-* `dboss ports` lists allocations.
-  `dboss ports release <app>` frees them only when the app is stopped.
+  Before every spawn it kills whatever still holds that process's port, so a stale process can never block a start.
+* `dboss ports` lists the live table.
 * The proxy and process both read the same table, so a mismatch is impossible.
 
 ## Proxy
@@ -210,7 +212,7 @@ dboss start|stop|restart <app>
 dboss kill                         stop all apps and clear every listener in ports.range
 dboss rescan                       re-read the apps list and deploy-boss.yaml files
 dboss logs <app> [-f] [-n 200]     tail process logs
-dboss ports [release <app>]
+dboss ports                        live port table
 dboss status <app> [--json]        full detail incl. process list and restarts
 ```
 
@@ -245,9 +247,9 @@ The Caddy log importer is retired.
 cmd/dboss/main.go         subcommand dispatch
 internal/config/          global and per-app YAML loading, defaults
 internal/apps/            app list loading, env merge, procfile validation
-internal/super/           app goroutine, state machine, spawn, adopt
+internal/super/           app goroutine, state machine, spawn, port clearing
 internal/res/             procgroup and cgroup backends
-internal/ports/           allocator + ports.json
+internal/ports/           in-memory port table
 internal/proxy/           reverse proxy, starting page, host table
 internal/console/         AuthCog-protected management API and embedded UI
 internal/reqlog/          sqlite writer + prune
@@ -260,7 +262,7 @@ deploy/nginx.conf         reference nginx snippet
 
 ## Milestones
 
-1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, adoption, and `dboss daemon|ls|start|stop|restart|rescan|logs`.
+1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, and `dboss daemon|ls|start|stop|restart|rescan|logs`.
    Runs on macOS.
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
 3. **Logs.** SQLite request log, prune, `dboss status` shows request rates.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,12 +38,14 @@ func TestBackoffCaps(t *testing.T) {
 	}
 }
 
-func TestHealthcheckReportsHTTPStatus(t *testing.T) {
+func TestHealthcheckSendsAppHost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/up" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusForbidden)
+		if r.Host != "demo.test" {
+			w.WriteHeader(http.StatusForbidden)
+		}
 	}))
 	defer server.Close()
 	_, portValue, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
@@ -53,19 +56,18 @@ func TestHealthcheckReportsHTTPStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, checkErr := healthCheck("http:/up", port, time.Second)
+	ok, checkErr := healthCheck("http:/up", port, "", time.Second)
 	if ok || checkErr == nil || checkErr.Error() != "Healthcheck on /up returned 403" {
-		t.Fatalf("healthcheck = %v, %v", ok, checkErr)
+		t.Fatalf("healthcheck without host = %v, %v", ok, checkErr)
+	}
+	if ok, checkErr := healthCheck("http:/up", port, "demo.test", time.Second); !ok || checkErr != nil {
+		t.Fatalf("healthcheck with host = %v, %v", ok, checkErr)
 	}
 }
 
 func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32100, 32120})
-	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, invalid, err := New(cfg, allocator)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,11 +90,7 @@ func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 
 func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32300, 32320})
-	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, _, err := New(cfg, allocator)
+	first, _, err := New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,22 +104,118 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 	if alive(pid) {
 		t.Fatalf("process %d survived manager close", pid)
 	}
-	secondAllocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, err := New(cfg, secondAllocator)
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer second.Close()
 	waitForSupervisorState(t, second, Running)
 	restarted, _ := second.Snapshot("demo")
-	if len(restarted.Processes) != 1 || restarted.Processes[0].Adopted || restarted.Processes[0].PID == pid {
-		t.Fatalf("process was not restarted: %+v", restarted)
+	if len(restarted.Processes) != 1 || restarted.Processes[0].PID == pid || restarted.Processes[0].Port != 32300 {
+		t.Fatalf("process was not restarted on the fixed port: %+v", restarted)
 	}
 	if err := second.Stop("demo"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRestartDoesNotOrphanProcess(t *testing.T) {
+	cfg := supervisorTestConfig(t, [2]int{32400, 32420})
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	seen := map[int]bool{}
+	for i := 0; i < 3; i++ {
+		if err := manager.Restart("demo"); err != nil {
+			t.Fatal(err)
+		}
+		waitForSupervisorState(t, manager, Running)
+		snapshot, _ := manager.Snapshot("demo")
+		if len(snapshot.Processes) != 1 || snapshot.Processes[0].Port != 32400 {
+			t.Fatalf("restart %d: %+v", i, snapshot)
+		}
+		seen[snapshot.Processes[0].PID] = true
+	}
+	// Give any stale exit event a chance to be (wrongly) applied before checking.
+	time.Sleep(200 * time.Millisecond)
+	snapshot, _ := manager.Snapshot("demo")
+	if snapshot.State != Running || len(snapshot.Processes) != 1 {
+		t.Fatalf("stale event disturbed the app: %+v", snapshot)
+	}
+	current := snapshot.Processes[0].PID
+	for pid := range seen {
+		if pid != current && alive(pid) {
+			t.Fatalf("process %d was orphaned", pid)
+		}
+	}
+	if err := manager.Stop("demo"); err != nil {
+		t.Fatal(err)
+	}
+	if alive(current) {
+		t.Fatalf("process %d survived stop", current)
+	}
+}
+
+func TestSpawnKillsSquatterOnPort(t *testing.T) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof is not installed")
+	}
+	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
+	squatter := startListenerHelperOnPort(t, 32500)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	snapshot, _ := manager.Snapshot("demo")
+	if snapshot.Processes[0].Port != 32500 {
+		t.Fatalf("app did not take its fixed port: %+v", snapshot)
+	}
+	if err := squatter.Wait(); err == nil {
+		t.Fatal("squatter exited without a signal")
+	}
+}
+
+func TestPortsFollowConfigOrder(t *testing.T) {
+	root := t.TempDir()
+	var dirs []string
+	for _, name := range []string{"zeta", "alpha"} {
+		appDir := filepath.Join(root, "apps", name)
+		if err := os.MkdirAll(appDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(appDir, "deploy-boss.yaml"), []byte("procfile:\n  web: /usr/bin/true\n  worker: /usr/bin/true\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, appDir)
+	}
+	cfg := config.Default()
+	cfg.Apps = dirs
+	cfg.StateDir = filepath.Join(root, "state")
+	cfg.LogDir = filepath.Join(root, "log")
+	cfg.Socket = filepath.Join(root, "boss.sock")
+	cfg.Ports.Range = [2]int{32600, 32620}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	want := map[string]int{"zeta/web": 32600, "zeta/worker": 32601, "alpha/web": 32602, "alpha/worker": 32603}
+	got := manager.Ports()
+	for key, port := range want {
+		if got[key] != port {
+			t.Fatalf("ports = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -149,11 +243,7 @@ func TestRescanReloadsAppFoldersFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager, invalid, err := New(cfg, allocator)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range))
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -188,7 +278,7 @@ func supervisorTestConfig(t *testing.T, portRange [2]int) config.Config {
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "boss.sock")
 	cfg.Ports.Range = portRange
-	cfg.Ports.CheckBound = false
+	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	return cfg

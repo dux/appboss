@@ -20,7 +20,6 @@ management:
 
 ports:
   range: [3100, 3199]
-  check_bound: true
 
 defaults:
   idle_stop: 0s

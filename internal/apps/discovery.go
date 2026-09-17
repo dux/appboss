@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -53,7 +52,7 @@ func Discover(cfg config.Config) ([]*App, []error, error) {
 		}
 		found = append(found, app)
 	}
-	sort.Slice(found, func(i, j int) bool { return found[i].Name < found[j].Name })
+	// Config order is preserved: it decides port assignment and host-conflict precedence.
 	owners := map[string]string{}
 	valid := found[:0]
 	for _, app := range found {

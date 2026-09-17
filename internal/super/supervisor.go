@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -42,7 +43,6 @@ type ProcessSnapshot struct {
 	Port      int       `json:"port"`
 	Restarts  int       `json:"restarts"`
 	StartedAt time.Time `json:"started_at,omitempty"`
-	Adopted   bool      `json:"adopted"`
 }
 
 type RequestRates struct {
@@ -99,12 +99,16 @@ func New(cfg config.Config, allocator *ports.Allocator) (*Manager, []error, erro
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, apps: map[string]*appRuntime{}, desired: desired, activities: activities, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
+		if err := m.assignPorts(spec); err != nil {
+			cancel()
+			return nil, invalid, err
+		}
 		m.add(ctx, spec)
 	}
 	if cfg.Daemon.ResumeRunning {
 		for name := range desired {
 			if runtime := m.apps[name]; runtime != nil {
-				_ = runtime.call(request{kind: requestStart, adopt: true})
+				_ = runtime.call(request{kind: requestStart})
 			}
 		}
 	}
@@ -132,6 +136,22 @@ func (m *Manager) Close() {
 		wait.Wait()
 		m.cancel()
 	})
+}
+
+// assignPorts fixes one port per process for the daemon lifetime; apps are handled in config order,
+// processes in name order, so the first configured app always lands on the first port of the range.
+func (m *Manager) assignPorts(spec *apps.App) error {
+	names := make([]string, 0, len(spec.Commands))
+	for name := range spec.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := m.ports.Allocate(spec.Name, name); err != nil {
+			return fmt.Errorf("%s/%s: %w", spec.Name, name, err)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
@@ -249,14 +269,6 @@ func (m *Manager) ResolveHost(host string) (Snapshot, bool) {
 	return best, bestScore >= 0
 }
 
-func (m *Manager) ReleasePorts(name string) error {
-	snapshot, err := m.Snapshot(name)
-	if err != nil {
-		return err
-	}
-	return m.ports.Release(name, snapshot.State == Stopped)
-}
-
 func (m *Manager) Ports() map[string]int { return m.ports.Entries() }
 
 func (m *Manager) Rescan() ([]error, error) {
@@ -279,6 +291,8 @@ func (m *Manager) Rescan() ([]error, error) {
 		seen[spec.Name] = true
 		if runtime := m.apps[spec.Name]; runtime != nil {
 			runtime.call(request{kind: requestUpdate, spec: spec})
+		} else if err := m.assignPorts(spec); err != nil {
+			invalid = append(invalid, apps.ScanError{Name: spec.Name, Err: err})
 		} else {
 			m.add(m.ctx, spec)
 		}
@@ -430,7 +444,6 @@ const (
 type request struct {
 	kind        requestKind
 	reply       chan response
-	adopt       bool
 	processName string
 	lines       int
 	now         time.Time
@@ -442,12 +455,14 @@ type response struct {
 	err         error
 	idleStopped bool
 }
+
+// processEvent is bound to the process that produced it; the runtime drops events from a
+// process it no longer tracks so a late exit or healthcheck cannot act on its replacement.
 type processEvent struct {
-	kind      string
-	name      string
-	err       error
-	exitCode  int
-	startedAt time.Time
+	kind     string
+	proc     *process
+	err      error
+	exitCode int
 }
 type process struct {
 	name      string
@@ -457,8 +472,9 @@ type process struct {
 	port      int
 	startedAt time.Time
 	restarts  int
-	adopted   bool
 	log       io.WriteCloser
+	done      chan struct{} // closed when the runtime stops tracking the process
+	waited    chan struct{} // closed once cmd.Wait has reaped the process
 }
 
 type appRuntime struct {
@@ -518,14 +534,14 @@ func (a *appRuntime) loop() {
 func (a *appRuntime) handle(req request) response {
 	switch req.kind {
 	case requestStart:
-		return response{err: a.start(req.adopt)}
+		return response{err: a.start()}
 	case requestStop:
 		return response{err: a.stop()}
 	case requestRestart:
 		if err := a.stop(); err != nil {
 			return response{err: err}
 		}
-		return response{err: a.start(false)}
+		return response{err: a.start()}
 	case requestSnapshot:
 		return response{snapshot: a.snapshot()}
 	case requestLogs:
@@ -544,38 +560,28 @@ func (a *appRuntime) handle(req request) response {
 	return response{}
 }
 
-func (a *appRuntime) start(adopt bool) error {
+func (a *appRuntime) start() error {
 	if a.state == Running || a.state == Starting {
 		return nil
 	}
 	a.failures = map[string]int{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
 	for name, command := range a.spec.Commands {
-		port, hadPort := a.allocator.Lookup(a.spec.Name, name)
-		var err error
-		if !hadPort {
-			port, err = a.allocator.Allocate(a.spec.Name, name)
-		}
+		port, err := a.allocator.Allocate(a.spec.Name, name)
 		if err != nil {
 			a.lastErrorProcess = name
 			return a.failStart(err)
 		}
-		var started bool
-		if adopt && hadPort {
-			started = a.adopt(name, command, port)
-		}
-		if !started {
-			if err := a.spawn(name, command, port); err != nil {
-				a.lastErrorProcess = name
-				return a.failStart(err)
-			}
+		if err := a.spawn(name, command, port); err != nil {
+			a.lastErrorProcess = name
+			return a.failStart(err)
 		}
 	}
-	if _, hasWeb := a.spec.Commands[a.spec.Config.WebProcess]; !hasWeb {
+	if web := a.processes[a.spec.Config.WebProcess]; web == nil {
 		a.state = Running
 		a.lastActivity = time.Now()
 	} else {
-		go a.readiness(a.spec.Config.WebProcess, a.processes[a.spec.Config.WebProcess].port)
+		go a.readiness(web)
 	}
 	return nil
 }
@@ -612,21 +618,26 @@ func (a *appRuntime) stopProcesses() error {
 		}
 	}
 	deadline := time.Now().Add(a.maxStopTimeout(names))
-	for len(a.processes) > 0 && time.Now().Before(deadline) {
-		for name, p := range a.processes {
-			if !alive(p.pid) {
-				a.cleanupProcess(name)
-			}
+	for _, name := range names {
+		p := a.processes[name]
+		if !p.waitUntil(deadline) {
+			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+			<-p.waited
 		}
-		if len(a.processes) > 0 {
-			time.Sleep(25 * time.Millisecond)
-		}
-	}
-	for name, p := range a.processes {
-		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 		a.cleanupProcess(name)
 	}
 	return first
+}
+
+func (p *process) waitUntil(deadline time.Time) bool {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-p.waited:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func (a *appRuntime) maxStopTimeout(names []string) time.Duration {
@@ -656,31 +667,40 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	cmd.Dir = a.spec.Dir
 	cmd.Env = environment(a.spec, name, port, a.cfg.Socket, defaults.Env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	log, err := openProcessLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
+	// The port is fixed for this process, so whatever holds it is stale and gets killed first.
+	killed, err := clearPort(port, defaults.StopTimeout.Value())
+	if err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+	if len(killed) > 0 {
+		log.Printf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
+	}
+	logFile, err := openProcessLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
 	if err != nil {
 		return err
 	}
-	cmd.Stdout, cmd.Stderr = log, log
+	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
-		_ = log.Close()
+		_ = logFile.Close()
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 	if err := a.backend.Place(cmd.Process.Pid); err != nil {
 		_ = cmd.Process.Kill()
-		_ = log.Close()
+		_ = cmd.Wait()
+		_ = logFile.Close()
 		return err
 	}
-	p := &process{name: name, command: command, cmd: cmd, pid: cmd.Process.Pid, port: port, startedAt: time.Now(), restarts: a.failures[name], log: log}
-	a.processes[name] = p
-	if err := a.writePID(p, defaults.Shell); err != nil {
+	p := &process{name: name, command: command, cmd: cmd, pid: cmd.Process.Pid, port: port, startedAt: time.Now(), restarts: a.failures[name], log: logFile, done: make(chan struct{}), waited: make(chan struct{})}
+	if err := a.writePID(p); err != nil {
 		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 		_ = cmd.Wait()
-		_ = log.Close()
-		delete(a.processes, name)
+		_ = logFile.Close()
 		return err
 	}
+	a.processes[name] = p
 	go func() {
 		err := cmd.Wait()
+		close(p.waited)
 		exitCode := 0
 		if err != nil {
 			exitCode = -1
@@ -689,87 +709,49 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 				exitCode = exitErr.ExitCode()
 			}
 		}
-		a.events <- processEvent{kind: "exit", name: name, err: err, exitCode: exitCode, startedAt: p.startedAt}
+		select {
+		case a.events <- processEvent{kind: "exit", proc: p, err: err, exitCode: exitCode}:
+		case <-a.ctx.Done():
+		}
 	}()
 	return nil
 }
 
-func (a *appRuntime) adopt(name string, command apps.Command, port int) bool {
-	pidPath := a.pidPath(name)
-	pidData, err := os.ReadFile(pidPath)
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil || !alive(pid) {
-		a.removePID(name)
-		return false
-	}
-	expectedData, err := os.ReadFile(strings.TrimSuffix(pidPath, ".pid") + ".cmd")
-	if err != nil {
-		a.removePID(name)
-		return false
-	}
-	expected := strings.TrimSpace(string(expectedData))
-	intended := commandString(command, a.spec.Config.Process(name).Shell)
-	if !a.spec.Config.Process(name).Shell {
-		resolved, resolveErr := resolveExecutable(command.Argv[0], a.spec.Dir, a.spec.Env["PATH"])
-		if resolveErr != nil {
-			a.removePID(name)
-			return false
-		}
-		command.Argv = append([]string(nil), command.Argv...)
-		command.Argv[0] = resolved
-		intended = commandString(command, false)
-	}
-	actual, err := processCommand(pid)
-	if err != nil || actual != expected || expected != intended {
-		a.removePID(name)
-		return false
-	}
-	p := &process{name: name, command: command, pid: pid, port: port, startedAt: time.Now(), adopted: true}
-	a.processes[name] = p
-	go func() {
-		ticker := time.NewTicker(a.cfg.Daemon.AdoptPoll.Value())
-		defer ticker.Stop()
-		for range ticker.C {
-			if !alive(pid) {
-				a.events <- processEvent{kind: "exit", name: name, exitCode: -1, startedAt: p.startedAt}
-				return
-			}
-		}
-	}()
-	return true
-}
-
-func (a *appRuntime) readiness(name string, port int) {
-	defaults := a.spec.Config.Process(name)
+func (a *appRuntime) readiness(p *process) {
+	defaults := a.spec.Config.Process(p.name)
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
 	ticker := time.NewTicker(defaults.HealthInterval.Value())
 	defer ticker.Stop()
+	host := ""
+	if len(a.spec.Config.Hosts) > 0 {
+		host = a.spec.Config.Hosts[0]
+	}
 	lastError := errors.New("healthcheck timed out")
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
+		case <-p.done:
+			return
 		case <-ticker.C:
-			ok, err := healthCheck(defaults.Health, port, a.cfg.Proxy.Upstream.DialTimeout.Value())
+			ok, err := healthCheck(defaults.Health, p.port, host, a.cfg.Proxy.Upstream.DialTimeout.Value())
 			if ok {
-				a.events <- processEvent{kind: "ready", name: name}
+				a.events <- processEvent{kind: "ready", proc: p}
 				return
 			}
 			if err != nil {
 				lastError = err
 			}
 			if time.Now().After(deadline) {
-				a.events <- processEvent{kind: "health-failed", name: name, err: lastError}
+				a.events <- processEvent{kind: "health-failed", proc: p, err: lastError}
 				return
 			}
 		}
 	}
 }
 
-func healthCheck(check string, port int, timeout time.Duration) (bool, error) {
+// healthCheck talks to the process the way the proxy does: loopback address, app hostname in Host.
+func healthCheck(check string, port int, host string, timeout time.Duration) (bool, error) {
 	address := fmt.Sprintf("127.0.0.1:%d", port)
 	if check == "tcp" {
 		connection, err := net.DialTimeout("tcp", address, timeout)
@@ -781,7 +763,14 @@ func healthCheck(check string, port int, timeout time.Duration) (bool, error) {
 	}
 	path := strings.TrimPrefix(check, "http:")
 	client := &http.Client{Timeout: timeout}
-	response, err := client.Get("http://" + address + path)
+	request, err := http.NewRequest(http.MethodGet, "http://"+address+path, nil)
+	if err != nil {
+		return false, err
+	}
+	if host != "" {
+		request.Host = host
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return false, fmt.Errorf("Healthcheck on %s failed: %w", path, err)
 	}
@@ -793,6 +782,10 @@ func healthCheck(check string, port int, timeout time.Duration) (bool, error) {
 }
 
 func (a *appRuntime) handleEvent(event processEvent) {
+	name := event.proc.name
+	if event.kind != "restart" && a.processes[name] != event.proc {
+		return
+	}
 	switch event.kind {
 	case "ready":
 		if a.state == Starting {
@@ -801,25 +794,23 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		}
 	case "health-failed":
 		a.lastError = event.err.Error()
-		a.lastErrorProcess = event.name
-		if p := a.processes[event.name]; p != nil {
-			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
-		}
+		a.lastErrorProcess = name
+		_ = syscall.Kill(-event.proc.pid, syscall.SIGKILL)
 	case "restart":
-		if a.state != Running && a.state != Starting {
+		if a.state != Running && a.state != Starting || a.processes[name] != nil {
 			return
 		}
-		command := a.spec.Commands[event.name]
-		port, err := a.allocator.Allocate(a.spec.Name, event.name)
+		command := a.spec.Commands[name]
+		port, err := a.allocator.Allocate(a.spec.Name, name)
 		if err == nil {
-			err = a.spawn(event.name, command, port)
-			if err == nil && event.name == a.spec.Config.WebProcess {
-				go a.readiness(event.name, port)
+			err = a.spawn(name, command, port)
+			if err == nil && name == a.spec.Config.WebProcess {
+				go a.readiness(a.processes[name])
 			}
 		}
 		if err != nil {
 			a.lastError = err.Error()
-			a.lastErrorProcess = event.name
+			a.lastErrorProcess = name
 			_ = a.stopProcesses()
 			a.state = Crashed
 		}
@@ -829,44 +820,41 @@ func (a *appRuntime) handleEvent(event processEvent) {
 }
 
 func (a *appRuntime) processExited(event processEvent) {
-	p := a.processes[event.name]
-	if p == nil {
-		return
-	}
-	a.cleanupProcess(event.name)
+	name := event.proc.name
+	a.cleanupProcess(name)
 	if a.state == Stopping || a.state == Stopped {
 		return
 	}
-	defaults := a.spec.Config.Process(event.name)
-	if time.Since(event.startedAt) >= defaults.RestartReset.Value() {
-		a.failures[event.name] = 0
+	defaults := a.spec.Config.Process(name)
+	if time.Since(event.proc.startedAt) >= defaults.RestartReset.Value() {
+		a.failures[name] = 0
 	}
 	shouldRestart := defaults.Restart == "always" || (defaults.Restart == "on-failure" && event.exitCode != 0)
-	if event.name == a.spec.Config.WebProcess && shouldRestart {
+	if name == a.spec.Config.WebProcess && shouldRestart {
 		a.state = Starting
 	}
 	if !shouldRestart {
-		if event.name == a.spec.Config.WebProcess {
+		if name == a.spec.Config.WebProcess {
 			a.state = Crashed
-			a.lastError = fmt.Sprintf("%s exited with code %d", event.name, event.exitCode)
-			a.lastErrorProcess = event.name
+			a.lastError = fmt.Sprintf("%s exited with code %d", name, event.exitCode)
+			a.lastErrorProcess = name
 		} else if len(a.processes) == 0 {
 			a.state = Stopped
 		}
 		return
 	}
-	a.failures[event.name]++
-	if a.failures[event.name] >= defaults.MaxRestarts {
-		a.state, a.lastError = Crashed, fmt.Sprintf("%s exceeded max_restarts", event.name)
-		a.lastErrorProcess = event.name
+	a.failures[name]++
+	if a.failures[name] >= defaults.MaxRestarts {
+		a.state, a.lastError = Crashed, fmt.Sprintf("%s exceeded max_restarts", name)
+		a.lastErrorProcess = name
 		_ = a.stopProcesses()
 		a.state = Crashed
 		return
 	}
-	delay := backoff(defaults.RestartBackoff, a.failures[event.name])
+	delay := backoff(defaults.RestartBackoff, a.failures[name])
 	time.AfterFunc(delay, func() {
 		select {
-		case a.events <- processEvent{kind: "restart", name: event.name}:
+		case a.events <- processEvent{kind: "restart", proc: event.proc}:
 		case <-a.ctx.Done():
 		}
 	})
@@ -907,7 +895,7 @@ func (a *appRuntime) snapshot() Snapshot {
 	pids := make([]int, 0, len(a.processes))
 	var earliest time.Time
 	for _, p := range a.processes {
-		result.Processes = append(result.Processes, ProcessSnapshot{Name: p.name, Command: p.command.Line, PID: p.pid, Port: p.port, Restarts: a.failures[p.name], StartedAt: p.startedAt, Adopted: p.adopted})
+		result.Processes = append(result.Processes, ProcessSnapshot{Name: p.name, Command: p.command.Line, PID: p.pid, Port: p.port, Restarts: a.failures[p.name], StartedAt: p.startedAt})
 		pids = append(pids, p.pid)
 		if earliest.IsZero() || p.startedAt.Before(earliest) {
 			earliest = p.startedAt
@@ -970,36 +958,23 @@ func (a *appRuntime) cleanupProcess(name string) {
 	if p.log != nil {
 		_ = p.log.Close()
 	}
+	close(p.done)
 	delete(a.processes, name)
 	a.removePID(name)
 }
 
-func (a *appRuntime) writePID(p *process, shell bool) error {
+func (a *appRuntime) writePID(p *process) error {
 	dir := filepath.Join(a.cfg.StateDir, a.spec.Name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	if err := os.WriteFile(a.pidPath(p.name), []byte(strconv.Itoa(p.pid)+"\n"), 0o640); err != nil {
-		return err
-	}
-	command := commandString(p.command, shell)
-	return os.WriteFile(filepath.Join(dir, p.name+".cmd"), []byte(command+"\n"), 0o640)
+	return os.WriteFile(a.pidPath(p.name), []byte(strconv.Itoa(p.pid)+"\n"), 0o640)
 }
 
 func (a *appRuntime) pidPath(name string) string {
 	return filepath.Join(a.cfg.StateDir, a.spec.Name, name+".pid")
 }
-func (a *appRuntime) removePID(name string) {
-	_ = os.Remove(a.pidPath(name))
-	_ = os.Remove(strings.TrimSuffix(a.pidPath(name), ".pid") + ".cmd")
-}
-
-func commandString(command apps.Command, shell bool) string {
-	if shell {
-		return strings.Join([]string{"/bin/sh", "-c", command.Line}, " ")
-	}
-	return strings.Join(command.Argv, " ")
-}
+func (a *appRuntime) removePID(name string) { _ = os.Remove(a.pidPath(name)) }
 
 func resolveExecutable(name, dir, pathValue string) (string, error) {
 	if strings.ContainsRune(name, filepath.Separator) {
@@ -1047,15 +1022,6 @@ func rotateActiveLog(path string, maximum int64, keep int) error {
 		return err
 	}
 	return os.Truncate(path, 0)
-}
-
-func processCommand(pid int) (string, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err == nil {
-		return strings.TrimSpace(strings.ReplaceAll(string(data), "\x00", " ")), nil
-	}
-	output, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
-	return strings.TrimSpace(string(output)), err
 }
 
 func alive(pid int) bool { err := syscall.Kill(pid, 0); return err == nil || err == syscall.EPERM }
