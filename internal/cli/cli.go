@@ -49,21 +49,21 @@ func (c CLI) Run(args []string) int {
 	command := args[0]
 	if command == "daemon" {
 		if err := c.daemon(args[1:]); err != nil {
-			fmt.Fprintln(c.Err, "boss:", err)
+			fmt.Fprintln(c.Err, "dboss:", err)
 			return 1
 		}
 		return 0
 	}
-	if command == "config" || command == "check" {
+	if command == "config" || command == "check" || command == "kill" {
 		if err := c.local(command, args[1:]); err != nil {
-			fmt.Fprintln(c.Err, "boss:", err)
+			fmt.Fprintln(c.Err, "dboss:", err)
 			return 1
 		}
 		return 0
 	}
 	jsonOutput, socket, remaining, err := commonArgs(args[1:])
 	if err != nil {
-		fmt.Fprintln(c.Err, "boss:", err)
+		fmt.Fprintln(c.Err, "dboss:", err)
 		return 2
 	}
 	if socket == "" {
@@ -73,14 +73,14 @@ func (c CLI) Run(args []string) int {
 		socket = "/run/boss/boss.sock"
 	}
 	if err := c.remote(command, remaining, jsonOutput, socket); err != nil {
-		fmt.Fprintln(c.Err, "boss:", err)
+		fmt.Fprintln(c.Err, "dboss:", err)
 		return 1
 	}
 	return 0
 }
 
 func (c CLI) usage() {
-	fmt.Fprintln(c.Err, "usage: boss daemon|config|check|ls|status|start|stop|restart|rescan|logs|ports [options]")
+	fmt.Fprintln(c.Err, "usage: dboss daemon|config|check|kill|ls|status|start|stop|restart|rescan|logs|ports [options]")
 }
 
 func (c CLI) daemon(args []string) error {
@@ -129,6 +129,13 @@ func (c CLI) daemon(args []string) error {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
+	}
+	cleared, err := super.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	if err != nil {
+		return err
+	}
+	if len(cleared) > 0 {
+		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
 	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, cfg.Ports.CheckBound)
 	if err != nil {
@@ -180,7 +187,7 @@ func (c CLI) daemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("boss daemon ready: socket=%s proxy=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Listen)
+	log.Printf("dboss daemon ready: socket=%s proxy=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Listen)
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -243,6 +250,12 @@ func (c CLI) local(command string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if command == "kill" {
+		if set.NArg() != 0 {
+			return errors.New("usage: dboss kill [--config path]")
+		}
+		return c.kill(cfg, *jsonOutput)
+	}
 	if command == "check" {
 		_, invalid, scanErr := apps.Discover(cfg)
 		if scanErr != nil {
@@ -273,7 +286,7 @@ func (c CLI) local(command string, args []string) error {
 		return err
 	}
 	if set.NArg() != 1 {
-		return errors.New("usage: boss config [app]")
+		return errors.New("usage: dboss config [app]")
 	}
 	found, invalid, err := apps.Discover(cfg)
 	if err != nil {
@@ -300,6 +313,33 @@ func (c CLI) local(command string, args []string) error {
 	return fmt.Errorf("unknown app %q", set.Arg(0))
 }
 
+func (c CLI) kill(cfg config.Config, jsonOutput bool) error {
+	client := ctl.Client{Socket: cfg.Socket}
+	var snapshots []super.Snapshot
+	err := client.Call(ctl.Request{Method: "ls"}, &snapshots)
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("connect to daemon: %w", err)
+	}
+	stopped := make([]string, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if err := client.Call(ctl.Request{Method: "stop", App: snapshot.Name}, nil); err != nil {
+			return fmt.Errorf("stop %s: %w", snapshot.Name, err)
+		}
+		stopped = append(stopped, snapshot.Name)
+	}
+	pids, err := super.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoded, _ := json.Marshal(map[string]any{"stopped": stopped, "killed_pids": pids})
+		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(c.Out, "stopped %d app(s); killed %d remaining listener(s) in ports %d-%d\n", len(stopped), len(pids), cfg.Ports.Range[0], cfg.Ports.Range[1])
+	return nil
+}
+
 func (c CLI) remote(command string, args []string, jsonOutput bool, socket string) error {
 	client := ctl.Client{Socket: socket}
 	request := ctl.Request{Method: command}
@@ -310,12 +350,12 @@ func (c CLI) remote(command string, args []string, jsonOutput bool, socket strin
 		}
 	case "start", "stop", "restart", "status":
 		if len(args) != 1 {
-			return fmt.Errorf("usage: boss %s <app>", command)
+			return fmt.Errorf("usage: dboss %s <app>", command)
 		}
 		request.App = args[0]
 	case "logs":
 		if len(args) == 0 {
-			return errors.New("usage: boss logs <app> [-f] [-n 200] [--process name]")
+			return errors.New("usage: dboss logs <app> [-f] [-n 200] [--process name]")
 		}
 		request.App = args[0]
 		set := flag.NewFlagSet("logs", flag.ContinueOnError)
@@ -327,7 +367,7 @@ func (c CLI) remote(command string, args []string, jsonOutput bool, socket strin
 			return err
 		}
 		if set.NArg() != 0 {
-			return errors.New("usage: boss logs <app> [-f] [-n 200] [--process name]")
+			return errors.New("usage: dboss logs <app> [-f] [-n 200] [--process name]")
 		}
 		request.Lines, request.Process = *lines, *processName
 		if *follow && jsonOutput {
@@ -342,7 +382,7 @@ func (c CLI) remote(command string, args []string, jsonOutput bool, socket strin
 		} else if len(args) == 2 && args[0] == "release" {
 			request.Method, request.App = "ports.release", args[1]
 		} else {
-			return errors.New("usage: boss ports [release <app>]")
+			return errors.New("usage: dboss ports [release <app>]")
 		}
 	default:
 		return fmt.Errorf("unknown command %q", command)

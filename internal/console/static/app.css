@@ -74,7 +74,7 @@ a:focus-visible {
   color: var(--cyan);
   background: rgb(94 231 247 / 8%);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: -0.06em;
   box-shadow: inset 0 0 22px rgb(94 231 247 / 7%);
@@ -94,7 +94,7 @@ a:focus-visible {
   margin-top: 2px;
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 14px;
   letter-spacing: 0.04em;
 }
 
@@ -103,7 +103,7 @@ a:focus-visible {
   align-items: center;
   gap: 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .live-dot {
@@ -139,7 +139,7 @@ a:focus-visible {
   margin: 0 0 10px;
   color: var(--cyan);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -180,7 +180,7 @@ h1 {
   width: 100%;
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 14px;
   text-align: right;
 }
 
@@ -198,7 +198,7 @@ h1 {
 .secondary-button {
   min-height: 40px;
   padding: 0 16px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .primary-button {
@@ -252,7 +252,7 @@ button:disabled {
 .summary-card small {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .summary-card span {
@@ -294,12 +294,12 @@ h2 {
 .section-count {
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .app-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 18px;
 }
 
@@ -334,6 +334,14 @@ h2 {
   padding: 22px 24px 18px;
 }
 
+.app-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .app-name {
   margin-bottom: 6px;
   font-size: 21px;
@@ -344,8 +352,18 @@ h2 {
   margin: 0;
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
+}
+
+.service-link {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.service-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .state-badge {
@@ -359,7 +377,7 @@ h2 {
   color: var(--state-color);
   background: color-mix(in srgb, var(--state-color) 8%, transparent);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -381,8 +399,35 @@ h2 {
   color: #ff9da6;
   background: rgb(255 111 125 / 7%);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.5;
+}
+
+.error-line strong,
+.error-log-label {
+  display: block;
+}
+
+.error-log-label {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.error-log {
+  max-height: 480px;
+  margin: 6px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid rgb(255 111 125 / 18%);
+  border-radius: 5px;
+  color: #ffb0b8;
+  background: rgb(0 0 0 / 18%);
+  font: inherit;
+  white-space: pre;
 }
 
 .metrics {
@@ -410,7 +455,7 @@ h2 {
 .metric span {
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -419,7 +464,7 @@ h2 {
 .metric strong {
   overflow: hidden;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -438,7 +483,7 @@ h2 {
   border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .process-row:last-child {
@@ -453,9 +498,7 @@ h2 {
 
 .app-actions {
   display: flex;
-  justify-content: flex-end;
   gap: 8px;
-  padding: 14px 24px 20px;
 }
 
 .action-button {
@@ -465,7 +508,7 @@ h2 {
   border-color: var(--line);
   color: var(--text);
   background: #111820;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .action-button:hover {
@@ -474,9 +517,16 @@ h2 {
 }
 
 .action-button.danger:hover {
-  border-color: rgb(255 111 125 / 50%);
-  color: #ff9da6;
-  background: rgb(255 111 125 / 7%);
+	border-color: rgb(255 111 125 / 50%);
+	color: #ff9da6;
+	background: rgb(255 111 125 / 7%);
+}
+
+.log-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	text-decoration: none;
 }
 
 .empty-state {
@@ -498,7 +548,7 @@ h2 {
 }
 
 .empty-state span:last-child {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .spinner {
@@ -523,7 +573,7 @@ h2 {
   color: var(--text);
   background: #182129;
   box-shadow: var(--shadow);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .toast.error {
@@ -544,6 +594,7 @@ h2 {
   .summary-card:nth-child(2) { border-right: 0; }
   .summary-card:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .app-grid { grid-template-columns: 1fr; }
+  .app-controls { width: 100%; justify-content: space-between; }
 }
 
 @media (max-width: 560px) {
@@ -559,8 +610,8 @@ h2 {
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .metric:nth-child(2) { border-right: 0; }
   .metric:nth-child(-n + 2) { border-bottom: 1px solid var(--line-soft); }
-  .process-row { grid-template-columns: 1fr auto; gap: 8px; padding: 7px 0; }
-  .process-row span:nth-child(3), .process-row span:nth-child(4) { display: none; }
+	.process-row { grid-template-columns: 1fr auto; gap: 8px; padding: 7px 0; }
+	.process-row span:nth-child(3), .process-row span:nth-child(4) { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

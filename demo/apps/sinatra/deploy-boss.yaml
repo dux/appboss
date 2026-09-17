@@ -1,5 +1,5 @@
 procfile:
-  web: bundle exec ruby app.rb
+  web: ./start.sh
 
 hosts:
   - sinatra.lvh.me

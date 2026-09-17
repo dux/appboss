@@ -5,7 +5,7 @@ Loads an explicit list of app folders, runs the processes in each app's `deploy-
 
 Sits under nginx (or Cloudflare directly).
 Replaces Caddy, lux-deploy's port allocator and unit renderer, and the Caddy-log-to-SQLite importer.
-lux-deploy keeps rsync, releases, hooks and rollback and calls `boss` at the end of a deploy.
+lux-deploy keeps rsync, releases, hooks and rollback and calls `dboss` at the end of a deploy.
 
 Language: Go, stdlib plus `modernc.org/sqlite` and `gopkg.in/yaml.v3`.
 Single static binary, one process, subcommands for daemon and CLI.
@@ -15,7 +15,7 @@ Single static binary, one process, subcommands for daemon and CLI.
 * Add an app folder to the global `apps` list and keep its process configuration with the app.
 * Every app process gets `PORT` filled in.
   Ports are sticky across restarts.
-* `boss start|stop|restart|ls|logs|ports|rescan` CLI, all with `--json`.
+* `dboss start|stop|restart|ls|logs|ports|rescan` CLI, all with `--json`.
 * The built-in management console shows live app state and controls the supervisor through its in-process API.
 * Idle apps stop after N hours without HTTP traffic and wake on the next request with a "starting, refresh in 5s" page.
 * Per-app SQLite request log written by the proxy, pruned on a schedule.
@@ -58,7 +58,7 @@ If the box sits behind Cloudflare Tunnel, nginx is optional.
 * The listed folder is the process working directory and may itself be a release symlink.
 * Env is `.env` overlaid by `.env.local`.
 * deploy-boss injects `PORT`, `APP_NAME`, `PROC_TYPE`, and the app's `PATH` resolved once via `mise env` when a `mise.toml` exists.
-* Rescan is explicit (`boss rescan`, or implicit on `boss start <app>`).
+* Rescan is explicit (`dboss rescan`, or implicit on `dboss start <app>`).
 * Rescan reloads the central app list and every app's `deploy-boss.yaml`.
 
 ### deploy-boss.yaml (required, per app)
@@ -126,11 +126,12 @@ Start, stop, restart, idle-timeout, and rescan are messages on the app's channel
 Per process (one per `procfile` entry):
 
 * Spawn with the configured app folder as cwd and merged env.
-* Use `Setsid: true` so the child is its own session and process group and survives a daemon restart.
-* Pipe stdout and stderr to `log_dir/<app>/<proctype>.log` and keep the last N lines in memory for `boss logs`.
+* Use `Setsid: true` so the child is its own session and process group.
+* Pipe stdout and stderr to `log_dir/<app>/<proctype>.log` and keep the last N lines in memory for `dboss logs`.
 * Block on `Wait` in the goroutine.
   On exit, record the code, apply restart policy with exponential backoff, and mark the app crashed after `max_restarts` consecutive failures.
 * Stop with SIGTERM to the process group, wait `stop_timeout`, then send SIGKILL.
+* Daemon shutdown stops all app process groups concurrently and waits for them before exiting.
 * Store a pid file at `state_dir/<app>/<proctype>.pid` for adoption.
 
 ### Surviving a daemon restart
@@ -157,8 +158,10 @@ Nothing outside the app goroutine knows which backend is active.
   Never reassign it while the entry exists.
 * Always inject `PORT` into every configured process, including workers.
   There is no pinning or opt-out, and a `PORT` in `.env` is overwritten.
-* `boss ports` lists allocations.
-  `boss ports release <app>` frees them only when the app is stopped.
+* The configured range is reserved exclusively for deploy-boss apps.
+  At daemon startup, deploy-boss uses `lsof` to terminate every listener in the range before starting any app.
+* `dboss ports` lists allocations.
+  `dboss ports release <app>` frees them only when the app is stopped.
 * The proxy and process both read the same table, so a mismatch is impossible.
 
 ## Proxy
@@ -201,13 +204,14 @@ The CLI is the same binary talking to that socket.
 The management console calls the same manager in-process and never shells out.
 
 ```
-boss daemon                       run the daemon (systemd unit, Restart=always)
-boss ls [--json]                  apps, state, ports, uptime, last activity, mem
-boss start|stop|restart <app>
-boss rescan                       re-read the apps list and deploy-boss.yaml files
-boss logs <app> [-f] [-n 200]     tail process logs
-boss ports [release <app>]
-boss status <app> [--json]        full detail incl. process list and restarts
+dboss daemon                       run the daemon (systemd unit, Restart=always)
+dboss ls [--json]                  apps, state, ports, uptime, last activity, mem
+dboss start|stop|restart <app>
+dboss kill                         stop all apps and clear every listener in ports.range
+dboss rescan                       re-read the apps list and deploy-boss.yaml files
+dboss logs <app> [-f] [-n 200]     tail process logs
+dboss ports [release <app>]
+dboss status <app> [--json]        full detail incl. process list and restarts
 ```
 
 Every command accepts `--json`.
@@ -231,14 +235,14 @@ The demo console is available directly at `http://boss.lvh.me:8081`; its app pro
 ## lux-deploy integration
 
 lux-deploy stops rendering systemd units and Caddy config.
-After a symlink swap, it runs `boss restart <app>` and `health.sh` can call `boss status <app>`.
-`host:apps` becomes `boss ls`.
+After a symlink swap, it runs `dboss restart <app>` and `health.sh` can call `dboss status <app>`.
+`host:apps` becomes `dboss ls`.
 The Caddy log importer is retired.
 
 ## Repo layout
 
 ```
-cmd/boss/main.go          subcommand dispatch
+cmd/dboss/main.go         subcommand dispatch
 internal/config/          global and per-app YAML loading, defaults
 internal/apps/            app list loading, env merge, procfile validation
 internal/super/           app goroutine, state machine, spawn, adopt
@@ -256,16 +260,16 @@ deploy/nginx.conf         reference nginx snippet
 
 ## Milestones
 
-1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, adoption, and `boss daemon|ls|start|stop|restart|rescan|logs`.
+1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, adoption, and `dboss daemon|ls|start|stop|restart|rescan|logs`.
    Runs on macOS.
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
-3. **Logs.** SQLite request log, prune, `boss status` shows request rates.
-4. **Ops.** systemd unit, nginx snippet, management console, lux-deploy calls `boss restart`.
+3. **Logs.** SQLite request log, prune, `dboss status` shows request rates.
+4. **Ops.** systemd unit, nginx snippet, management console, lux-deploy calls `dboss restart`.
 5. **Later.** cgroup backend and per-app memory limits.
 
 ## Open questions
 
-* Should `boss ls` memory come from summing children (procgroup) and be labelled approximate until cgroups land? Yes, label it.
+* Should `dboss ls` memory come from summing children (procgroup) and be labelled approximate until cgroups land? Yes, label it.
 * Procfile commands with shell syntax (`&&`, `$VAR`) execute directly by default.
   Set `shell: true` in `deploy-boss.yaml` to use `sh -c`.
 * Multiple `web`-like process types behind the proxy: only `web` is routed.

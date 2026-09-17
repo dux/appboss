@@ -3,11 +3,12 @@ package super
 import (
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -33,6 +34,28 @@ func TestBackoffCaps(t *testing.T) {
 	}
 	if got := backoff(values, 10); got != 5*time.Second {
 		t.Fatalf("cap = %s", got)
+	}
+}
+
+func TestHealthcheckReportsHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/up" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	_, portValue, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, checkErr := healthCheck("http:/up", port, time.Second)
+	if ok || checkErr == nil || checkErr.Error() != "Healthcheck on /up returned 403" {
+		t.Fatalf("healthcheck = %v, %v", ok, checkErr)
 	}
 }
 
@@ -63,7 +86,7 @@ func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 	}
 }
 
-func TestSupervisorAdoptsProcessAfterManagerRestart(t *testing.T) {
+func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32300, 32320})
 	allocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
 	if err != nil {
@@ -79,19 +102,10 @@ func TestSupervisorAdoptsProcessAfterManagerRestart(t *testing.T) {
 	waitForSupervisorState(t, first, Running)
 	snapshot, _ := first.Snapshot("demo")
 	pid := snapshot.Processes[0].PID
-	defer syscall.Kill(-pid, syscall.SIGKILL)
-	expectedData, err := os.ReadFile(filepath.Join(cfg.StateDir, "demo", "web.cmd"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	actualCommand, err := processCommand(pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(expectedData)) != actualCommand {
-		t.Fatalf("pid sidecar mismatch: %q != %q", string(expectedData), actualCommand)
-	}
 	first.Close()
+	if alive(pid) {
+		t.Fatalf("process %d survived manager close", pid)
+	}
 	secondAllocator, err := ports.Open(cfg.StateDir, cfg.Ports.Range, false)
 	if err != nil {
 		t.Fatal(err)
@@ -102,9 +116,9 @@ func TestSupervisorAdoptsProcessAfterManagerRestart(t *testing.T) {
 	}
 	defer second.Close()
 	waitForSupervisorState(t, second, Running)
-	adopted, _ := second.Snapshot("demo")
-	if len(adopted.Processes) != 1 || !adopted.Processes[0].Adopted || adopted.Processes[0].PID != pid {
-		t.Fatalf("process was not adopted: %+v", adopted)
+	restarted, _ := second.Snapshot("demo")
+	if len(restarted.Processes) != 1 || restarted.Processes[0].Adopted || restarted.Processes[0].PID == pid {
+		t.Fatalf("process was not restarted: %+v", restarted)
 	}
 	if err := second.Stop("demo"); err != nil {
 		t.Fatal(err)

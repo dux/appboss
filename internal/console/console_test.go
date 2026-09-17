@@ -16,12 +16,20 @@ import (
 
 type fakeManager struct {
 	snapshots []super.Snapshot
+	logs      map[string][]string
 	actions   []string
 	warnings  []error
 }
 
 func (m *fakeManager) Snapshots() []super.Snapshot {
 	return append([]super.Snapshot(nil), m.snapshots...)
+}
+
+func (m *fakeManager) Logs(app, process string, lines int) (map[string][]string, error) {
+	if m.logs == nil {
+		return nil, errors.New("missing log fixture")
+	}
+	return m.logs, nil
 }
 
 func (m *fakeManager) Start(app string) error {
@@ -82,6 +90,19 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	handler.ServeHTTP(actionResponse, actionRequest)
 	if actionResponse.Code != http.StatusOK || len(manager.actions) != 1 || manager.actions[0] != "restart sinatra" {
 		t.Fatalf("unexpected action response: %d %v %s", actionResponse.Code, manager.actions, actionResponse.Body.String())
+	}
+}
+
+func TestConsoleServesAppLogsWithoutRefresh(t *testing.T) {
+	manager := &fakeManager{logs: map[string][]string{"web": {"hello", "world"}}}
+	handler := newTestHandler(t, manager, nil)
+	cookie, _ := sessionCookie(t, handler)
+	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs?app=sinatra", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" || response.Body.String() != "hello\nworld" {
+		t.Fatalf("unexpected logs response: %d %s", response.Code, response.Body.String())
 	}
 }
 

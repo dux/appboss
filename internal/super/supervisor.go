@@ -62,14 +62,18 @@ type Snapshot struct {
 	Resources    res.Stats         `json:"resources"`
 	RequestRates RequestRates      `json:"request_rates"`
 	Error        string            `json:"error,omitempty"`
+	ErrorLog     []string          `json:"error_log,omitempty"`
 	LogRetention time.Duration     `json:"-"`
 	LogFlush     time.Duration     `json:"-"`
 }
+
+const failureLogLines = 1000
 
 type Manager struct {
 	cfg        config.Config
 	ports      *ports.Allocator
 	backend    res.Backend
+	closeOnce  sync.Once
 	mu         sync.RWMutex
 	apps       map[string]*appRuntime
 	desiredMu  sync.Mutex
@@ -109,8 +113,25 @@ func New(cfg config.Config, allocator *ports.Allocator) (*Manager, []error, erro
 }
 
 func (m *Manager) Close() {
-	_ = m.saveActivities()
-	m.cancel()
+	m.closeOnce.Do(func() {
+		_ = m.saveActivities()
+		m.mu.RLock()
+		runtimes := make([]*appRuntime, 0, len(m.apps))
+		for _, runtime := range m.apps {
+			runtimes = append(runtimes, runtime)
+		}
+		m.mu.RUnlock()
+		var wait sync.WaitGroup
+		for _, runtime := range runtimes {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				_ = runtime.call(request{kind: requestStop})
+			}()
+		}
+		wait.Wait()
+		m.cancel()
+	})
 }
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
@@ -441,19 +462,20 @@ type process struct {
 }
 
 type appRuntime struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	cfg          config.Config
-	spec         *apps.App
-	allocator    *ports.Allocator
-	backend      res.Backend
-	requests     chan request
-	events       chan processEvent
-	state        State
-	processes    map[string]*process
-	failures     map[string]int
-	lastActivity time.Time
-	lastError    string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cfg              config.Config
+	spec             *apps.App
+	allocator        *ports.Allocator
+	backend          res.Backend
+	requests         chan request
+	events           chan processEvent
+	state            State
+	processes        map[string]*process
+	failures         map[string]int
+	lastActivity     time.Time
+	lastError        string
+	lastErrorProcess string
 }
 
 func (a *appRuntime) call(req request) error { return a.query(req).err }
@@ -527,7 +549,7 @@ func (a *appRuntime) start(adopt bool) error {
 		return nil
 	}
 	a.failures = map[string]int{}
-	a.state, a.lastError = Starting, ""
+	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
 	for name, command := range a.spec.Commands {
 		port, hadPort := a.allocator.Lookup(a.spec.Name, name)
 		var err error
@@ -535,6 +557,7 @@ func (a *appRuntime) start(adopt bool) error {
 			port, err = a.allocator.Allocate(a.spec.Name, name)
 		}
 		if err != nil {
+			a.lastErrorProcess = name
 			return a.failStart(err)
 		}
 		var started bool
@@ -543,6 +566,7 @@ func (a *appRuntime) start(adopt bool) error {
 		}
 		if !started {
 			if err := a.spawn(name, command, port); err != nil {
+				a.lastErrorProcess = name
 				return a.failStart(err)
 			}
 		}
@@ -723,41 +747,49 @@ func (a *appRuntime) readiness(name string, port int) {
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
 	ticker := time.NewTicker(defaults.HealthInterval.Value())
 	defer ticker.Stop()
+	lastError := errors.New("healthcheck timed out")
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			if healthy(defaults.Health, port, a.cfg.Proxy.Upstream.DialTimeout.Value()) {
+			ok, err := healthCheck(defaults.Health, port, a.cfg.Proxy.Upstream.DialTimeout.Value())
+			if ok {
 				a.events <- processEvent{kind: "ready", name: name}
 				return
 			}
+			if err != nil {
+				lastError = err
+			}
 			if time.Now().After(deadline) {
-				a.events <- processEvent{kind: "health-failed", name: name, err: errors.New("readiness timeout")}
+				a.events <- processEvent{kind: "health-failed", name: name, err: lastError}
 				return
 			}
 		}
 	}
 }
 
-func healthy(check string, port int, timeout time.Duration) bool {
+func healthCheck(check string, port int, timeout time.Duration) (bool, error) {
 	address := fmt.Sprintf("127.0.0.1:%d", port)
 	if check == "tcp" {
 		connection, err := net.DialTimeout("tcp", address, timeout)
 		if err == nil {
 			_ = connection.Close()
-			return true
+			return true, nil
 		}
-		return false
+		return false, fmt.Errorf("Healthcheck on tcp failed: %w", err)
 	}
 	path := strings.TrimPrefix(check, "http:")
 	client := &http.Client{Timeout: timeout}
 	response, err := client.Get("http://" + address + path)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("Healthcheck on %s failed: %w", path, err)
 	}
 	defer response.Body.Close()
-	return response.StatusCode >= 200 && response.StatusCode < 300
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false, fmt.Errorf("Healthcheck on %s returned %d", path, response.StatusCode)
+	}
+	return true, nil
 }
 
 func (a *appRuntime) handleEvent(event processEvent) {
@@ -769,6 +801,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		}
 	case "health-failed":
 		a.lastError = event.err.Error()
+		a.lastErrorProcess = event.name
 		if p := a.processes[event.name]; p != nil {
 			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 		}
@@ -786,6 +819,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		}
 		if err != nil {
 			a.lastError = err.Error()
+			a.lastErrorProcess = event.name
 			_ = a.stopProcesses()
 			a.state = Crashed
 		}
@@ -815,6 +849,7 @@ func (a *appRuntime) processExited(event processEvent) {
 		if event.name == a.spec.Config.WebProcess {
 			a.state = Crashed
 			a.lastError = fmt.Sprintf("%s exited with code %d", event.name, event.exitCode)
+			a.lastErrorProcess = event.name
 		} else if len(a.processes) == 0 {
 			a.state = Stopped
 		}
@@ -823,6 +858,7 @@ func (a *appRuntime) processExited(event processEvent) {
 	a.failures[event.name]++
 	if a.failures[event.name] >= defaults.MaxRestarts {
 		a.state, a.lastError = Crashed, fmt.Sprintf("%s exceeded max_restarts", event.name)
+		a.lastErrorProcess = event.name
 		_ = a.stopProcesses()
 		a.state = Crashed
 		return
@@ -861,6 +897,13 @@ func backoff(values []any, attempt int) time.Duration {
 
 func (a *appRuntime) snapshot() Snapshot {
 	result := Snapshot{Name: a.spec.Name, State: a.state, Hosts: a.spec.Config.Hosts, WebProcess: a.spec.Config.WebProcess, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	if result.Error != "" {
+		processName := a.lastErrorProcess
+		if processName == "" {
+			processName = a.spec.Config.WebProcess
+		}
+		result.ErrorLog, _ = tail(filepath.Join(a.cfg.LogDir, a.spec.Name, processName+".log"), failureLogLines)
+	}
 	pids := make([]int, 0, len(a.processes))
 	var earliest time.Time
 	for _, p := range a.processes {

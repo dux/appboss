@@ -102,21 +102,54 @@ function actionButton(label, action, app, disabled, danger = false) {
   return button;
 }
 
+function logsLink(app) {
+  const link = element("a", "action-button log-link", "View logs");
+  link.href = `/logs?app=${encodeURIComponent(app.name)}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  return link;
+}
+
+function serviceLink(app) {
+  const process = (app.processes || []).find((candidate) => candidate.name === app.web_process && candidate.port);
+  if (!process) return element("span", "hosts", (app.hosts || []).join("  /  ") || "Service port unavailable");
+  const url = `http://lvh.me:${process.port}`;
+  const link = element("a", "service-link", url);
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  return link;
+}
+
+function errorBlock(app) {
+  const block = element("div", "error-line");
+  block.append(element("strong", "", app.error));
+  if (app.error_log?.length) {
+    block.append(element("span", "error-log-label", "Last 1000 log lines"));
+    block.append(element("pre", "error-log", app.error_log.join("\n")));
+  }
+  return block;
+}
+
 function appCard(app) {
   const card = element("article", "app-card");
   card.dataset.state = app.state;
 
   const head = element("div", "app-head");
   const identity = element("div");
+  const hosts = element("p", "hosts");
+  hosts.append(serviceLink(app));
   identity.append(
     element("h3", "app-name", app.name),
-    element("p", "hosts", (app.hosts || []).join("  /  ") || "No host configured"),
+    hosts,
   );
-  head.append(identity, element("span", "state-badge", app.state));
+  const controls = element("div", "app-controls");
+  controls.append(element("span", "state-badge", app.state));
+  head.append(identity, controls);
   card.append(head);
 
   if (app.error) {
-    card.append(element("p", "error-line", app.error));
+    card.append(errorBlock(app));
   }
 
   const metrics = element("div", "metrics");
@@ -140,17 +173,20 @@ function appCard(app) {
   const actions = element("div", "app-actions");
   const changing = app.state === "starting" || app.state === "stopping";
   actions.append(
+    logsLink(app),
     actionButton("Start", "start", app.name, app.state === "running" || app.state === "starting"),
     actionButton("Restart", "restart", app.name, changing || app.state === "stopped"),
     actionButton("Stop", "stop", app.name, changing || app.state === "stopped", true),
   );
-  card.append(actions);
+  controls.append(actions);
 
   return card;
 }
 
 function render(apps, updatedAt = new Date().toISOString()) {
-  const fleet = Array.isArray(apps) ? apps : [];
+  const fleet = Array.isArray(apps)
+    ? [...apps].sort((left, right) => left.name.localeCompare(right.name))
+    : [];
   const running = fleet.filter((app) => app.state === "running").length;
   const attention = fleet.filter((app) => ["crashed", "starting", "stopping"].includes(app.state)).length;
   const hourly = fleet.reduce((total, app) => total + Number(app.request_rates?.last_hour || 0), 0);

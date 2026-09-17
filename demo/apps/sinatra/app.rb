@@ -6,6 +6,7 @@ require "sinatra"
 set :bind, "127.0.0.1"
 set :port, ENV.fetch("PORT", "4567").to_i
 set :server, :puma
+set :host_authorization, permitted_hosts: ["lvh.me", ".lvh.me"]
 
 get "/" do
   content_type :html

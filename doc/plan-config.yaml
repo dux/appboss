@@ -17,7 +17,8 @@
 #   deploy-boss.config.yaml -> validate -> load each apps folder -> per app:
 #   deploy-boss.yaml, .env, .env.local
 #   -> validate each app (an invalid app is reported and skipped, it does not stop the daemon)
-#   -> read ports.json -> adopt pids -> start apps that were running before -> listen.
+#   -> terminate listeners in ports.range -> read ports.json -> adopt remaining
+#   pids -> start apps that were running before -> listen.
 
 # =============================================================================
 # PART 1: /etc/boss/deploy-boss.config.yaml
@@ -92,8 +93,10 @@ management:
 # --- Ports -------------------------------------------------------------------
 
 ports:
-  # Inclusive range boss hands out. One port per (app, proctype). Sticky forever
-  # until `boss ports release <app>`. Range must not overlap either HTTP listener.
+  # Inclusive range boss hands out. This range belongs exclusively to boss:
+  # daemon startup and `dboss kill` terminate every listener in it before apps
+  # start. This requires `lsof`. One sticky port is assigned per (app, proctype)
+  # until `dboss ports release <app>`. The range must not overlap an HTTP listener.
   range: [3100, 3990]
   # Before assigning a port, also check it is not currently bound on the host.
   # Guards against a port used by something boss did not start.
@@ -120,7 +123,7 @@ defaults:
   stop_timeout: 20s
   stop_signal: TERM         # TERM | INT | QUIT | USR1 | USR2
 
-  # Restart policy when a process exits on its own (not via boss stop).
+  # Restart policy when a process exits on its own (not via dboss stop).
   #   on-failure   restart only when exit code != 0 or killed by signal
   #   always       restart on any exit
   #   never        leave it stopped, mark app crashed if it was the web process
@@ -135,7 +138,7 @@ defaults:
   # Process log files (stdout+stderr of each proctype).
   log_max_size: 10m         # rotate when the file exceeds this
   log_keep: 5               # rotated files kept per proctype
-  log_tail_lines: 500       # lines kept in memory for `boss logs` without -f
+  log_tail_lines: 500       # lines kept in memory for `dboss logs` without -f
 
   # Request log (SQLite written by the proxy).
   log_retention: 720h       # 30 days. 0 disables the request log for the app.
@@ -218,7 +221,7 @@ env:
 # from ports.range and injects it as PORT into that process's environment,
 # always, for every procfile entry. There is no pin, no override, no opt-out.
 # An app that ignores PORT and binds its own port will not be reachable
-# through the proxy. Read the allocation with `boss ports`.
+# through the proxy. Read the allocation with `dboss ports`.
 
 # Per-proctype overrides. Same keys as above except hosts/web_process.
 # Useful for a worker that needs a longer stop_timeout than the web process.
@@ -257,7 +260,7 @@ processes:
 ---
 # state_dir/ports.json
 # Sticky port table. Key is "<app>/<proctype>". Never rewritten except by
-# allocation or `boss ports release`.
+# allocation or `dboss ports release`.
 ports.json:
   myapp/web: 3100
   myapp/worker: 3101
@@ -286,13 +289,14 @@ running.json:
 # CLI flags that override config (highest priority, for one-off runs)
 # =============================================================================
 #
-#   boss daemon --config /path/deploy-boss.config.yaml
+#   dboss daemon --config /path/deploy-boss.config.yaml
 #   Default lookup: $BOSS_CONFIG, then ./deploy-boss.config.yaml,
 #   then /etc/boss/deploy-boss.config.yaml.
-#   boss daemon --state-dir ./tmp/state --log-dir ./tmp/log --socket ./tmp/boss.sock
-#   boss <cmd> --socket /path                CLI target when not default
+#   dboss daemon --state-dir ./tmp/state --log-dir ./tmp/log --socket ./tmp/boss.sock
+#   dboss <cmd> --socket /path               CLI target when not default
+#   dboss kill --config /path/deploy-boss.config.yaml
 #   BOSS_SOCKET env var is honoured by the CLI and injected into app processes.
 #
-# `boss config` prints the fully resolved config (defaults merged) as YAML.
-# `boss config <app>` prints the resolved per-app config after defaults merge.
-# `boss check` validates deploy-boss.config.yaml and every app without starting anything.
+# `dboss config` prints the fully resolved config (defaults merged) as YAML.
+# `dboss config <app>` prints the resolved per-app config after defaults merge.
+# `dboss check` validates deploy-boss.config.yaml and every app without starting anything.

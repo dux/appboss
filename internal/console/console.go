@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ var assets embed.FS
 
 type AppManager interface {
 	Snapshots() []super.Snapshot
+	Logs(string, string, int) (map[string][]string, error)
 	Start(string) error
 	Stop(string) error
 	Restart(string) error
@@ -82,6 +84,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
 		h.serveAsset(w, r, "index.html", "text/html; charset=utf-8")
+	case r.Method == http.MethodGet && r.URL.Path == "/logs":
+		h.writeLogs(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/assets/app.css":
 		h.serveAsset(w, r, "app.css", "text/css; charset=utf-8")
 	case r.Method == http.MethodGet && r.URL.Path == "/assets/app.js":
@@ -178,6 +182,34 @@ func (h *Handler) rescan(w http.ResponseWriter, r *http.Request, session authSes
 		warnings = append(warnings, invalidApp.Error())
 	}
 	writeJSON(w, http.StatusOK, rescanResponse{Apps: h.snapshots(), Warnings: warnings})
+}
+
+func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		http.Error(w, "app is required", http.StatusBadRequest)
+		return
+	}
+	logs, err := h.manager.Logs(app, "", 1000)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	names := make([]string, 0, len(logs))
+	for name := range logs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var output strings.Builder
+	for _, name := range names {
+		if output.Len() > 0 {
+			output.WriteByte('\n')
+		}
+		output.WriteString(strings.Join(logs[name], "\n"))
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, output.String())
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request, session authSession) {

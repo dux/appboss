@@ -1,4 +1,4 @@
-const port = Number(Bun.env.PORT ?? 3000);
+const port = Number(Bun.argv[2]);
 
 Bun.serve({
   hostname: "127.0.0.1",
