@@ -1,0 +1,22 @@
+apps:
+  - ./apps/sinatra
+  - ./apps/bun
+
+state_dir: ./state
+log_dir: ./log
+socket: ./deploy-boss.sock
+
+proxy:
+  listen: 127.0.0.1:8080
+
+ports:
+  range: [3100, 3199]
+  check_bound: true
+
+auth:
+  realm: auth.authcog.com
+  admin_emails:
+    - rejotl@gmail.com
+
+defaults:
+  idle_stop: 0s

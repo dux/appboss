@@ -1,0 +1,14 @@
+.DS_Store
+/boss
+/coverage/
+/tmp/
+node_modules/
+vendor/bundle/
+.bundle/
+.env.local
+*.tmp.*
+*.log
+*.pid
+*.sock
+/demo/state/
+/demo/log/

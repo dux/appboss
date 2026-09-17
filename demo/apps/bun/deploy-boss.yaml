@@ -1,0 +1,7 @@
+procfile:
+  web: bun run server.js
+
+hosts:
+  - bun.lvh.me
+
+health: http:/up

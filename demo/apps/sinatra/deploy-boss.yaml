@@ -1,0 +1,7 @@
+procfile:
+  web: bundle exec ruby app.rb
+
+hosts:
+  - sinatra.lvh.me
+
+health: http:/up

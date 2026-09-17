@@ -1,0 +1,20 @@
+[Unit]
+Description=deploy-boss application supervisor
+After=network.target
+
+[Service]
+Type=simple
+User=boss
+Group=boss
+ExecStart=/usr/local/bin/boss daemon --config /etc/boss/deploy-boss.config.yaml
+Restart=always
+RestartSec=2
+RuntimeDirectory=boss
+StateDirectory=boss
+LogsDirectory=boss
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
