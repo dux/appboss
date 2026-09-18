@@ -6,9 +6,8 @@
 
     beforeRender() {
       const app = this.props.app
-      const web = (app.processes || []).find((process) => process.name === app.web_process && process.port)
-      this.state.serviceUrl = web ? `http://lvh.me:${web.port}` : ''
-      this.state.hosts = (app.hosts || []).join('  /  ') || 'Service port unavailable'
+      const host = app.canonical_host || (app.hosts || [])[0] || ''
+      this.state.serviceUrl = host ? `${location.protocol}//${host}${location.port ? `:${location.port}` : ''}` : ''
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.processes = app.processes || []
       this.state.errorLog = (app.error_log || []).join('\n')
@@ -55,7 +54,7 @@
       {#if state.serviceUrl}
         <a class="service-link" href={state.serviceUrl} target="_blank" rel="noreferrer">{state.serviceUrl}<svg class="icon"><use href="#i-external"></use></svg></a>
       {:else}
-        <span class="service-host">{state.hosts}</span>
+        <span class="service-host">No hosts configured</span>
       {/if}
     </div>
     <div class="app-status">
