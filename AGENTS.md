@@ -3,6 +3,23 @@
 Single Go binary (`appboss`) that supervises, proxies and logs the apps on one host.
 Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the design before changing behavior.
 
+## Deploy and configure
+
+* Build once, then copy the binary to the box: `make build` produces `./bin/appboss`; install it at a stable path and pass that path to `appboss systemd --bin`. `~/bin/appboss` is only the local dev symlink and must not be used in a unit.
+* Runtime deps on the box: Linux, `lsof` (start clears every listener in `ports.range`, `appboss kill` needs it too), a writable `state_dir`, `log_dir` and the socket directory. Go is build-time only.
+* Host config lives at `<dir>/appboss.yaml`: `apps` (or `procfile` for single mode), `proxy.listen`, `ports.range` and `management.host` + `management.auth` are the minimum for a real host. Validate with `appboss check -c <dir>/appboss.yaml` before starting.
+* Server-only values (admin emails, secrets, absolute paths) go in `<dir>/appboss.local.yaml`. It wins over `appboss.yaml`, is gitignored, and is never touched by a deploy, so it is how box edits survive. The console's "Create server override" copies `appboss.yaml` to it.
+* Install and enable the service: `sudo appboss systemd -c <dir>/appboss.yaml --user <svc> --bin <path> --install` writes `/etc/systemd/system/appboss.service`, reloads and enables it. The unit runs `appboss start` as `<svc>` from the config dir with `Restart=always`, `RuntimeDirectory=appboss`, `AmbientCapabilities=CAP_NET_BIND_SERVICE` (port 80 without root) and `LimitNOFILE=65536`.
+* Deploys are lux-deploy's job; app-boss has no deploy logic. After the release symlink swap it calls `appboss restart <app>` (the socket is `/run/appboss/appboss.sock`). `appboss check` is the pre-deploy gate.
+* App config is `<app>/appboss.yaml`: `procfile` + `hosts` are the minimum. The console edits these same files on disk.
+* Config lookup: `-c path`, then `$APPBOSS_CONFIG`, then `./appboss.local.yaml` or `./appboss.yaml`. Socket lookup: `--socket`, `$APPBOSS_SOCKET`, the config's `socket` when it exists, then `/run/appboss/appboss.sock`.
+* One file name, two roles: a file with `apps:` is a host, a file with `procfile:` is an app, never both. `defaults:` in the host file applies to every app; an app's top-level key overrides it key by key, and process keys can be overridden once more under `processes.<name>`.
+* Boss injects `PORT`, `APP_NAME`, `PROC_TYPE` and `APPBOSS_SOCKET` into every process; `PORT` is one fixed value per (app, proctype) from `ports.range` and is never configurable. `appboss password` prints a bcrypt hash for `basic_auth`.
+* Keys: `appboss config --keys [filter]` (one-line docs + defaults), `appboss config --reference` (long form, also `./internal/config/reference.yaml`), `appboss config [app] -d` (resolved config).
+* Cloudflare is the edge: TLS, compression, caching, WAF and rate limiting stay there. Point `proxy.trusted_cidrs` at the Cloudflare ranges and keep `proxy.client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]` so the origin cannot be reached directly.
+* Management console is served on `management.host` and on `127.0.0.1:<first port of ports.range>`. Production sign-in is AuthCog (`management.auth.realm`, `admin_emails`); `appboss login` mints a one-time loopback URL for local access.
+* App-level changes apply on `appboss rescan`; `apps`, `proxy`, `management`, `ports`, `daemon` and `state_dir`/`log_dir`/`socket` need a daemon restart.
+
 ## Working rules
 
 * Build with `make build`; `~/bin/appboss` is a symlink to `./bin/appboss`, so a rebuild is what the shell runs.
