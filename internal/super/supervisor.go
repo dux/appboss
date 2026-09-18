@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -162,12 +164,7 @@ func (m *Manager) Close() {
 // assignPorts fixes one port per process for the daemon lifetime; apps are handled in config order,
 // processes in name order, so the first configured app always lands on the first port of the range.
 func (m *Manager) assignPorts(spec *apps.App) error {
-	names := make([]string, 0, len(spec.Commands))
-	for name := range spec.Commands {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(spec.Commands)) {
 		if _, err := m.ports.Allocate(spec.Name, name); err != nil {
 			return fmt.Errorf("%s/%s: %w", spec.Name, name, err)
 		}
@@ -376,14 +373,18 @@ func (m *Manager) setDesired(name string, running bool) error {
 	return saveNames(filepath.Join(m.cfg.StateDir, "running.json"), m.desired)
 }
 
-// saveNames writes the sorted keys of set to path as a JSON list, atomically.
+// saveNames writes the sorted keys of set to path as a JSON list.
 func saveNames(path string, set map[string]bool) error {
-	names := make([]string, 0, len(set))
-	for name := range set {
-		names = append(names, name)
+	return writeStateFile(path, slices.Sorted(maps.Keys(set)))
+}
+
+// writeStateFile marshals value as indented JSON and replaces path atomically, so a crash never
+// leaves a half-written state file behind.
+func writeStateFile(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
 	}
-	sort.Strings(names)
-	data, _ := json.MarshalIndent(names, "", "  ")
 	data = append(data, '\n')
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
@@ -468,17 +469,7 @@ func (m *Manager) saveActivities() error {
 			activities[snapshot.Name] = snapshot.LastActivity
 		}
 	}
-	data, err := json.MarshalIndent(activities, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	path := filepath.Join(m.cfg.StateDir, "last_activity.json")
-	newPath := path + ".new"
-	if err := os.WriteFile(newPath, data, 0o640); err != nil {
-		return err
-	}
-	return os.Rename(newPath, path)
+	return writeStateFile(filepath.Join(m.cfg.StateDir, "last_activity.json"), activities)
 }
 
 func hostMatch(host, pattern string) (int, bool) {
@@ -1084,10 +1075,7 @@ func rotateActiveLog(path string, maximum int64, keep int) error {
 	if keep <= 0 {
 		return os.Truncate(path, 0)
 	}
-	_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
-	for i := keep - 1; i >= 1; i-- {
-		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
-	}
+	shiftRotatedLogs(path, keep)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -1096,6 +1084,14 @@ func rotateActiveLog(path string, maximum int64, keep int) error {
 		return err
 	}
 	return os.Truncate(path, 0)
+}
+
+// shiftRotatedLogs drops the oldest archive and renames .i to .i+1, making room for a new .1.
+func shiftRotatedLogs(path string, keep int) {
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
+	for i := keep - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
 }
 
 func alive(pid int) bool { err := syscall.Kill(pid, 0); return err == nil || err == syscall.EPERM }
@@ -1112,11 +1108,7 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
 	values["DBOSS_SOCKET"] = socket
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(values))
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
 		result = append(result, key+"="+values[key])
@@ -1130,10 +1122,7 @@ func openProcessLog(path string, maximum int64, keep int) (*os.File, error) {
 	}
 	if info, err := os.Stat(path); err == nil && maximum > 0 && info.Size() >= maximum {
 		if keep > 0 {
-			_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
-			for i := keep - 1; i >= 1; i-- {
-				_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
-			}
+			shiftRotatedLogs(path, keep)
 			_ = os.Rename(path, path+".1")
 		} else {
 			_ = os.Remove(path)

@@ -1,15 +1,10 @@
 package ctl
 
-import "encoding/json"
+import "deploy-boss/internal/ops"
 
-type Request struct {
-	Method  string          `json:"method"`
-	App     string          `json:"app,omitempty"`
-	Process string          `json:"process,omitempty"`
-	Lines   int             `json:"lines,omitempty"`
-	On      bool            `json:"on,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
+// Request is the wire form of one action. It is the same type both transports build, so the
+// control socket and the console cannot drift apart.
+type Request = ops.Request
 
 type Response struct {
 	OK    bool   `json:"ok"`

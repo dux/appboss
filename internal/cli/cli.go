@@ -9,12 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"deploy-boss/internal/config"
 	"deploy-boss/internal/console"
 	"deploy-boss/internal/ctl"
+	"deploy-boss/internal/ops"
 	"deploy-boss/internal/ports"
 	"deploy-boss/internal/proxy"
 	"deploy-boss/internal/reqlog"
@@ -146,10 +148,11 @@ func (c CLI) start(args []string) error {
 	}
 	requestLogs := reqlog.New(cfg.LogDir, cfg.Defaults.LogFlush.Value())
 	defer requestLogs.Close()
+	service := ops.New(manager, requestLogs)
 	var edge http.Handler
 	var management *console.Handler
 	if len(cfg.Proxy.Listen) > 0 {
-		if edge, management, err = edgeHandler(cfg, manager, requestLogs); err != nil {
+		if edge, management, err = edgeHandler(cfg, service, manager, requestLogs); err != nil {
 			return err
 		}
 	}
@@ -157,7 +160,7 @@ func (c CLI) start(args []string) error {
 	if management != nil {
 		login = management.LoginURL
 	}
-	control, err := ctl.Listen(cfg.Socket, manager, requestLogs, login)
+	control, err := ctl.Listen(cfg.Socket, service, login)
 	if err != nil {
 		return err
 	}
@@ -214,7 +217,7 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
 // The console handler is returned as well so it can be served on its own port and mint
 // login links; it is nil when the console is not enabled.
-func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, *console.Handler, error) {
+func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, *console.Handler, error) {
 	appProxy, err := proxy.New(cfg, manager, requestLogs)
 	if err != nil {
 		return nil, nil, err
@@ -222,7 +225,7 @@ func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.
 	var handler http.Handler = appProxy
 	var management *console.Handler
 	if cfg.Management.Enabled() {
-		management, err = console.New(cfg, manager, requestLogs, apps.NewStore(cfg))
+		management, err = console.New(cfg, service, apps.NewStore(cfg))
 		if err != nil {
 			return nil, nil, fmt.Errorf("management console: %w", err)
 		}
@@ -669,11 +672,7 @@ func (c CLI) printHuman(method string, data any) error {
 		fmt.Fprintln(c.Out, string(encoded))
 	case "logs":
 		logs := data.(map[string][]string)
-		names := make([]string, 0, len(logs))
-		for name := range logs {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := slices.Sorted(maps.Keys(logs))
 		for _, name := range names {
 			for _, line := range logs[name] {
 				fmt.Fprintf(c.Out, "[%s] %s\n", name, line)
@@ -681,11 +680,7 @@ func (c CLI) printHuman(method string, data any) error {
 		}
 	case "ports":
 		entries := data.(map[string]int)
-		names := make([]string, 0, len(entries))
-		for name := range entries {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := slices.Sorted(maps.Keys(entries))
 		for _, name := range names {
 			fmt.Fprintf(c.Out, "%s\t%d\n", name, entries[name])
 		}
@@ -723,11 +718,7 @@ func (c CLI) follow(client ctl.Client, request ctl.Request) error {
 		if err := client.Call(request, &logs); err != nil {
 			return err
 		}
-		names := make([]string, 0, len(logs))
-		for name := range logs {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := slices.Sorted(maps.Keys(logs))
 		for _, name := range names {
 			start := logOverlap(previous[name], logs[name])
 			for _, line := range logs[name][start:] {

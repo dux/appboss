@@ -6,19 +6,20 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
-	"deploy-boss/internal/reqlog"
+	"deploy-boss/internal/ops"
 	"deploy-boss/internal/super"
 )
 
@@ -26,21 +27,6 @@ const maxRequestBody = 1 << 20
 
 //go:embed static/*
 var assets embed.FS
-
-type AppManager interface {
-	Snapshots() []super.Snapshot
-	Logs(string, string, int) (map[string][]string, error)
-	Start(string) error
-	Stop(string) error
-	Restart(string) error
-	SetMaintenance(string, bool) error
-	Rescan() ([]error, error)
-	RestartRequired() []string
-}
-
-type RateReader interface {
-	Rates(string) (reqlog.Rates, error)
-}
 
 // ConfigStore edits the config files dboss reads; apps.Store is the real one.
 type ConfigStore interface {
@@ -53,8 +39,7 @@ type ConfigStore interface {
 }
 
 type Handler struct {
-	manager        AppManager
-	rates          RateReader
+	service        *ops.Service
 	store          ConfigStore
 	auth           *authenticator
 	static         fs.FS
@@ -92,13 +77,7 @@ type actionRequest struct {
 	Action string `json:"action"`
 }
 
-type rescanResponse struct {
-	Apps            []super.Snapshot `json:"apps"`
-	Warnings        []string         `json:"warnings"`
-	RestartRequired []string         `json:"restart_required"`
-}
-
-func New(cfg config.Config, manager AppManager, rates RateReader, store ConfigStore) (*Handler, error) {
+func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, error) {
 	auth, err := newAuthenticator(cfg)
 	if err != nil {
 		return nil, err
@@ -108,7 +87,7 @@ func New(cfg config.Config, manager AppManager, rates RateReader, store ConfigSt
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0])}, nil
+	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0])}, nil
 }
 
 // LoginURL mints a one-time link for `dboss login`. It points at the console's loopback
@@ -152,7 +131,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/bootstrap":
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
-		writeJSON(w, http.StatusOK, map[string]any{"apps": h.snapshots(), "updated_at": time.Now().UTC()})
+		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/action":
 		h.action(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/rescan":
@@ -202,7 +181,7 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, name string
 }
 
 func (h *Handler) writeDashboard(w http.ResponseWriter, session authSession) {
-	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.snapshots(), RestartRequired: h.manager.RestartRequired(), UpdatedAt: time.Now().UTC()})
+	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), UpdatedAt: time.Now().UTC()})
 }
 
 func (h *Handler) configFiles(w http.ResponseWriter) {
@@ -259,16 +238,12 @@ func (h *Handler) configWrite(w http.ResponseWriter, r *http.Request, session au
 		writeJSON(w, http.StatusUnprocessableEntity, validateResponse{Error: err.Error(), Line: yamlLine(err)})
 		return
 	}
-	invalid, err := h.manager.Rescan()
+	result, err := h.service.Rescan()
 	if err != nil {
 		writeError(w, http.StatusConflict, "saved, but rescan failed: "+err.Error())
 		return
 	}
-	messages := make([]string, 0, len(invalid))
-	for _, invalidApp := range invalid {
-		messages = append(messages, invalidApp.Error())
-	}
-	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: messages, RestartRequired: h.manager.RestartRequired()})
+	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
 func (h *Handler) configLocal(w http.ResponseWriter, r *http.Request, session authSession) {
@@ -315,21 +290,6 @@ func yamlLine(err error) int {
 	return line
 }
 
-func (h *Handler) snapshots() []super.Snapshot {
-	snapshots := h.manager.Snapshots()
-	if h.rates == nil {
-		return snapshots
-	}
-	for index := range snapshots {
-		rates, err := h.rates.Rates(snapshots[index].Name)
-		if err != nil {
-			continue
-		}
-		snapshots[index].RequestRates = super.RequestRates{LastMinute: rates.LastMinute, LastHour: rates.LastHour, LastDay: rates.LastDay}
-	}
-	return snapshots
-}
-
 func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSession) {
 	if !h.requireCSRF(w, r, session) {
 		return
@@ -344,43 +304,43 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 		writeError(w, http.StatusBadRequest, "app is required")
 		return
 	}
-	var err error
-	switch request.Action {
-	case "start":
-		err = h.manager.Start(request.App)
-	case "stop":
-		err = h.manager.Stop(request.App)
-	case "restart":
-		err = h.manager.Restart(request.App)
-	case "maintenance-on":
-		err = h.manager.SetMaintenance(request.App, true)
-	case "maintenance-off":
-		err = h.manager.SetMaintenance(request.App, false)
-	default:
-		writeError(w, http.StatusBadRequest, "action must be start, stop, restart, maintenance-on, or maintenance-off")
+	method, on, err := actionMethod(request.Action)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err != nil {
+	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"apps": h.snapshots(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
+}
+
+// actionMethod maps the console's button names to the canonical ops actions. Maintenance is the
+// only action with a second argument, so it gets its own names on the wire.
+func actionMethod(action string) (string, bool, error) {
+	switch action {
+	case ops.ActionStart, ops.ActionStop, ops.ActionRestart:
+		return action, false, nil
+	case "maintenance-on":
+		return ops.ActionMaintenance, true, nil
+	case "maintenance-off":
+		return ops.ActionMaintenance, false, nil
+	default:
+		return "", false, errors.New("action must be start, stop, restart, maintenance-on, or maintenance-off")
+	}
 }
 
 func (h *Handler) rescan(w http.ResponseWriter, r *http.Request, session authSession) {
 	if !h.requireCSRF(w, r, session) {
 		return
 	}
-	invalid, err := h.manager.Rescan()
+	result, err := h.service.Rescan()
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	warnings := make([]string, 0, len(invalid))
-	for _, invalidApp := range invalid {
-		warnings = append(warnings, invalidApp.Error())
-	}
-	writeJSON(w, http.StatusOK, rescanResponse{Apps: h.snapshots(), Warnings: warnings, RestartRequired: h.manager.RestartRequired()})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
@@ -389,16 +349,12 @@ func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "app is required", http.StatusBadRequest)
 		return
 	}
-	logs, err := h.manager.Logs(app, "", 1000)
+	logs, err := h.service.Logs(app, "", 1000)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	names := make([]string, 0, len(logs))
-	for name := range logs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(logs))
 	var output strings.Builder
 	for _, name := range names {
 		if output.Len() > 0 {

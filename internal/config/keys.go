@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -240,11 +242,7 @@ func formatValue(value reflect.Value) string {
 		if len(v) == 0 {
 			return ""
 		}
-		names := make([]string, 0, len(v))
-		for name := range v {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := slices.Sorted(maps.Keys(v))
 		parts := make([]string, len(names))
 		for i, name := range names {
 			parts[i] = name + ": " + v[name]

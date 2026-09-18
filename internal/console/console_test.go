@@ -15,6 +15,7 @@ import (
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
+	"deploy-boss/internal/ops"
 	"deploy-boss/internal/reqlog"
 	"deploy-boss/internal/super"
 )
@@ -29,6 +30,17 @@ type fakeManager struct {
 func (m *fakeManager) Snapshots() []super.Snapshot {
 	return append([]super.Snapshot(nil), m.snapshots...)
 }
+
+func (m *fakeManager) Snapshot(app string) (super.Snapshot, error) {
+	for _, snapshot := range m.snapshots {
+		if snapshot.Name == app {
+			return snapshot, nil
+		}
+	}
+	return super.Snapshot{}, errors.New("unknown app")
+}
+
+func (m *fakeManager) Ports() map[string]int { return map[string]int{} }
 
 func (m *fakeManager) Logs(app, process string, lines int) (map[string][]string, error) {
 	if m.logs == nil {
@@ -240,14 +252,14 @@ func TestConsoleServesAuthenticatedRoot(t *testing.T) {
 	}
 }
 
-func newTestHandler(t *testing.T, manager AppManager, rates RateReader) *Handler {
+func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handler {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	handler, err := New(cfg, manager, rates, newFakeStore())
+	handler, err := New(cfg, ops.New(manager, rates), newFakeStore())
 	if err != nil {
 		t.Fatal(err)
 	}

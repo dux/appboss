@@ -9,21 +9,19 @@ import (
 	"os"
 	"path/filepath"
 
-	"deploy-boss/internal/reqlog"
-	"deploy-boss/internal/super"
+	"deploy-boss/internal/ops"
 )
 
 type Server struct {
 	path     string
 	listener net.Listener
-	manager  *super.Manager
-	logs     *reqlog.Manager
+	service  *ops.Service
 	login    func() (string, error)
 }
 
 // Listen serves the control socket. login mints a console login link and is nil when the
 // management console is not enabled.
-func Listen(path string, manager *super.Manager, logs *reqlog.Manager, login func() (string, error)) (*Server, error) {
+func Listen(path string, service *ops.Service, login func() (string, error)) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
@@ -45,7 +43,7 @@ func Listen(path string, manager *super.Manager, logs *reqlog.Manager, login fun
 		_ = listener.Close()
 		return nil, err
 	}
-	server := &Server{path: path, listener: listener, manager: manager, logs: logs, login: login}
+	server := &Server{path: path, listener: listener, service: service, login: login}
 	go server.serve()
 	return server, nil
 }
@@ -88,67 +86,28 @@ func (s *Server) handle(connection net.Conn) {
 	}
 }
 
+const loginMethod = "login"
+
+// dispatch runs one control request. Everything but login is the shared ops action; login mints
+// a console link and so stays with the server.
 func (s *Server) dispatch(request Request) Response {
-	var data any
-	var err error
-	switch request.Method {
-	case "ls":
-		snapshots := s.manager.Snapshots()
-		for i := range snapshots {
-			s.addRates(&snapshots[i])
-		}
-		data = snapshots
-	case "status":
-		var snapshot super.Snapshot
-		snapshot, err = s.manager.Snapshot(request.App)
-		if err == nil {
-			s.addRates(&snapshot)
-		}
-		data = snapshot
-	case "start":
-		err = s.manager.Start(request.App)
-	case "stop":
-		err = s.manager.Stop(request.App)
-	case "restart":
-		err = s.manager.Restart(request.App)
-	case "maintenance":
-		err = s.manager.SetMaintenance(request.App, request.On)
-	case "rescan":
-		var invalid []error
-		invalid, err = s.manager.Rescan()
-		messages := make([]string, len(invalid))
-		for i, scanErr := range invalid {
-			messages[i] = scanErr.Error()
-		}
-		data = map[string]any{"invalid": messages, "restart_required": s.manager.RestartRequired()}
-	case "logs":
-		data, err = s.manager.Logs(request.App, request.Process, request.Lines)
-	case "ports":
-		data = s.manager.Ports()
-	case "login":
-		if s.login == nil {
-			err = errors.New("management console is not enabled: set management.host in the host config")
-			break
-		}
-		var link string
-		link, err = s.login()
-		data = map[string]string{"url": link}
-	default:
-		err = fmt.Errorf("unknown method %q", request.Method)
+	if request.Method == loginMethod {
+		return s.loginResponse()
 	}
+	data, err := s.service.Do(request)
 	if err != nil {
 		return Response{Error: err.Error()}
 	}
 	return Response{OK: true, Data: data}
 }
 
-func (s *Server) addRates(snapshot *super.Snapshot) {
-	if s.logs == nil {
-		return
+func (s *Server) loginResponse() Response {
+	if s.login == nil {
+		return Response{Error: "management console is not enabled: set management.host in the host config"}
 	}
-	rates, err := s.logs.Rates(snapshot.Name)
+	link, err := s.login()
 	if err != nil {
-		return
+		return Response{Error: err.Error()}
 	}
-	snapshot.RequestRates = super.RequestRates{LastMinute: rates.LastMinute, LastHour: rates.LastHour, LastDay: rates.LastDay}
+	return Response{OK: true, Data: map[string]string{"url": link}}
 }

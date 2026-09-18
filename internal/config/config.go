@@ -681,14 +681,3 @@ func (a App) Process(name string) Process {
 	}
 	return p
 }
-
-func ResolvePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	return abs
-}

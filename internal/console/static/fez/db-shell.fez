@@ -122,8 +122,8 @@
         this.applyApps(data.apps)
         this.globalState.restartRequired = data.restart_required || []
         Fez.publish('config:changed')
-        if (data.warnings?.length) {
-          Toast.show(`Rescan finished with ${data.warnings.length} warning(s): ${data.warnings[0]}`, true)
+        if (data.invalid?.length) {
+          Toast.show(`Rescan finished with ${data.invalid.length} warning(s): ${data.invalid[0]}`, true)
         } else {
           Toast.show('App folders rescanned')
         }

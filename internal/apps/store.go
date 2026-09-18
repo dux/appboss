@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"deploy-boss/internal/config"
 	"gopkg.in/yaml.v3"
@@ -43,16 +42,12 @@ func (s *Store) Files() ([]ConfigFile, error) {
 		files[0].App = filepath.Base(s.root.Dir)
 		return s.stat(files)
 	}
-	entries, err := os.ReadDir(s.root.Apps)
+	names, err := appNames(s.root.Apps)
 	if err != nil {
-		return nil, fmt.Errorf("apps directory: %w", err)
+		return nil, err
 	}
-	for _, entry := range entries {
-		name := entry.Name()
+	for _, name := range names {
 		dir := filepath.Join(s.root.Apps, name)
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			continue
 		}

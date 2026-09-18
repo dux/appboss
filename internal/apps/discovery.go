@@ -56,15 +56,11 @@ func Discover(cfg config.Config) ([]*App, []error, error) {
 		}
 		return resolveHosts(found, invalid)
 	}
-	entries, err := os.ReadDir(cfg.Apps)
+	entries, err := appNames(cfg.Apps)
 	if err != nil {
-		return nil, nil, fmt.Errorf("apps directory: %w", err)
+		return nil, nil, err
 	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
+	for _, name := range entries {
 		app, err := loadChildApp(cfg, name, filepath.Join(cfg.Apps, name))
 		if err != nil {
 			invalid = append(invalid, ScanError{Name: name, Err: err})
@@ -73,6 +69,22 @@ func Discover(cfg config.Config) ([]*App, []error, error) {
 		found = append(found, app)
 	}
 	return resolveHosts(found, invalid)
+}
+
+// appNames lists the entries of an apps directory, in name order, skipping dotfiles.
+func appNames(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("apps directory: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	return names, nil
 }
 
 // Lookup discovers every app and returns the one called name, or its scan error when it is
