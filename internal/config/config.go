@@ -167,12 +167,20 @@ type Proxy struct {
 
 // Management is served by the proxy listener; any of the Host names selects the console.
 type Management struct {
-	Host List           `yaml:"host" json:"host"`
-	URL  string         `yaml:"url" json:"url"`
-	Auth ManagementAuth `yaml:"auth" json:"auth"`
+	Host    List              `yaml:"host" json:"host"`
+	URL     string            `yaml:"url" json:"url"`
+	Auth    ManagementAuth    `yaml:"auth" json:"auth"`
+	Metrics ManagementMetrics `yaml:"metrics" json:"metrics"`
 }
 
 func (m Management) Enabled() bool { return len(m.Host) > 0 }
+
+// ManagementMetrics exposes /healthz, /readyz and /metrics on the management host. A token, when
+// set, is required as a bearer token for /metrics; /healthz and /readyz stay open.
+type ManagementMetrics struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Token   string `yaml:"token" json:"-"`
+}
 
 type ManagementAuth struct {
 	Realm       string   `yaml:"realm" json:"realm"`
@@ -257,7 +265,7 @@ func Default() Config {
 	return Config{
 		StateDir: ".appboss/state", LogDir: ".appboss/log", Socket: ".appboss/appboss.sock",
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
-		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
+		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
 		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second)},

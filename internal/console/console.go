@@ -23,6 +23,7 @@ import (
 	"app-boss/internal/apps"
 	"app-boss/internal/config"
 	"app-boss/internal/logstore"
+	"app-boss/internal/metrics"
 	"app-boss/internal/ops"
 	"app-boss/internal/super"
 )
@@ -49,6 +50,8 @@ type Handler struct {
 	auth           *authenticator
 	static         fs.FS
 	managementPort string
+	metricsEnabled bool
+	metricsToken   string
 }
 
 type dashboard struct {
@@ -93,7 +96,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, 
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0])}, nil
+	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token}, nil
 }
 
 // LoginURL mints a one-time link for `appboss login`. It points at the console's loopback
@@ -126,6 +129,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/hooks/") {
 		h.handleHook(w, r)
 		return
+	}
+	// Health and metrics are open on purpose: an uptime checker or Prometheus cannot hold a
+	// console session. /metrics takes a bearer token when one is configured.
+	if h.metricsEnabled {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
+			h.healthz(w)
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			h.readyz(w)
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/metrics":
+			h.metrics(w, r)
+			return
+		}
 	}
 	session, ok := h.auth.authenticate(w, r)
 	if !ok {
@@ -312,6 +330,45 @@ func (h *Handler) configEffective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeText(w, contents)
+}
+
+// healthz is a liveness probe: 200 while the HTTP server answers.
+func (h *Handler) healthz(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok\n")
+}
+
+// readyz is 200 only while every autostart app is running, so a load balancer or uptime checker
+// can hold traffic back during a startup.
+func (h *Handler) readyz(w http.ResponseWriter) {
+	var notReady []string
+	for _, app := range h.service.Apps() {
+		if app.Autostart && app.State != super.Running {
+			notReady = append(notReady, app.Name+"="+string(app.State))
+		}
+	}
+	if len(notReady) > 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "not_ready": notReady})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// metrics renders the Prometheus exposition. A configured token must match as a bearer token.
+func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
+	if h.metricsToken != "" {
+		authorization := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(authorization, "Bearer ")
+		if token == authorization || subtle.ConstantTimeCompare([]byte(token), []byte(h.metricsToken)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="appboss"`)
+			http.Error(w, "forbidden", http.StatusUnauthorized)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, metrics.Render(h.service.Apps(), time.Now()))
 }
 
 // handleHook accepts a signed ping at /hooks/<app>/<hook> and starts the hook. It is the one

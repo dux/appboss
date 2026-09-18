@@ -220,6 +220,16 @@ With no `secret` in the config, appboss generates a 64-character secret under `s
 
 `appboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes appboss's exit code.
 
+## Health and metrics
+
+The management host also serves three endpoints, enabled by `management.metrics.enabled` (default `true`):
+
+* `GET /healthz` - `200 ok` while the daemon is up.
+* `GET /readyz` - `200` only while every `autostart` app is running, else `503` with the apps that are not ready.
+* `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-process restarts and memory, request rates per window, and the last exit of each cron job and hook.
+
+`healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.
@@ -290,6 +300,8 @@ internal/ports/       fixed port allocation inside ports.range
 internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the appboss daemon log into the store
+internal/metrics/     Prometheus text rendered from the app snapshots
+internal/version/     release version, overridden at build time
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console

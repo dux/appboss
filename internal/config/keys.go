@@ -59,6 +59,8 @@ var keyDocs = map[string]keyDoc{
 	"management.auth.realm":                  {description: "AuthCog realm used for sign-in"},
 	"management.auth.admin_emails":           {description: "email addresses allowed into the console", example: "[admin@example.com]"},
 	"management.auth.session_ttl":            {description: "signed console session lifetime"},
+	"management.metrics.enabled":             {description: "serve /healthz, /readyz and /metrics on the management host"},
+	"management.metrics.token":               {description: "when set, /metrics requires this as a bearer token; health endpoints stay open", example: "$METRICS_TOKEN"},
 	"ports.range":                            {description: "inclusive port range appboss owns; the first port is the console"},
 	"daemon.idle_tick":                       {description: "how often idle apps are checked"},
 	"daemon.resume_running":                  {description: "on start, resume the apps in running.json (every app on a first start)"},

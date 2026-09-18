@@ -39,6 +39,12 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * The proxy pipeline is an ordered `[]proxy.Filter` built in `proxy.initFilters`. A new request filter is a function of that shape, inserted before the forward stage; the built-ins live in `./internal/proxy/filter.go`.
 * Actions reachable from both the CLI and the console belong on `ops.Service` (`./internal/ops`), not in either transport.
 
+## Health and metrics
+
+* The management host serves `/healthz`, `/readyz` and `/metrics` from `./internal/console/console.go` before the session auth. `management.metrics.enabled` (default true) turns them off; `management.metrics.token` gates only `/metrics`.
+* `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler.
+* `./internal/version.Version` is the release version; the release workflow does not inject it yet, so `String()` falls back to the module version or the short VCS revision.
+
 ## Log store
 
 * One SQLite database per app at `log_dir/<app>/appboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index, plus `tail_offsets` for the file tailer. `./internal/logstore` owns the schema, batching, search and prune.

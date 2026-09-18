@@ -142,6 +142,16 @@ management:
     # Signed console session lifetime.
     session_ttl: 24h
 
+  # Health and metrics, served on the management host next to the console.
+  metrics:
+    # /healthz answers 200 while the daemon is up; /readyz answers 200 only when every
+    # autostart app is running; /metrics is Prometheus text. Set false to disable all three.
+    enabled: true
+    # When set, /metrics requires "Authorization: Bearer <token>". Keep it out of the
+    # committed file with $METRICS_TOKEN when the console host is public. /healthz and
+    # /readyz need no token so an uptime checker can reach them.
+    token: ""
+
 # --- Ports -------------------------------------------------------------------
 
 ports:
