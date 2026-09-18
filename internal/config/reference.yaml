@@ -344,6 +344,29 @@ processes:
     stop_timeout: 120s
     restart: always
 
+# Scheduled one-shot commands, run by the daemon and independent of the app's run state:
+# a stopped or idle app still fires its jobs. Each job runs in the app folder with the app
+# environment (APP_NAME, PROC_TYPE, APPBOSS_SOCKET; no PORT), logs to its own channel and does
+# not count as activity for idle_stop. There is no catch-up: after a daemon restart the next
+# run is computed forward from that moment.
+cron:
+  # Job name, unique in the app; matches [a-z][a-z0-9_-]*.
+  cleanup:
+    # Either "every <n><s|m|h|d>" or a 5-field cron expression (min hour day month weekday).
+    # Cron fields accept *, */n, a-b, a-b/n, a,b,c and JAN..DEC / SUN..SAT; 0 and 7 are Sunday.
+    schedule: every 6h
+    # Command run once per fire. Split on whitespace and exec'd directly unless shell: true.
+    command: bundle exec rake cleanup
+    # Kill a run that is still going after this long. 0 = no limit.
+    timeout: 30m
+    # false (the default) skips a scheduled run while the previous one is still going.
+    overlap: false
+    # true keeps the job configured but never scheduled.
+    disabled: false
+  report:
+    schedule: "0 7 * * 1-5"
+    command: bundle exec rake report:daily
+
 # Procfile behavior:
 #   - Each command is split on whitespace and exec'd directly unless shell: true.
 #   - Each entry becomes unit boss-<app>-<name> and gets its own PORT.

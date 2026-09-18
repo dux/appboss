@@ -13,9 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"app-boss/internal/schedule"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -591,6 +594,26 @@ func validateWeb(w Web) error {
 	return nil
 }
 
+var cronName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+func validateCron(jobs map[string]CronJob) error {
+	for name, job := range jobs {
+		if !cronName.MatchString(name) {
+			return keyErr("cron", "invalid job name %q", name)
+		}
+		if strings.TrimSpace(job.Command) == "" {
+			return keyErr("cron."+name+".command", "must not be empty")
+		}
+		if _, err := schedule.Parse(job.Schedule); err != nil {
+			return &Error{Key: "cron." + name + ".schedule", Message: err.Error(), Hint: "use every 5m, every 2h, every 1d or a 5-field cron expression"}
+		}
+		if job.Timeout < 0 {
+			return keyErr("cron."+name+".timeout", "cannot be negative")
+		}
+	}
+	return nil
+}
+
 func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, cidr := range cidrs {
@@ -604,21 +627,34 @@ func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 }
 
 type App struct {
-	Procfile      map[string]string `yaml:"procfile" json:"procfile"`
-	Hosts         List              `yaml:"hosts" json:"hosts"`
-	WebProcess    string            `yaml:"web_process" json:"web_process"`
-	CanonicalHost string            `yaml:"canonical_host" json:"canonical_host"`
-	Autostart     bool              `yaml:"autostart" json:"autostart"`
+	Procfile      map[string]string  `yaml:"procfile" json:"procfile"`
+	Hosts         List               `yaml:"hosts" json:"hosts"`
+	WebProcess    string             `yaml:"web_process" json:"web_process"`
+	CanonicalHost string             `yaml:"canonical_host" json:"canonical_host"`
+	Autostart     bool               `yaml:"autostart" json:"autostart"`
+	Cron          map[string]CronJob `yaml:"cron" json:"cron"`
 	Defaults      `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
 
+// CronJob is one named scheduled one-shot command under cron:. Schedule is an "every <n><s|m|h|d>"
+// interval or a five-field cron expression. Overlap false skips a run while the previous one is
+// still going; a zero Timeout means no limit.
+type CronJob struct {
+	Schedule string   `yaml:"schedule" json:"schedule"`
+	Command  string   `yaml:"command" json:"command"`
+	Timeout  Duration `yaml:"timeout" json:"timeout"`
+	Overlap  bool     `yaml:"overlap" json:"overlap"`
+	Disabled bool     `yaml:"disabled" json:"disabled"`
+}
+
 type appFile struct {
-	Procfile      map[string]string `yaml:"procfile"`
-	Hosts         List              `yaml:"hosts"`
-	WebProcess    string            `yaml:"web_process"`
-	CanonicalHost string            `yaml:"canonical_host"`
-	Autostart     *bool             `yaml:"autostart"`
+	Procfile      map[string]string  `yaml:"procfile"`
+	Hosts         List               `yaml:"hosts"`
+	WebProcess    string             `yaml:"web_process"`
+	CanonicalHost string             `yaml:"canonical_host"`
+	Autostart     *bool              `yaml:"autostart"`
+	Cron          map[string]CronJob `yaml:"cron"`
 	Overrides     `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -656,7 +692,7 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Cron: raw.Cron, Defaults: defaults, Processes: raw.Processes}
 	if raw.WebProcess != "" {
 		app.WebProcess = raw.WebProcess
 	}
@@ -668,6 +704,9 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 	}
 	apply(&app.Defaults, raw.Overrides)
 	if err := validateDefaults(app.Defaults); err != nil {
+		return App{}, err
+	}
+	if err := validateCron(app.Cron); err != nil {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)

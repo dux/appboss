@@ -346,6 +346,7 @@ web/                      starting.html, crashed.html, 404.html, maintenance.htm
 4. **Ops.** `appboss systemd`, management console, lux-deploy calls `appboss restart`.
 5. **Proxy features.** Canonical host, allow list, basic auth, maintenance mode, static files, body limit, response headers, request id; global-or-per-app config; console config editor.
 6. **Later.** cgroup backend and per-app memory limits.
+7. **Cron.** Per-app `cron:` jobs with `every <interval>` or 5-field cron schedules, run by the supervisor independently of the app's state, logged as a `cron-<job>` channel, with `appboss cron` and a console Run button.
 
 ## Open questions
 

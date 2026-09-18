@@ -72,6 +72,7 @@ var keyDocs = map[string]keyDoc{
 	"canonical_host": {description: "301 every other host of this app to this one; must be in hosts", example: "myapp.com"},
 	"autostart":      {description: "start this app when the host starts; false waits for run or a request", def: "true"},
 	"processes":      {description: "per-process overrides of the process keys, by process name", example: "{worker: {stop_timeout: 120s}}"},
+	"cron":           {description: "scheduled one-shot commands by name, run on an every interval or a cron expression", example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
 
 	"idle_stop":        {description: "stop the app after this long without proxied requests; 0 never"},
 	"health":           {description: "readiness check: tcp, or http:<path> expecting 2xx"},

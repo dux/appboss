@@ -59,6 +59,9 @@ var commands = []command{
 	{name: "maintenance", args: "[app] on|off", group: "Apps", summary: "answer every request with the maintenance page while the app keeps running",
 		details: []string{appArgumentNote, "HTML GETs get 503 with the page (maintenance_page, then <static>/503.html, then the built-in one); everything else an empty 503 with Retry-After: 30.", "The flag survives a host restart."},
 		options: []option{socketOption, configOption, jsonOption}},
+	{name: "cron", args: "[app] | run [app] <job>", group: "Apps", summary: "list an app's scheduled jobs, or run one now",
+		details: []string{appArgumentNote, "Jobs are declared under cron: in the app's appboss.yaml, each with a schedule (every 5m, every 2h, every 1d or a 5-field cron expression) and a command. They run in the app folder with the app environment, even while the app is stopped, and their output is written to the log store."},
+		options: []option{socketOption, configOption, jsonOption}},
 
 	{name: "config", args: "[app] [-d] | --keys [filter] | --reference", group: "Config", summary: "validate and print a config file, the resolved config, or the key reference",
 		details: []string{"Validates first: an unknown key, a bad value or a syntax error is reported with file, line, key and a hint.", "Without -d the file is printed as written, comments included. With -d every default is filled in: the host config, or with an app that app's effective config after the host defaults and its own overrides are merged.", "--keys lists every key with a one-line description and its default, or an example when it has none; a filter narrows by key name. --reference prints the long annotated reference, shipped inside the binary."},

@@ -27,6 +27,8 @@ const (
 	ActionRescan      = "rescan"
 	ActionLogs        = "logs"
 	ActionPorts       = "ports"
+	ActionCron        = "cron"
+	ActionCronRun     = "cron-run"
 )
 
 // Runtime is the supervisor surface the service drives.
@@ -37,6 +39,7 @@ type Runtime interface {
 	Stop(name string) error
 	Restart(name string) error
 	SetMaintenance(name string, on bool) error
+	RunCron(name, job string) error
 	Rescan() ([]error, error)
 	RestartRequired() []string
 	Logs(name, process string, lines int) (map[string][]string, error)
@@ -62,6 +65,7 @@ type Request struct {
 	Method  string `json:"method"`
 	App     string `json:"app,omitempty"`
 	Process string `json:"process,omitempty"`
+	Job     string `json:"job,omitempty"`
 	Lines   int    `json:"lines,omitempty"`
 	On      bool   `json:"on,omitempty"`
 }
@@ -146,6 +150,10 @@ func (s *Service) Do(request Request) (any, error) {
 		return s.Logs(request.App, request.Process, request.Lines)
 	case ActionPorts:
 		return s.Ports(), nil
+	case ActionCron:
+		return s.Cron(request.App)
+	case ActionCronRun:
+		return nil, s.RunCron(request.App, request.Job)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -185,6 +193,18 @@ func (s *Service) Logs(name, process string, lines int) (map[string][]string, er
 }
 
 func (s *Service) Ports() map[string]int { return s.runtime.Ports() }
+
+// Cron lists the scheduled jobs of one app from its live snapshot.
+func (s *Service) Cron(name string) ([]super.CronSnapshot, error) {
+	snapshot, err := s.runtime.Snapshot(name)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.Cron, nil
+}
+
+// RunCron starts one scheduled job now.
+func (s *Service) RunCron(name, job string) error { return s.runtime.RunCron(name, job) }
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.
 func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired() }

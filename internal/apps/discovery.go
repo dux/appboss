@@ -12,8 +12,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"app-boss/internal/config"
+	"app-boss/internal/schedule"
 )
 
 var processName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
@@ -29,8 +31,18 @@ type App struct {
 	Name     string             `json:"name"`
 	Dir      string             `json:"dir"`
 	Commands map[string]Command `json:"commands"`
+	Cron     map[string]CronJob `json:"cron"`
 	Env      map[string]string  `json:"-"`
 	Config   config.App         `json:"config"`
+}
+
+// CronJob is one scheduled command with its schedule parsed once at load time.
+type CronJob struct {
+	Command  Command           `json:"command"`
+	Schedule schedule.Schedule `json:"-"`
+	Timeout  time.Duration     `json:"timeout"`
+	Overlap  bool              `json:"overlap"`
+	Disabled bool              `json:"disabled"`
 }
 
 type ScanError struct {
@@ -195,6 +207,10 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	cron, err := buildCron(appCfg.Cron)
+	if err != nil {
+		return nil, err
+	}
 	env := minimalEnvironment()
 	if _, err := os.Stat(filepath.Join(dir, "mise.toml")); err == nil {
 		mise, miseErr := miseEnvironment(dir)
@@ -211,7 +227,26 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		}
 		merge(env, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Env: env, Config: appCfg}, nil
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Env: env, Config: appCfg}, nil
+}
+
+// buildCron parses every schedule once so the supervisor only has to work with next run times.
+func buildCron(jobs map[string]config.CronJob) (map[string]CronJob, error) {
+	result := make(map[string]CronJob, len(jobs))
+	for name, job := range jobs {
+		parsed, err := schedule.Parse(job.Schedule)
+		if err != nil {
+			return nil, fmt.Errorf("cron.%s.schedule: %w", name, err)
+		}
+		result[name] = CronJob{
+			Command:  Command{Name: name, Line: job.Command, Argv: strings.Fields(job.Command)},
+			Schedule: parsed,
+			Timeout:  job.Timeout.Value(),
+			Overlap:  job.Overlap,
+			Disabled: job.Disabled,
+		}
+	}
+	return result, nil
 }
 
 func ParseProcfile(procfile map[string]string) (map[string]Command, error) {

@@ -109,6 +109,7 @@ Apps
   status        full detail for one app: processes, restarts, resources, request rates
   logs          print or follow the process logs of an app
   maintenance   answer every request with the maintenance page while the app keeps running
+  cron          list an app's scheduled jobs, or run one now
 
 Config
   config        validate and print a config file, the resolved config, or the key reference
@@ -162,6 +163,24 @@ filters by channel, time range, level or HTTP method/status and free text, highl
 expands a row to its raw fields and exports the current query as text.
 The current filters live in the URL query string, so a view can be bookmarked or shared.
 It is a second fez page (`log.html`), independent of the console shell.
+
+## Scheduled jobs
+
+An app declares one-shot commands the daemon runs on a schedule, independent of whether the app itself is running:
+
+```yaml
+cron:
+  cleanup:
+    schedule: every 6h          # or "0 7 * * 1-5"
+    command: bundle exec rake cleanup
+    timeout: 30m                # optional; a run over it is killed
+    overlap: false              # optional; false skips a run while the previous one goes
+```
+
+`schedule` is either `every <n><s|m|h|d>` or a standard five-field cron expression.
+Jobs run in the app folder with the app environment, log to their own `cron-<job>` channel in the log store, and do not count as activity for idle stop.
+A stopped or idle app still fires its jobs, and there is no catch-up after a daemon restart.
+`appboss cron [app]` lists jobs, next run and last result; `appboss cron run [app] <job>` starts one now; the console card has a **Run** button.
 
 ## Management console
 

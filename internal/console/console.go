@@ -75,6 +75,7 @@ type writeResponse struct {
 type actionRequest struct {
 	App    string `json:"app"`
 	Action string `json:"action"`
+	Job    string `json:"job,omitempty"`
 }
 
 func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, error) {
@@ -332,7 +333,7 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on}); err != nil {
+	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on, Job: strings.TrimSpace(request.Job)}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -349,8 +350,10 @@ func actionMethod(action string) (string, bool, error) {
 		return ops.ActionMaintenance, true, nil
 	case "maintenance-off":
 		return ops.ActionMaintenance, false, nil
+	case ops.ActionCronRun:
+		return ops.ActionCronRun, false, nil
 	default:
-		return "", false, errors.New("action must be start, stop, restart, maintenance-on, or maintenance-off")
+		return "", false, errors.New("action must be start, stop, restart, maintenance-on, maintenance-off, or cron-run")
 	}
 }
 

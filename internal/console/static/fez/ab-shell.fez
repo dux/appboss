@@ -101,12 +101,12 @@
       }
     }
 
-    async runAction(app, action) {
+    async runAction(app, action, extra = {}) {
       if (this.globalState.busy) return
       if (['stop', 'restart'].includes(action) && !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${app}?`)) return
       try {
         this.setBusy(true)
-        const data = await this.api('/api/action', { method: 'POST', body: JSON.stringify({ app, action }) })
+        const data = await this.api('/api/action', { method: 'POST', body: JSON.stringify({ app, action, ...extra }) })
         this.applyApps(data.apps, data.updated_at)
         Toast.show(`${app}: ${action.replace('-', ' ')} requested`)
       } catch (error) {

@@ -48,6 +48,11 @@ func (f *fakeRuntime) SetMaintenance(name string, on bool) error {
 	return nil
 }
 
+func (f *fakeRuntime) RunCron(name, job string) error {
+	f.actions = append(f.actions, "cron-run "+name+"/"+job)
+	return nil
+}
+
 func (f *fakeRuntime) Rescan() ([]error, error) {
 	f.actions = append(f.actions, "rescan")
 	return f.invalid, nil
@@ -85,6 +90,7 @@ func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 		{Request{Method: ActionMaintenance, App: "sinatra", On: true}, "maintenance sinatra"},
 		{Request{Method: ActionRescan}, "rescan"},
 		{Request{Method: ActionLogs, App: "sinatra"}, "logs sinatra"},
+		{Request{Method: ActionCronRun, App: "sinatra", Job: "cleanup"}, "cron-run sinatra/cleanup"},
 	}
 	for _, item := range cases {
 		runtime.actions = nil
@@ -112,6 +118,14 @@ func TestAppsAttachRequestRates(t *testing.T) {
 	}
 	if apps[1].RequestRates != (super.RequestRates{}) {
 		t.Fatalf("bun should have no rates: %+v", apps[1].RequestRates)
+	}
+}
+
+func TestCronReturnsScheduledJobs(t *testing.T) {
+	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra", Cron: []super.CronSnapshot{{Name: "cleanup"}}}}}
+	jobs, err := New(runtime, nil, nil).Cron("sinatra")
+	if err != nil || len(jobs) != 1 || jobs[0].Name != "cleanup" {
+		t.Fatalf("jobs = %+v, err = %v", jobs, err)
 	}
 }
 

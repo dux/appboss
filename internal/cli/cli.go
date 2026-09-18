@@ -22,6 +22,7 @@ import (
 	"app-boss/internal/config"
 	"app-boss/internal/ctl"
 	"app-boss/internal/daemon"
+	"app-boss/internal/ops"
 	"app-boss/internal/super"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
@@ -372,6 +373,23 @@ func (c CLI) remote(command string, args []string) error {
 		if *follow {
 			return c.follow(client, request)
 		}
+	case "cron":
+		if len(opts.rest) > 0 && opts.rest[0] == "run" {
+			request.Method = ops.ActionCronRun
+			jobs := opts.rest[1:]
+			if len(jobs) == 0 {
+				return errors.New("usage: appboss cron run [app] <job>")
+			}
+			request.Job = jobs[len(jobs)-1]
+			if request.App, err = appArgument(jobs[:len(jobs)-1], opts.config); err != nil {
+				return fmt.Errorf("usage: appboss cron run <app> <job> (%w)", err)
+			}
+		} else {
+			request.Method = ops.ActionCron
+			if request.App, err = appArgument(opts.rest, opts.config); err != nil {
+				return fmt.Errorf("usage: appboss cron <app> (%w)", err)
+			}
+		}
 	}
 	jsonOutput := opts.json
 	var data any
@@ -400,6 +418,12 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = entries
+	case "cron":
+		var jobs []super.CronSnapshot
+		if err := client.Call(request, &jobs); err != nil {
+			return err
+		}
+		data = jobs
 	case "rescan":
 		var result map[string]any
 		if err := client.Call(request, &result); err != nil {
@@ -539,6 +563,35 @@ func (c CLI) printHuman(method string, data any) error {
 		for _, name := range names {
 			fmt.Fprintf(c.Out, "%s\t%d\n", name, entries[name])
 		}
+	case "cron":
+		jobs := data.([]super.CronSnapshot)
+		if len(jobs) == 0 {
+			fmt.Fprintln(c.Out, "no scheduled jobs")
+			return nil
+		}
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "JOB\tSCHEDULE\tNEXT\tLAST\tCOMMAND")
+		for _, job := range jobs {
+			next := "-"
+			if !job.Next.IsZero() {
+				next = job.Next.Format("2006-01-02 15:04")
+			}
+			last := "-"
+			switch {
+			case job.Running:
+				last = "running"
+			case job.LastError != "":
+				last = job.LastError
+			case !job.LastEnd.IsZero():
+				last = fmt.Sprintf("exit %d at %s", job.LastExit, job.LastEnd.Format("15:04"))
+			}
+			name := job.Name
+			if job.Disabled {
+				name += " (disabled)"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, job.Schedule, next, last, job.Command)
+		}
+		return writer.Flush()
 	case "rescan":
 		result := data.(map[string]any)
 		invalid, _ := result["invalid"].([]any)

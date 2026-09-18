@@ -65,6 +65,7 @@ type Snapshot struct {
 	WebProcess      string            `json:"web_process"`
 	Web             config.Web        `json:"web"`
 	Processes       []ProcessSnapshot `json:"processes"`
+	Cron            []CronSnapshot    `json:"cron,omitempty"`
 	LastActivity    time.Time         `json:"last_activity,omitempty"`
 	Uptime          string            `json:"uptime,omitempty"`
 	Resources       res.Stats         `json:"resources"`
@@ -143,6 +144,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 		}
 	}
 	go m.idleLoop(ctx)
+	go m.cronLoop(ctx)
 	return m, invalid, nil
 }
 
@@ -165,6 +167,11 @@ func (m *Manager) Close() {
 		}
 		wait.Wait()
 		m.cancel()
+		// The app goroutines kill and reap their cron jobs on cancel, so wait for them before
+		// the process exits and orphans a Setsid child.
+		for _, runtime := range runtimes {
+			<-runtime.closed
+		}
 	})
 }
 
@@ -181,9 +188,10 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*cronState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
+	runtime.syncCron(time.Now())
 	m.apps[spec.Name] = runtime
 	go runtime.loop()
 }
@@ -255,6 +263,15 @@ func (m *Manager) SetMaintenance(name string, on bool) error {
 		delete(m.maintenance, name)
 	}
 	return saveNames(filepath.Join(m.cfg.StateDir, "maintenance.json"), m.maintenance)
+}
+
+// RunCron starts one scheduled job immediately. The job's next scheduled run is unchanged.
+func (m *Manager) RunCron(name, job string) error {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	return runtime.call(request{kind: requestCronRun, job: job})
 }
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.
@@ -373,6 +390,7 @@ func (m *Manager) Rescan() ([]error, error) {
 		if !seen[name] {
 			_ = runtime.call(request{kind: requestStop})
 			runtime.cancel()
+			<-runtime.closed
 			delete(m.apps, name)
 		}
 	}
@@ -412,6 +430,28 @@ func writeStateFile(path string, value any) error {
 		return err
 	}
 	return os.Rename(newPath, path)
+}
+
+// cronLoop asks every app for due jobs on a short tick; jobs run whatever the app's own state is.
+func (m *Manager) cronLoop(ctx context.Context) {
+	ticker := time.NewTicker(cronTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.mu.RLock()
+			runtimes := make([]*appRuntime, 0, len(m.apps))
+			for _, runtime := range m.apps {
+				runtimes = append(runtimes, runtime)
+			}
+			m.mu.RUnlock()
+			for _, runtime := range runtimes {
+				_ = runtime.call(request{kind: requestCron, now: now})
+			}
+		}
+	}
 }
 
 func (m *Manager) idleLoop(ctx context.Context) {
@@ -503,12 +543,15 @@ const (
 	requestUpdate
 	requestMaintenance
 	requestSealLogs
+	requestCron
+	requestCronRun
 )
 
 type request struct {
 	kind        requestKind
 	reply       chan response
 	processName string
+	job         string
 	lines       int
 	now         time.Time
 	spec        *apps.App
@@ -527,6 +570,7 @@ type response struct {
 type processEvent struct {
 	kind     string
 	proc     *process
+	cron     *cronRun
 	err      error
 	exitCode int
 }
@@ -555,11 +599,13 @@ type appRuntime struct {
 	events           chan processEvent
 	state            State
 	processes        map[string]*process
+	cron             map[string]*cronState
 	failures         map[string]int
 	lastActivity     time.Time
 	lastError        string
 	lastErrorProcess string
 	maintenance      bool
+	closed           chan struct{}
 }
 
 func (a *appRuntime) call(req request) error { return a.query(req).err }
@@ -574,9 +620,11 @@ func (a *appRuntime) query(req request) response {
 }
 
 func (a *appRuntime) loop() {
+	defer close(a.closed)
 	for {
 		select {
 		case <-a.ctx.Done():
+			a.stopCron()
 			for _, process := range a.processes {
 				if process.log != nil {
 					_ = process.log.Close()
@@ -620,11 +668,16 @@ func (a *appRuntime) handle(req request) response {
 		}
 	case requestUpdate:
 		a.spec = req.spec
+		a.syncCron(time.Now())
 	case requestMaintenance:
 		a.maintenance = req.on
 	case requestSealLogs:
 		sealed, err := a.sealLogs()
 		return response{sealed: sealed, err: err}
+	case requestCron:
+		a.cronTick(req.now)
+	case requestCronRun:
+		return response{err: a.runCron(req.job, time.Now())}
 	}
 	return response{}
 }
@@ -646,7 +699,11 @@ func (a *appRuntime) sealLogs() ([]string, error) {
 			sealed = append(sealed, path)
 		}
 	}
-	return sealed, nil
+	cronSealed, err := a.sealCronLogs()
+	if err != nil {
+		return sealed, err
+	}
+	return append(sealed, cronSealed...), nil
 }
 
 func (a *appRuntime) start() error {
@@ -670,9 +727,17 @@ func (a *appRuntime) start() error {
 		a.state = Running
 		a.lastActivity = time.Now()
 	} else {
-		go a.readiness(web)
+		go a.readiness(web, a.spec.Config.Process(web.name), a.webHost())
 	}
 	return nil
+}
+
+// webHost is the Host header the readiness probe and proxy use for the web process.
+func (a *appRuntime) webHost() string {
+	if len(a.spec.Config.Hosts) == 0 {
+		return ""
+	}
+	return config.BaseHost(a.spec.Config.Hosts[0])
 }
 
 func (a *appRuntime) failStart(err error) error {
@@ -809,15 +874,12 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	return nil
 }
 
-func (a *appRuntime) readiness(p *process) {
-	defaults := a.spec.Config.Process(p.name)
+// readiness polls the web process until it answers. It is given the process defaults and host
+// instead of reading the app spec, which a rescan may replace on the runtime goroutine.
+func (a *appRuntime) readiness(p *process, defaults config.Process, host string) {
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
 	ticker := time.NewTicker(defaults.HealthInterval.Value())
 	defer ticker.Stop()
-	host := ""
-	if len(a.spec.Config.Hosts) > 0 {
-		host = config.BaseHost(a.spec.Config.Hosts[0])
-	}
 	lastError := errors.New("healthcheck timed out")
 	for {
 		select {
@@ -874,6 +936,15 @@ func healthCheck(check string, port int, host string, timeout time.Duration) (bo
 }
 
 func (a *appRuntime) handleEvent(event processEvent) {
+	if event.cron != nil {
+		switch event.kind {
+		case "cron-exit":
+			a.cronRunExited(event.cron, event.exitCode, event.err)
+		case "cron-timeout":
+			a.cronRunTimeout(event.cron)
+		}
+		return
+	}
 	name := event.proc.name
 	if event.kind != "restart" && a.processes[name] != event.proc {
 		return
@@ -897,7 +968,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		if err == nil {
 			err = a.spawn(name, command, port)
 			if err == nil && name == a.spec.Config.WebProcess {
-				go a.readiness(a.processes[name])
+				go a.readiness(a.processes[name], a.spec.Config.Process(name), a.webHost())
 			}
 		}
 		if err != nil {
@@ -976,7 +1047,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {
@@ -1143,7 +1214,10 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 	for key, value := range extra {
 		values[key] = value
 	}
-	values["PORT"] = strconv.Itoa(port)
+	// Cron jobs run outside the port table, so port 0 means no PORT is injected.
+	if port > 0 {
+		values["PORT"] = strconv.Itoa(port)
+	}
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
 	values["APPBOSS_SOCKET"] = socket

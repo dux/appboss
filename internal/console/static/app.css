@@ -599,6 +599,48 @@ code {
   color: var(--muted);
 }
 
+/* --- Cron list (one row per scheduled job) --------------------------------- */
+
+.cron-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.cron-row:first-child {
+  border-top: 0;
+}
+
+.cron-row[data-running="true"] {
+  --state-color: var(--success);
+}
+
+.cron-row[data-running="true"] .service-name::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.cron-schedule {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-row .btn {
+  justify-self: end;
+}
+
 .alert {
   display: flex;
   align-items: flex-start;

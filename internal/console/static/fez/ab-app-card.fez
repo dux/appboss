@@ -10,6 +10,7 @@
       this.state.serviceUrl = host ? `${location.protocol}//${host}${location.port ? `:${location.port}` : ''}` : ''
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.processes = app.processes || []
+      this.state.cron = app.cron || []
       this.state.errorLog = (app.error_log || []).join('\n')
     }
 
@@ -42,6 +43,36 @@
 
     act(action) {
       Boss.runAction(this.props.app.name, action)
+    }
+
+    clock(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return '-'
+      const seconds = Math.round((date.getTime() - Date.now()) / 1000)
+      if (Math.abs(seconds) < 5) return 'now'
+      if (seconds > 0) {
+        if (seconds < 60) return `in ${seconds}s`
+        if (seconds < 3600) return `in ${Math.round(seconds / 60)}m`
+        if (seconds < 86400) return `in ${Math.round(seconds / 3600)}h`
+        return `in ${Math.round(seconds / 86400)}d`
+      }
+      const past = -seconds
+      if (past < 60) return `${past}s ago`
+      if (past < 3600) return `${Math.round(past / 60)}m ago`
+      if (past < 86400) return `${Math.round(past / 3600)}h ago`
+      return `${Math.round(past / 86400)}d ago`
+    }
+
+    lastRun(job) {
+      if (job.running) return 'running'
+      if (job.last_error) return job.last_error
+      if (job.last_end) return `exit ${job.last_exit} ${this.clock(job.last_end)}`
+      return '-'
+    }
+
+    runCron(job) {
+      Boss.runAction(this.props.app.name, 'cron-run', { job: job.name })
     }
   }
 </script>
@@ -141,4 +172,28 @@
       <div class="service-row service-empty text-muted">No services in the procfile</div>
     {/each}
   </div>
+
+  {#if state.cron.length}
+    <div class="service-list">
+      <div class="cron-row cron-head">
+        <span class="subheader">Job</span>
+        <span class="subheader">Schedule</span>
+        <span class="subheader">Next</span>
+        <span class="subheader">Last</span>
+        <span></span>
+      </div>
+      {#each state.cron as job}
+        <div class="cron-row" data-running={job.running ? 'true' : 'false'}>
+          <span class="service-name">{job.name}{#if job.disabled} <span class="text-muted">(disabled)</span>{/if}</span>
+          <span class="cron-schedule">{job.schedule}</span>
+          <span class="service-value">{job.disabled ? '-' : clock(job.next)}</span>
+          <span class="service-value">{lastRun(job)}</span>
+          <button class="btn btn-sm" type="button" onclick="fez.runCron('{job.name}')" disabled={job.running || job.disabled} title="Run this job now">
+            <svg class="icon"><use href="#i-play"></use></svg>
+            Run
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
 </article>

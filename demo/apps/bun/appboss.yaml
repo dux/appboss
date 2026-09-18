@@ -5,3 +5,12 @@ hosts:
   - bun.lvh.me
 
 health: http:/up
+
+cron:
+  heartbeat:
+    schedule: every 30s
+    command: ./cron.sh
+  report:
+    schedule: "0 7 * * *"
+    command: ./cron.sh
+
