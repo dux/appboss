@@ -6,6 +6,9 @@
     { id: 'routing', title: 'Routing' },
     { id: 'logs', title: 'Logs' },
     { id: 'cron', title: 'Scheduled jobs' },
+    { id: 'hooks', title: 'Deploy hooks' },
+    { id: 'audit', title: 'Audit & history' },
+    { id: 'health', title: 'Health & alerts' },
     { id: 'cli', title: 'CLI' },
     { id: 'keys', title: 'Keys' },
   ]
@@ -53,6 +56,8 @@
         <ul>
           <li>A stopped app starts on the first request and answers with a starting page that refreshes.</li>
           <li>An idle app stops after <code>idle_stop</code> and wakes the same way.</li>
+          <li>Stop and restart drain first: new requests get <code>503</code> while those in flight finish, bounded by <code>stop_timeout</code>.</li>
+          <li>Every mutating action is written to the audit log, and crash and failure events can post to one operator webhook.</li>
           <li>Cloudflare is the edge: TLS, caching, compression and WAF live there. appboss is the origin and trusts only Cloudflare's ranges.</li>
         </ul>
         <pre>browser -> Cloudflare -> appboss :80
@@ -66,6 +71,7 @@
         <h2>Config files</h2>
         <p><code>appboss.yaml</code> has two roles. A file with <code>apps:</code> is a host; a file with <code>procfile:</code> is an app. Never both. <code>appboss.local.yaml</code> next to a host file wins over it, is gitignored, and is where server-only values (secrets, admin emails, absolute paths) live.</p>
         <p><code>defaults:</code> in the host file applies to every app. An app's top-level key overrides it key by key, and <code>processes.&lt;name&gt;</code> overrides it once more for a single process.</p>
+        <p>A <code>$NAME</code> in a value is replaced from the daemon's environment before it loads, so <code>url: $ALERT_WEBHOOK_URL</code> keeps the secret out of the file. Only all-uppercase names expand, an unset name is left as written, and <code>procfile</code> and cron commands are never expanded because they are runtime shell lines.</p>
         <h3>Host</h3>
         <pre>apps: ./apps
 proxy:
@@ -105,6 +111,7 @@ idle_stop: 0s</pre>
       <section>
         <h2>Routing</h2>
         <p>Every app lists the hostnames it answers in <code>hosts</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to its <code>web</code> process. Non-web processes never get traffic.</p>
+        <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list.</p>
         <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy.</p>
         <pre>hosts:
   - shop.example.com
@@ -127,9 +134,11 @@ proxy:
           <li><code>appboss</code> - the daemon's own log.</li>
           <li>one channel per <code>*.log</code> file under the app's <code>log/</code> folder.</li>
         </ul>
-        <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app.</p>
+        <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app. A daily job also runs SQLite <code>VACUUM</code> on every store at <code>daemon.vacuum_at</code> (default 04:30).</p>
         <pre>appboss logs -f shop
-appboss logs shop --process worker -n 500</pre>
+appboss logs shop --process worker -n 500
+appboss logs shop --search timeout --level error --channel stdout</pre>
+        <p>With <code>--search</code>, <code>--level</code> or <code>--channel</code> the command queries the store instead of tailing files.</p>
       </section>
     {/if}
 
@@ -144,6 +153,48 @@ appboss logs shop --process worker -n 500</pre>
     timeout: 30m
     overlap: false</pre>
         <p><code>appboss cron shop</code> lists jobs and the next run; <code>appboss cron run shop cleanup</code> starts one now. The app card in the console has a Run button.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'hooks'}
+      <section>
+        <h2>Deploy hooks</h2>
+        <p><code>hooks:</code> declares one-shot commands a signed HTTP ping triggers, so a Git host webhook can deploy without shell access. The ping URL is <code>&lt;management.url&gt;/hooks/&lt;app&gt;/&lt;hook&gt;</code>.</p>
+        <p>Authentication is the hook's own secret, accepted as <code>?token=</code> in the URL, <code>Authorization: Bearer</code>, <code>X-Gitlab-Token</code>, or a GitHub <code>X-Hub-Signature-256</code> HMAC over the raw body. With no <code>secret</code> in the config, appboss generates one under <code>state_dir</code> on first use. <code>appboss hooks</code> prints the ready-made URL and <code>appboss hooks rotate</code> mints a new one.</p>
+        <pre>hooks:
+  deploy:
+    command: git -C .. pull --ff-only
+    timeout: 10m
+    restart: true
+    overlap: false</pre>
+        <p><code>appboss exec shop bundle exec rails runner ...</code> runs a one-off command in the same environment and prints its combined output; options like <code>--timeout</code> come before the command. Both hooks and cron write to their own log channel.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'audit'}
+      <section>
+        <h2>Audit &amp; history</h2>
+        <p>Every mutating action records who did what to which app and how it turned out: start, stop, restart, maintenance, rescan, cron and hook runs, <code>exec</code>, and config writes and restores. Console actions carry the signed-in email, a hook ping carries <code>hook:&lt;app&gt;/&lt;hook&gt;</code>, and control-socket actions are attributed to <code>cli</code>.</p>
+        <p>Rows live in the reserved <code>_appboss</code> database, are kept for <code>daemon.audit_retention</code> (default one year, <code>0</code> forever) and are pruned with the daily log prune. The Audit tab filters by app, actor and action; <code>appboss audit</code> prints the same rows.</p>
+        <p>Every config save first copies the current file to <code>state_dir/config-history</code>, keeping the last 50 revisions per file. The Configuration view's History button lists them and can restore one, revision-checked; <code>appboss config history|restore</code> does the same from the CLI.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'health'}
+      <section>
+        <h2>Health &amp; alerts</h2>
+        <p>The management host serves three endpoints when <code>management.metrics.enabled</code> is true (the default):</p>
+        <ul>
+          <li><code>GET /healthz</code> - <code>200 ok</code> while the daemon is up.</li>
+          <li><code>GET /readyz</code> - <code>200</code> only while every <code>autostart</code> app is running, else <code>503</code>.</li>
+          <li><code>GET /metrics</code> - Prometheus text: per-app state, memory, CPU, restart and request rates, latency quantiles and the last cron and hook runs. Set <code>management.metrics.token</code> to require a bearer token.</li>
+        </ul>
+        <p>Each app also answers on its own hosts at <code>health_endpoint</code> (default <code>/.well-known/appboss/health</code>): <code>200</code> while running and not draining, <code>503</code> otherwise. It runs before auth and never wakes a stopped app. <code>appboss doctor</code> preflights a box: tools, writable directories, a valid config and a clear port range.</p>
+        <p><code>notify:</code> posts runtime events to one operator webhook: <code>crash</code>, <code>restart-loop</code>, <code>health-timeout</code>, <code>wake-failed</code>, <code>hook-failed</code>, <code>deploy</code> and <code>config-changed</code>, debounced per app and event. An empty <code>url</code> disables it.</p>
+        <pre>notify:
+  url: $ALERT_WEBHOOK_URL
+  events: [crash, restart-loop, health-timeout, wake-failed]
+  min_interval: 5m</pre>
       </section>
     {/if}
 
@@ -165,9 +216,13 @@ appboss logs shop --process worker -n 500</pre>
         <div class="help-cmd"><code>logs</code><span>print or follow the process logs; <code>-f</code> follows</span></div>
         <div class="help-cmd"><code>maintenance</code><span>serve the maintenance page while the app keeps running</span></div>
         <div class="help-cmd"><code>cron</code><span>list an app's scheduled jobs, or run one now</span></div>
+        <div class="help-cmd"><code>hooks</code><span>list an app's deploy hooks, run one, or rotate its secret</span></div>
+        <div class="help-cmd"><code>exec</code><span>run a one-off command in the app's environment</span></div>
+        <div class="help-cmd"><code>audit</code><span>list operator actions: start, stop, restart, hook runs and config writes</span></div>
         <h3>Config</h3>
-        <div class="help-cmd"><code>config</code><span>validate and print a config, the resolved config, or keys</span></div>
+        <div class="help-cmd"><code>config</code><span>validate and print a config, the resolved config, keys, or saved revisions</span></div>
         <div class="help-cmd"><code>check</code><span>validate the config and every app without starting anything</span></div>
+        <div class="help-cmd"><code>doctor</code><span>preflight a box: tools, writable directories, valid config, clear ports</span></div>
         <div class="help-cmd"><code>rescan</code><span>re-read the apps directory and every appboss.yaml</span></div>
         <div class="help-cmd"><code>ports</code><span>show the live port table, one fixed port per process</span></div>
         <div class="help-cmd"><code>password</code><span>print a bcrypt hash for basic_auth</span></div>

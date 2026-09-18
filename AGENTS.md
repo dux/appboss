@@ -14,6 +14,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * App config is `<app>/appboss.yaml`: `procfile` + `hosts` are the minimum. The console edits these same files on disk.
 * Config lookup: `-c path`, then `$APPBOSS_CONFIG`, then `./appboss.local.yaml` or `./appboss.yaml`. Socket lookup: `--socket`, `$APPBOSS_SOCKET`, the config's `socket` when it exists, then `/run/appboss/appboss.sock`.
 * One file name, two roles: a file with `apps:` is a host, a file with `procfile:` is an app, never both. `defaults:` in the host file applies to every app; an app's top-level key overrides it key by key, and process keys can be overridden once more under `processes.<name>`.
+* Values take `$NAME` from the daemon environment at load (uppercase only, unset names stay literal); `procfile` and cron commands are never expanded. In `hosts`, a leading `*.` matches subdomains only and a leading `.` matches the apex and its subdomains.
 * Boss injects `PORT`, `APP_NAME`, `PROC_TYPE` and `APPBOSS_SOCKET` into every process; `PORT` is one fixed value per (app, proctype) from `ports.range` and is never configurable. `appboss password` prints a bcrypt hash for `basic_auth`.
 * Keys: `appboss config --keys [filter]` (one-line docs + defaults), `appboss config --reference` (long form, also `./internal/config/reference.yaml`), `appboss config [app] -d` (resolved config).
 * Cloudflare is the edge: TLS, compression, caching, WAF and rate limiting stay there. Point `proxy.trusted_cidrs` at the Cloudflare ranges and keep `proxy.client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]` so the origin cannot be reached directly.
@@ -78,6 +79,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * All CSS lives in `./internal/console/static/app.css`; components have no `<style>` blocks. Keep the light Tabler-style tokens defined on `:root` there.
 * No external assets: the CSP allows only the console's own origin. `fez.min.js` is vendored; update it by copying https://dux.github.io/fez/dist/fez.min.js.
 * Cross-component calls go through the globals `Boss` (shell: `api`, `reload`, `runAction`, `rescan`, `logout`), `Toast.show(message, error)` and `Drawer.open(title, text)`. Shared data lives in `globalState` (`apps`, `loaded`, `busy`, `status`, `restartRequired`).
+* Console views are hash-routed in `viewFromHash` in `ab-shell.fez`; a new nav tab needs its own `location.hash === '#<view>'` case or its section never renders. `./internal/console/static_test.go` guards this.
 * The config editor keeps the textarea and gutter under `fez:keep` and drives them with direct DOM writes; typing must never re-render the component.
 * Check components with `bun ~/dev/gems/fez/bin/fez compile 'internal/console/static/fez/*.fez'` and then look at the real page in a browser.
 

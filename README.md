@@ -92,7 +92,9 @@ health: http:/up
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
 Every key that takes a list also accepts a single value, so `hosts: myapp.com` equals `hosts: [myapp.com]`.
+A leading `*.` in a host matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `hosts: .myapp.com` covers `myapp.com` and `*.myapp.com`.
 `proxy.listen` and `management.host` are such lists: several listen addresses each get a listener with the same routing, and several console hostnames are all accepted.
+A `$NAME` in a value is replaced with that variable from the daemon's environment at load time, so `url: $ALERT_WEBHOOK_URL` keeps a secret out of the file; only all-uppercase names expand, an unset name stays as written, and `procfile` and cron commands are never expanded because they are runtime shell lines.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
 `appboss config --keys [filter]` lists every key with a one-line description and its default, or an example when it has none; the same list is behind the Help button in the console's Configuration view.
 `appboss config --reference` prints the long annotated reference, and `appboss config [app] -d` prints a resolved config with every default filled in.

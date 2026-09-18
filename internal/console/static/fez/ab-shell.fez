@@ -28,6 +28,7 @@
       if (location.hash === '#config') return 'config'
       if (location.hash === '#logs') return 'logs'
       if (location.hash === '#audit') return 'audit'
+      if (location.hash === '#help') return 'help'
       return 'overview'
     }
 
