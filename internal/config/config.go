@@ -154,6 +154,7 @@ type Config struct {
 	Ports      Ports      `yaml:"ports" json:"ports"`
 	Defaults   Defaults   `yaml:"defaults" json:"defaults"`
 	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
+	Notify     Notify     `yaml:"notify" json:"notify"`
 }
 
 // Proxy has one listener per Listen address; every listener serves the same routing.
@@ -261,6 +262,15 @@ type Daemon struct {
 	LogIngestInterval Duration `yaml:"log_ingest_interval" json:"log_ingest_interval"`
 }
 
+// Notify posts runtime events to one operator webhook. An empty URL disables it.
+type Notify struct {
+	URL         string            `yaml:"url" json:"url"`
+	Format      string            `yaml:"format" json:"format"`
+	Events      List              `yaml:"events" json:"events"`
+	MinInterval Duration          `yaml:"min_interval" json:"min_interval"`
+	Headers     map[string]string `yaml:"headers" json:"headers"`
+}
+
 func Default() Config {
 	return Config{
 		StateDir: ".appboss/state", LogDir: ".appboss/log", Socket: ".appboss/appboss.sock",
@@ -269,6 +279,7 @@ func Default() Config {
 		Ports:      Ports{Range: [2]int{3100, 3990}},
 		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second)},
+		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
 	}
 }
 
@@ -279,7 +290,7 @@ type file struct {
 	appFile `yaml:",inline"`
 }
 
-var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon"}
+var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify"}
 
 // decode parses one document into raw and reports every top-level key present in it. The node
 // tree is kept so every error can be pointed at a line and a key.
@@ -483,6 +494,38 @@ func (c Config) validate(hasApp bool) error {
 	}
 	if c.Proxy.Upstream.DialTimeout <= 0 || c.Proxy.Upstream.ResponseHeaderTimeout <= 0 || c.Proxy.Upstream.IdleConnTimeout <= 0 || c.Proxy.Upstream.MaxIdleConnsPerApp <= 0 {
 		return keyErr("proxy.upstream", "timeouts and max_idle_conns_per_app must be positive")
+	}
+	if err := validateNotify(c.Notify); err != nil {
+		return scoped(err, "notify")
+	}
+	return nil
+}
+
+var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
+var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true}
+
+func validateNotify(n Notify) error {
+	if !notifyFormats[n.Format] {
+		return keyErr("format", "must be generic, slack, discord or ntfy, not %q", n.Format)
+	}
+	for _, event := range n.Events {
+		if !notifyEvents[event] {
+			return keyErr("events", "unknown event %q", event)
+		}
+	}
+	if n.MinInterval < 0 {
+		return keyErr("min_interval", "cannot be negative")
+	}
+	if n.URL != "" {
+		parsed, err := url.Parse(n.URL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return &Error{Key: "url", Message: fmt.Sprintf("invalid URL %q", n.URL), Hint: "use the webhook address, e.g. https://hooks.slack.com/services/..."}
+		}
+	}
+	for name := range n.Headers {
+		if name == "" || strings.ContainsAny(name, ": \t") {
+			return keyErr("headers", "invalid header name %q", name)
+		}
 	}
 	return nil
 }

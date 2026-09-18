@@ -261,6 +261,9 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 		state.lastError = fmt.Sprintf("exit code %d", exitCode)
 	}
 	_, _ = run.log.Write(jobLine(state.kind, state.name, "exit", exitCode, duration, err))
+	if state.kind == "hook" && exitCode != 0 {
+		a.emit("hook-failed", fmt.Sprintf("hook %s exited with code %d", state.name, exitCode))
+	}
 	// A deploy hook that finished cleanly brings the app onto the new release.
 	if state.kind == "hook" && state.restart && exitCode == 0 {
 		a.restartApp(state)

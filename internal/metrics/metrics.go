@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"app-boss/internal/notify"
 	"app-boss/internal/super"
 	"app-boss/internal/version"
 )
@@ -21,8 +22,12 @@ var stateValue = map[super.State]int{
 	super.Crashed:  4,
 }
 
-// Render writes the Prometheus exposition for apps, already sorted by name.
-func Render(apps []super.Snapshot, now time.Time) string {
+// NotifyStats is the notifier's counter set; the alias keeps the handler's signature stable.
+type NotifyStats = notify.Stats
+
+// Render writes the Prometheus exposition for apps and the notifier counters, already sorted by
+// name.
+func Render(apps []super.Snapshot, now time.Time, notify NotifyStats) string {
 	var b strings.Builder
 	metric := func(name, help, kind string) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
@@ -122,6 +127,11 @@ func Render(apps []super.Snapshot, now time.Time) string {
 			sample("appboss_hook_last_exit", labels, float64(hook.LastExit))
 		}
 	}
+
+	metric("appboss_notifications_total", "Operator webhook sends by result.", "counter")
+	sample("appboss_notifications_total", `{result="sent"}`, float64(notify.Sent))
+	sample("appboss_notifications_total", `{result="failed"}`, float64(notify.Failed))
+	sample("appboss_notifications_total", `{result="dropped"}`, float64(notify.Dropped))
 
 	return b.String()
 }

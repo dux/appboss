@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -269,11 +268,7 @@ func (s *spillWriter) close() {
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) {
 	if snapshot.State != super.Running {
 		if snapshot.State == super.Stopped {
-			go func() {
-				if err := h.manager.Start(snapshot.Name); err != nil {
-					log.Printf("wake %s: %v", snapshot.Name, err)
-				}
-			}()
+			go h.manager.Wake(snapshot.Name)
 		}
 		if snapshot.State == super.Crashed {
 			h.unavailablePage(w, r, h.crashed, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)

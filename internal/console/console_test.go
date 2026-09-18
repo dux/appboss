@@ -383,7 +383,7 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handle
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}), newFakeStore())
+	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}), newFakeStore(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

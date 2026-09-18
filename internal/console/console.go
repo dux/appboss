@@ -52,6 +52,7 @@ type Handler struct {
 	managementPort string
 	metricsEnabled bool
 	metricsToken   string
+	notifyStats    func() metrics.NotifyStats
 }
 
 type dashboard struct {
@@ -86,7 +87,7 @@ type actionRequest struct {
 	Job    string `json:"job,omitempty"`
 }
 
-func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, error) {
+func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats func() metrics.NotifyStats) (*Handler, error) {
 	auth, err := newAuthenticator(cfg)
 	if err != nil {
 		return nil, err
@@ -96,7 +97,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, 
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token}, nil
+	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats}, nil
 }
 
 // LoginURL mints a one-time link for `appboss login`. It points at the console's loopback
@@ -368,7 +369,11 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, metrics.Render(h.service.Apps(), time.Now()))
+	stats := metrics.NotifyStats{}
+	if h.notifyStats != nil {
+		stats = h.notifyStats()
+	}
+	_, _ = io.WriteString(w, metrics.Render(h.service.Apps(), time.Now(), stats))
 }
 
 // handleHook accepts a signed ping at /hooks/<app>/<hook> and starts the hook. It is the one

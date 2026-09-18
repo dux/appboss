@@ -230,6 +230,21 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 `healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
 
+## Notifications
+
+A host can post runtime events to one operator webhook:
+
+```yaml
+notify:
+  url: $ALERT_WEBHOOK_URL
+  format: generic       # generic | slack | discord | ntfy
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed]
+  min_interval: 5m       # per app and event, so a crash loop does not spam
+  headers: {}
+```
+
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up, `wake-failed` a request that could not start a stopped app, and `hook-failed` a deploy hook that exited non-zero. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.
@@ -301,6 +316,7 @@ internal/proxy/       filter pipeline, host routing, static files, maintenance, 
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the appboss daemon log into the store
 internal/metrics/     Prometheus text rendered from the app snapshots
+internal/notify/      debounced operator webhook for crash and failure events
 internal/version/     release version, overridden at build time
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client

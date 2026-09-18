@@ -45,6 +45,12 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler.
 * `./internal/version.Version` is the release version; the release workflow does not inject it yet, so `String()` falls back to the module version or the short VCS revision.
 
+## Notifications
+
+* `notify:` in the host config points at one operator webhook. `./internal/notify` debounces per app and event, queues with a bounded buffer and posts best-effort, so it can never block the supervisor.
+* `daemon.Build` creates the notifier and passes it to `super.New` (as a `notify.Sink`) and to `console.New` for its `appboss_notifications_total` counters. `Manager.Wake` is the proxy's start path and the only source of `wake-failed`; explicit run/console starts do not notify.
+* Events are emitted by `appRuntime.emit` in `./internal/super`: `crash`, `restart-loop`, `health-timeout` and `hook-failed`. A new event needs a name in `notifyEvents` in `./internal/config/config.go` and a line in the reference.
+
 ## Log store
 
 * One SQLite database per app at `log_dir/<app>/appboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index, plus `tail_offsets` for the file tailer. `./internal/logstore` owns the schema, batching, search and prune.

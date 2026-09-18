@@ -26,6 +26,7 @@ import (
 	"app-boss/internal/apps"
 	"app-boss/internal/config"
 	"app-boss/internal/hook"
+	"app-boss/internal/notify"
 	"app-boss/internal/ports"
 	"app-boss/internal/res"
 )
@@ -95,6 +96,7 @@ type Manager struct {
 	backend         res.Backend
 	echo            *Echo
 	secrets         *hook.Store
+	sink            notify.Sink
 	closeOnce       sync.Once
 	mu              sync.RWMutex
 	apps            map[string]*appRuntime
@@ -109,8 +111,8 @@ type Manager struct {
 
 // New discovers the apps and starts the ones that were running before, skipping autostart: false.
 // A non-nil echo mirrors every process's output to it, which the foreground session uses when
-// attached to a terminal.
-func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, []error, error) {
+// attached to a terminal. An optional sink receives crash and failure events.
+func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...notify.Sink) (*Manager, []error, error) {
 	discovered, invalid, err := apps.Discover(cfg)
 	if err != nil {
 		return nil, invalid, err
@@ -142,8 +144,12 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	if err != nil {
 		return nil, invalid, err
 	}
+	var sink notify.Sink
+	if len(sinks) > 0 {
+		sink = sinks[0]
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -204,7 +210,7 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, secrets: m.secrets, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, secrets: m.secrets, sink: m.sink, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	runtime.syncCron(time.Now())
@@ -260,6 +266,21 @@ func (m *Manager) Restart(name string) error {
 		return err
 	}
 	return m.setDesired(name, true)
+}
+
+// Wake starts an app on behalf of the proxy and reports a failed start, which an explicit run or
+// console start does not.
+func (m *Manager) Wake(name string) {
+	if err := m.Start(name); err != nil {
+		log.Printf("wake %s: %v", name, err)
+		m.emit(notify.Event{Type: "wake-failed", App: name, Error: err.Error(), Time: time.Now()})
+	}
+}
+
+func (m *Manager) emit(event notify.Event) {
+	if m.sink != nil {
+		m.sink.Send(event)
+	}
 }
 
 // SetMaintenance flips the proxy into or out of maintenance answers for name. The app itself
@@ -765,6 +786,7 @@ type appRuntime struct {
 	cron             map[string]*jobState
 	hooks            map[string]*jobState
 	secrets          *hook.Store
+	sink             notify.Sink
 	failures         map[string]int
 	lastActivity     time.Time
 	lastError        string
@@ -937,7 +959,16 @@ func (a *appRuntime) failStart(err error) error {
 	a.lastError = err.Error()
 	_ = a.stopProcesses()
 	a.state = Crashed
+	a.emit("crash", a.lastError)
 	return err
+}
+
+// emit forwards one runtime event to the notifier; a nil sink drops it.
+func (a *appRuntime) emit(eventType, message string) {
+	if a.sink == nil {
+		return
+	}
+	a.sink.Send(notify.Event{Type: eventType, App: a.spec.Name, Error: message, Time: time.Now()})
 }
 
 func (a *appRuntime) stop() error {
@@ -1151,6 +1182,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 	case "health-failed":
 		a.lastError = event.err.Error()
 		a.lastErrorProcess = name
+		a.emit("health-timeout", a.lastError)
 		_ = syscall.Kill(-event.proc.pid, syscall.SIGKILL)
 	case "restart":
 		if a.state != Running && a.state != Starting || a.processes[name] != nil {
@@ -1194,6 +1226,7 @@ func (a *appRuntime) processExited(event processEvent) {
 			a.state = Crashed
 			a.lastError = fmt.Sprintf("%s exited with code %d", name, event.exitCode)
 			a.lastErrorProcess = name
+			a.emit("crash", a.lastError)
 		} else if len(a.processes) == 0 {
 			a.state = Stopped
 		}
@@ -1203,9 +1236,13 @@ func (a *appRuntime) processExited(event processEvent) {
 	if a.failures[name] >= defaults.MaxRestarts {
 		a.state, a.lastError = Crashed, fmt.Sprintf("%s exceeded max_restarts", name)
 		a.lastErrorProcess = name
+		a.emit("crash", a.lastError)
 		_ = a.stopProcesses()
 		a.state = Crashed
 		return
+	}
+	if a.failures[name] >= 2 {
+		a.emit("restart-loop", fmt.Sprintf("%s failed %d times in a row", name, a.failures[name]))
 	}
 	delay := backoff(defaults.RestartBackoff, a.failures[name])
 	time.AfterFunc(delay, func() {

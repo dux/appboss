@@ -287,6 +287,33 @@ daemon:
   # log store. A sealed segment stays on disk until its rows are committed.
   log_ingest_interval: 5s
 
+# --- Notifications -----------------------------------------------------------
+# Post runtime events to one operator webhook. Best-effort: a slow endpoint never blocks the
+# supervisor, and repeated events for the same app are debounced by min_interval.
+
+notify:
+  # Webhook address. Empty disables all notifications. Use $ALERT_WEBHOOK_URL to keep the
+  # secret out of the committed file.
+  url: ""
+  # Payload shape:
+  #   generic   the event as JSON: {"event","app","error","time"}
+  #   slack     {"text": "..."} for a Slack incoming webhook
+  #   discord   {"content": "..."} for a Discord webhook
+  #   ntfy      {"title","message","tags"} for an ntfy topic
+  format: generic
+  # Events to post:
+  #   crash           an app entered the crashed state
+  #   restart-loop    a process failed and restarted again (second failure and later)
+  #   health-timeout  the readiness check gave up on the web process
+  #   wake-failed     a request tried to start a stopped app and the start failed
+  #   hook-failed     a deploy hook exited non-zero
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed]
+  # Quiet period per app and event. 0 posts every event.
+  min_interval: 5m
+  # Extra headers sent with every request.
+  headers: {}
+  #   Authorization: "Bearer $TOKEN"
+
 # =============================================================================
 # PART 2: <app>/appboss.yaml   (required, per app)
 # =============================================================================

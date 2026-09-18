@@ -24,6 +24,7 @@ import (
 	"app-boss/internal/ingest"
 	"app-boss/internal/logstore"
 	"app-boss/internal/module"
+	"app-boss/internal/notify"
 	"app-boss/internal/ops"
 	"app-boss/internal/ports"
 	"app-boss/internal/proxy"
@@ -38,6 +39,7 @@ type Daemon struct {
 	modules        *module.Manager
 	control        *ctl.Server
 	management     *console.Handler
+	notifier       *notify.Notifier
 	servers        []*http.Server
 	managementPort int
 }
@@ -59,8 +61,10 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
 	allocator, managementPort := newAllocator(cfg)
-	manager, invalid, err := super.New(cfg, allocator, echo)
+	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: cfg.Notify.Format, Events: cfg.Notify.Events, MinInterval: cfg.Notify.MinInterval.Value(), Headers: cfg.Notify.Headers})
+	manager, invalid, err := super.New(cfg, allocator, echo, notifier)
 	if err != nil {
+		notifier.Close()
 		return nil, err
 	}
 	for _, scanErr := range invalid {
@@ -71,10 +75,10 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
 	ingester := ingest.New(manager, manager, logs, cfg.Daemon.LogIngestInterval.Value())
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester), managementPort: managementPort}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester), notifier: notifier, managementPort: managementPort}
 	service := ops.New(manager, logs, logs)
 	if len(cfg.Proxy.Listen) > 0 {
-		edge, management, err := edgeHandler(cfg, service, manager, logs)
+		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier)
 		if err != nil {
 			d.Close()
 			return nil, err
@@ -139,6 +143,9 @@ func (d *Daemon) Close() error {
 	}
 	_ = d.modules.Close()
 	d.manager.Close()
+	if d.notifier != nil {
+		d.notifier.Close()
+	}
 	return nil
 }
 
@@ -156,7 +163,7 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
 // The console handler is returned as well so it can be served on its own port and mint
 // login links; it is nil when the console is not enabled.
-func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder) (http.Handler, *console.Handler, error) {
+func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder, notifier *notify.Notifier) (http.Handler, *console.Handler, error) {
 	appProxy, err := proxy.New(cfg, manager, logs)
 	if err != nil {
 		return nil, nil, err
@@ -164,7 +171,7 @@ func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager
 	var handler http.Handler = appProxy
 	var management *console.Handler
 	if cfg.Management.Enabled() {
-		management, err = console.New(cfg, service, apps.NewStore(cfg))
+		management, err = console.New(cfg, service, apps.NewStore(cfg), notifier.Stats)
 		if err != nil {
 			return nil, nil, fmt.Errorf("management console: %w", err)
 		}

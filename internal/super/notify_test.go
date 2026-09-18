@@ -1,0 +1,96 @@
+package super
+
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"app-boss/internal/notify"
+	"app-boss/internal/ports"
+)
+
+type recordingSink struct {
+	mu     sync.Mutex
+	events []notify.Event
+}
+
+func (s *recordingSink) Send(event notify.Event) {
+	s.mu.Lock()
+	s.events = append(s.events, event)
+	s.mu.Unlock()
+}
+
+func (s *recordingSink) waitFor(t *testing.T, eventType string) notify.Event {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		for _, event := range s.events {
+			if event.Type == eventType {
+				s.mu.Unlock()
+				return event
+			}
+		}
+		s.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("event %q was not emitted", eventType)
+	return notify.Event{}
+}
+
+func TestCrashEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{32900, 32920}, "procfile:\n  web: /usr/bin/false\nautostart: true\nrestart: on-failure\nmax_restarts: 1\nrestart_backoff: [1ms, 1.0, 1ms]\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if event := sink.waitFor(t, "crash"); event.App != "demo" || event.Error == "" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestRestartLoopEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{32920, 32940}, "procfile:\n  web: /usr/bin/false\nautostart: true\nrestart: on-failure\nmax_restarts: 5\nrestart_backoff: [1ms, 1.0, 1ms]\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if event := sink.waitFor(t, "restart-loop"); event.App != "demo" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestHookFailureEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{32940, 32960}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/false\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.RunHook("demo", "deploy"); err != nil {
+		t.Fatal(err)
+	}
+	waitForHookEnd(t, manager, "demo", "deploy")
+	if event := sink.waitFor(t, "hook-failed"); event.App != "demo" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestWakeFailureEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{32960, 32980}, "procfile:\n  web: ./missing-binary\nautostart: false\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	manager.Wake("demo")
+	if event := sink.waitFor(t, "wake-failed"); event.App != "demo" || event.Error == "" {
+		t.Fatalf("event = %+v", event)
+	}
+}
