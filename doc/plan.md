@@ -175,6 +175,7 @@ Per process (one per `procfile` entry):
 ### Surviving a daemon restart
 
 On startup, deploy-boss terminates every listener in `ports.range`, then starts fresh every app listed in `running.json`.
+When no `running.json` exists yet, which is the case on a first start, every discovered app is started.
 Nothing is adopted: the previous children were killed on shutdown, and anything left over is stale by definition.
 
 ### Resource backend (seam for cgroups)

@@ -119,6 +119,28 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 	}
 }
 
+func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
+	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	waitForSupervisorState(t, manager, Running)
+	if err := manager.Stop("demo"); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if snapshot, _ := second.Snapshot("demo"); snapshot.State != Stopped {
+		t.Fatalf("stopped app was started again on restart: %+v", snapshot)
+	}
+}
+
 func TestRestartDoesNotOrphanProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32400, 32420})
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)

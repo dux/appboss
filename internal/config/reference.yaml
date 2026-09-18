@@ -249,6 +249,7 @@ daemon:
   # How often the idle-stop ticker runs.
   idle_tick: 1m
   # On daemon start, restart apps that running.json says were running before.
+  # Without a running.json yet (first start) every discovered app is started.
   resume_running: true
   # Daily request-log prune at this local time.
   prune_at: "04:10"

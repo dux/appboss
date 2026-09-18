@@ -97,9 +97,17 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	if err != nil {
 		return nil, invalid, err
 	}
-	desired, err := loadNames(filepath.Join(cfg.StateDir, "running.json"))
+	runningPath := filepath.Join(cfg.StateDir, "running.json")
+	desired, err := loadNames(runningPath)
 	if err != nil {
 		return nil, invalid, err
+	}
+	// A host with no running list yet starts everything it found. Once the list exists it is
+	// authoritative, so an app someone stopped stays stopped across restarts.
+	if _, statErr := os.Stat(runningPath); errors.Is(statErr, os.ErrNotExist) {
+		for _, spec := range discovered {
+			desired[spec.Name] = true
+		}
 	}
 	maintenance, err := loadNames(filepath.Join(cfg.StateDir, "maintenance.json"))
 	if err != nil {
