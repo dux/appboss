@@ -222,7 +222,8 @@ Per request:
 6. `static`: `GET` and `HEAD` for a regular file under the directory are served from disk with `Last-Modified`, conditional and range support, without waking or touching the app.
    Paths under `static_immutable` get `Cache-Control: public, max-age=31536000, immutable`, everything else `public, max-age=3600`.
    The directory is opened through `os.OpenRoot` on every request, so `..` and symlinks cannot escape and a release symlink swap is picked up at once.
-7. `max_body`: a `Content-Length` above the limit answers `413` before anything is read; chunked bodies are capped and the resulting upstream error also answers `413`.
+7. `max_body`: the request body is read in full before the app is contacted (in memory up to 1 MiB, larger bodies spill to a temp file removed once the request is done), so the app never sees a partial upload.
+   A declared `Content-Length` or a chunked body over the limit answers `413` without forwarding.
 8. For an app that is `running`, forward to its `web` port, stamp last activity, and apply `headers` to the response (an empty value removes the header).
 9. App `stopped` or `crashed`: send a start message (idempotent), then:
    * A `GET` with `Accept: text/html` receives `503` with `Retry-After: 5` and a static starting page with the app name and a refresh timer.

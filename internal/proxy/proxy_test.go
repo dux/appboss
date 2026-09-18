@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"fmt"
 	"io"
@@ -26,6 +27,56 @@ func TestClientIP(t *testing.T) {
 	r.Header.Set("CF-Connecting-IP", "203.0.113.9")
 	if got := clientIP(r, []string{"CF-Connecting-IP"}); got != "203.0.113.9" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestBufferRequestKeepsSmallBodyInMemory(t *testing.T) {
+	payload := []byte("hello")
+	request := httptest.NewRequest(http.MethodPost, "http://demo.test/upload", bytes.NewReader(payload))
+	var body io.ReadCloser
+	bufferRequest(httptest.NewRecorder(), request, 0, func() { body = request.Body })
+	if _, ok := body.(*os.File); ok {
+		t.Fatal("small body should stay in memory")
+	}
+	if request.ContentLength != int64(len(payload)) {
+		t.Fatalf("content length = %d", request.ContentLength)
+	}
+	got, _ := io.ReadAll(body)
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("buffered body = %q", got)
+	}
+}
+
+func TestBufferRequestSpillsLargeBodyThenRemovesTempFile(t *testing.T) {
+	payload := bytes.Repeat([]byte("abcd"), 400*1024)
+	request := httptest.NewRequest(http.MethodPost, "http://demo.test/upload", bytes.NewReader(payload))
+	request.ContentLength = -1
+	var got []byte
+	var temp string
+	bufferRequest(httptest.NewRecorder(), request, 0, func() {
+		got, _ = io.ReadAll(request.Body)
+		if file, ok := request.Body.(*os.File); ok {
+			temp = file.Name()
+		}
+	})
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("buffered body mismatch: got %d bytes want %d", len(got), len(payload))
+	}
+	if temp == "" {
+		t.Fatal("large body was not spilled to a temp file")
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("temp file %s should be removed: %v", temp, err)
+	}
+}
+
+func TestBufferRequestRejectsOversizeWithoutForwarding(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://demo.test/upload", strings.NewReader(strings.Repeat("x", 4096)))
+	response := httptest.NewRecorder()
+	called := false
+	bufferRequest(response, request, 1024, func() { called = true })
+	if response.Code != http.StatusRequestEntityTooLarge || called {
+		t.Fatalf("oversize body: status %d forwarded %v", response.Code, called)
 	}
 }
 

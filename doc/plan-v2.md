@@ -91,7 +91,7 @@ The proxy takes everything per request from `ResolveHost`, so a rescan changes b
 Request order inside `./internal/proxy/proxy.go`, after the existing trusted CIDR check and host lookup:
 
 ```
-canonical redirect -> allow_ips -> basic_auth -> maintenance -> static -> max_body -> wake or forward -> headers
+canonical redirect -> allow_ips -> basic_auth -> maintenance -> static -> max_body/body buffer -> wake or forward -> headers
 ```
 
 Each step is one small function with its own test in `proxy_test.go`.
@@ -275,6 +275,6 @@ Each step leaves `make check` green and the demo working.
   * `appboss maintenance sinatra on` makes `/` answer `503` with the page and `appboss ls` show `maintenance`; `off` restores it.
   * `basic_auth` set globally in `demo/appboss.yaml`: `/` answers `401`, then `200` with `-u`.
   * `allow_ips: [10.0.0.0/8]` with `CF-Connecting-IP: 10.1.1.1` passes and `203.0.113.1` gets `403`.
-  * a `Content-Length` above `max_body` answers `413`.
+  * the body is buffered before forwarding, so an app over `max_body` answers `413` for a declared or chunked body without being contacted.
 * Console at `http://boss.lvh.me:8080`: edit `demo/apps/bun/appboss.yaml` to add a host, save, see the rescan toast and the new host on the card; edit `demo/appboss.yaml` `defaults.idle_stop`, save, see it in the effective view; change `proxy.listen`, save, see the restart-required banner; save with a stale revision from a second tab and get the conflict panel; create a server override for sinatra and confirm `appboss.local.yaml` exists and is the active file.
 * `curl` a request with `CF-Ray: abc` and confirm the row in `requests.sqlite` carries it.

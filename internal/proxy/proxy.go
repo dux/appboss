@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -174,20 +175,95 @@ func cacheControl(requestPath string, immutable []string) string {
 	return "public, max-age=3600"
 }
 
-// limitRequest rejects declared oversize bodies before anything is read and caps chunked ones so
-// the app never sees more than max_body bytes.
-func limitRequest(w http.ResponseWriter, r *http.Request, limit int64) bool {
-	if limit <= 0 {
-		return true
+const bodyMemoryLimit = 1 << 20
+
+// bufferRequest reads the whole request body before the app is contacted, so the app never sees a
+// partial upload when a client is slow or disconnects. Bodies up to bodyMemoryLimit stay in memory,
+// larger ones spill to a temp file that is removed once the request is done. A body over max_body
+// is rejected with 413 without touching the app; max_body 0 means unlimited.
+func bufferRequest(w http.ResponseWriter, r *http.Request, limit int64, next func()) {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		next()
+		return
 	}
-	if r.ContentLength > limit {
+	if limit > 0 && r.ContentLength > limit {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-		return false
+		return
 	}
-	if r.ContentLength < 0 && r.Body != nil {
-		r.Body = http.MaxBytesReader(w, r.Body, limit)
+	source := io.Reader(r.Body)
+	if limit > 0 {
+		source = http.MaxBytesReader(w, r.Body, limit)
 	}
-	return true
+	spill := &spillWriter{}
+	n, err := io.Copy(spill, source)
+	if err != nil {
+		spill.close()
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "could not read request body", http.StatusBadRequest)
+		return
+	}
+	body, err := spill.reader()
+	if err != nil {
+		spill.close()
+		http.Error(w, "could not buffer request body", http.StatusInternalServerError)
+		return
+	}
+	r.Body = body
+	r.ContentLength = n
+	r.TransferEncoding = nil
+	r.Header.Del("Expect")
+	defer spill.close()
+	next()
+}
+
+// spillWriter buffers the first bodyMemoryLimit bytes in memory and switches to a 0600 temp file
+// beyond that, so a large upload never grows the heap without bound.
+type spillWriter struct {
+	mem  bytes.Buffer
+	file *os.File
+}
+
+func (s *spillWriter) Write(data []byte) (int, error) {
+	if s.file == nil && s.mem.Len()+len(data) > bodyMemoryLimit {
+		file, err := os.CreateTemp("", "appboss-body-*")
+		if err != nil {
+			return 0, err
+		}
+		if _, err := file.Write(s.mem.Bytes()); err != nil {
+			_ = file.Close()
+			_ = os.Remove(file.Name())
+			return 0, err
+		}
+		s.mem.Reset()
+		s.file = file
+	}
+	if s.file != nil {
+		return s.file.Write(data)
+	}
+	return s.mem.Write(data)
+}
+
+func (s *spillWriter) reader() (io.ReadCloser, error) {
+	if s.file == nil {
+		return io.NopCloser(bytes.NewReader(s.mem.Bytes())), nil
+	}
+	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return s.file, nil
+}
+
+func (s *spillWriter) close() {
+	if s.file == nil {
+		return
+	}
+	name := s.file.Name()
+	_ = s.file.Close()
+	_ = os.Remove(name)
 }
 
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) {

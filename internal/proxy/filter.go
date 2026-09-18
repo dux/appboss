@@ -26,7 +26,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, app super.Snapsh
 // initFilters assembles the pipeline: built-ins, then extra module filters, then the forward
 // stage that ends every request.
 func (h *Handler) initFilters(extra ...Filter) {
-	h.filters = append(h.filters[:0], h.canonical, h.allow, h.authorize, h.maintain, h.staticFiles, h.limitBody)
+	h.filters = append(h.filters[:0], h.canonical, h.allow, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
 	h.filters = append(h.filters, extra...)
 	h.filters = append(h.filters, func(w http.ResponseWriter, r *http.Request, app super.Snapshot, _ func()) {
 		h.forward(w, r, app)
@@ -72,9 +72,6 @@ func (h *Handler) staticFiles(w http.ResponseWriter, r *http.Request, app super.
 	next()
 }
 
-func (h *Handler) limitBody(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
-	if !limitRequest(w, r, int64(app.Web.MaxBody)) {
-		return
-	}
-	next()
+func (h *Handler) bufferBody(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
+	bufferRequest(w, r, int64(app.Web.MaxBody), next)
 }

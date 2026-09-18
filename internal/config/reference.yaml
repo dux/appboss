@@ -219,7 +219,7 @@ defaults:
   # --- Web keys: what nginx or Caddy did in front of the app. App-level only. -------------
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
   # Order per request: canonical redirect -> allow_ips -> basic_auth -> maintenance -> static
-  # -> max_body -> wake or forward -> headers.
+  # -> max_body/body buffer -> wake or forward -> headers.
 
   # Directory served straight from disk for GET and HEAD, relative to the app folder.
   # A missing directory disables static serving for that app, so "./public" is safe globally.
@@ -230,8 +230,9 @@ defaults:
   # Everything else under static gets "public, max-age=3600".
   static_immutable: [/assets/]
 
-  # Request body limit. 0 = none. A Content-Length above it answers 413 before anything is
-  # read; chunked bodies are capped and answer 413 when they overflow.
+  # Request body limit. 0 = none. The body is read in full before the app is contacted
+  # (in memory up to 1m, larger bodies spill to a temp file) so the app never sees a
+  # partial upload. A declared or chunked body over the limit answers 413 without forwarding.
   max_body: 0
 
   # HTTP basic auth: user -> bcrypt hash, generated with `appboss password`. Empty = open.
