@@ -371,6 +371,29 @@ cron:
     schedule: "0 7 * * 1-5"
     command: bundle exec rake report:daily
 
+# Deploy hooks: named one-shot commands a signed HTTP POST can trigger, independent of the app's
+# run state. The ping URL is <management.url>/hooks/<app>/<hook>. Auth is a token: either
+# ?token=<secret> in the URL, Authorization: Bearer <secret>, X-Gitlab-Token: <secret>, or a
+# GitHub X-Hub-Signature-256 HMAC over the raw body. With no secret here, appboss generates a
+# 64-character secret under state_dir on first use; `appboss hooks` prints the full URL.
+hooks:
+  # Hook name, unique in the app; matches [a-z][a-z0-9_-]*.
+  deploy:
+    # Command run once per trigger in the app folder with the app environment (no PORT).
+    command: ./deploy.sh
+    # Kill a run still going after this long. 0 = no limit.
+    timeout: 10m
+    # true restarts the app (or starts it) when the command exits 0.
+    restart: true
+    # false (the default) skips a ping while the previous run is still going.
+    overlap: false
+    # true keeps the hook configured but its endpoint answers 404.
+    disabled: false
+    # Token the caller must present. Keep it out of the committed file: use $DEPLOY_SECRET or
+    # leave it empty and let appboss generate one under state_dir (rotate it with
+    # `appboss hooks rotate`). A secret set here wins over the generated one.
+    secret: $DEPLOY_SECRET
+
 # Procfile behavior:
 #   - Each command is split on whitespace and exec'd directly unless shell: true.
 #   - Each entry becomes unit boss-<app>-<name> and gets its own PORT.

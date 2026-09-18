@@ -21,10 +21,12 @@ import (
 )
 
 type fakeManager struct {
-	snapshots []super.Snapshot
-	logs      map[string][]string
-	actions   []string
-	warnings  []error
+	snapshots   []super.Snapshot
+	logs        map[string][]string
+	actions     []string
+	warnings    []error
+	hooks       map[string][]super.HookInfo
+	hookSecrets map[string]string
 }
 
 func (m *fakeManager) Snapshots() []super.Snapshot {
@@ -72,6 +74,33 @@ func (m *fakeManager) SetMaintenance(app string, on bool) error {
 func (m *fakeManager) RunCron(app, job string) error {
 	m.actions = append(m.actions, fmt.Sprintf("cron-run %s %s", app, job))
 	return nil
+}
+
+func (m *fakeManager) RunHook(app, hook string) error {
+	m.actions = append(m.actions, fmt.Sprintf("hook-run %s %s", app, hook))
+	return nil
+}
+
+func (m *fakeManager) RotateHook(app, hook string) (super.HookInfo, error) {
+	m.actions = append(m.actions, fmt.Sprintf("hook-rotate %s %s", app, hook))
+	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://boss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
+}
+
+func (m *fakeManager) Hooks(app string) ([]super.HookInfo, error) {
+	return m.hooks[app], nil
+}
+
+func (m *fakeManager) HookSecret(app, hook string) (string, error) {
+	secret, ok := m.hookSecrets[app+"/"+hook]
+	if !ok {
+		return "", errors.New("unknown hook")
+	}
+	return secret, nil
+}
+
+func (m *fakeManager) Exec(app string, argv []string, timeout time.Duration) (super.ExecResult, error) {
+	m.actions = append(m.actions, fmt.Sprintf("exec %s %s", app, strings.Join(argv, " ")))
+	return super.ExecResult{Output: "ran\n", ExitCode: 0}, nil
 }
 
 func (m *fakeManager) Rescan() ([]error, error) {

@@ -126,6 +126,8 @@ Apps
   logs          print or follow the process logs of an app
   maintenance   answer every request with the maintenance page while the app keeps running
   cron          list an app's scheduled jobs, or run one now
+  hooks         list an app's deploy hooks, run one, or rotate its secret
+  exec          run a one-off command in the app's environment
 
 Config
   config        validate and print a config file, the resolved config, or the key reference
@@ -198,6 +200,26 @@ Jobs run in the app folder with the app environment, log to their own `cron-<job
 A stopped or idle app still fires its jobs, and there is no catch-up after a daemon restart.
 `appboss cron [app]` lists jobs, next run and last result; `appboss cron run [app] <job>` starts one now; the console card has a **Run** button.
 
+## Deploy hooks
+
+An app can declare one-shot commands a signed HTTP ping triggers, so a Git host webhook can start a deploy without any shell access:
+
+```yaml
+hooks:
+  deploy:
+    command: git -C .. pull --ff-only
+    timeout: 10m
+    restart: true      # restart the app when the command exits 0
+    overlap: false      # skip a ping while the previous run is still going
+    # secret: $DEPLOY_HOOK_SECRET
+```
+
+The ping URL is `https://<management.url>/hooks/<app>/<hook>`. Authentication is a token, accepted as `?token=<secret>` in the URL (paste the whole URL into GitHub), `Authorization: Bearer`, `X-Gitlab-Token`, or a GitHub `X-Hub-Signature-256` HMAC over the raw body. `X-GitHub-Event: ping` (sent when the webhook is created) is acknowledged without running anything.
+
+With no `secret` in the config, appboss generates a 64-character secret under `state_dir/hook-secrets.json` on first use and never writes it to the config. `appboss hooks [app]` lists hooks with their last result and the ready-made ping URL; `appboss hooks run [app] <hook>` starts one now; `appboss hooks rotate [app] <hook>` mints a new secret, invalidating the old URL. Hooks run in the app folder with the app environment, log to a `hook-<name>` channel, and leave the app alone unless `restart: true`.
+
+`appboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes appboss's exit code.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.
@@ -262,6 +284,7 @@ internal/daemon/      one host session: supervisor, modules, proxy, console, con
 internal/module/      module lifecycle (start in order, close in reverse)
 internal/config/      appboss.yaml model, validation, embedded reference.yaml
 internal/apps/        app discovery and the config file store the console edits
+internal/hook/        generated deploy-hook secrets under state_dir
 internal/super/       process supervisor, health checks, idle stop, state files, log writer/seal
 internal/ports/       fixed port allocation inside ports.range
 internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log

@@ -1,7 +1,11 @@
 package console
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +28,7 @@ import (
 )
 
 const maxRequestBody = 1 << 20
+const maxHookBody = 1 << 20
 
 //go:embed static/*
 var assets embed.FS
@@ -117,6 +122,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Hook pings carry their own secret, not a console session, so they are handled first.
+	if strings.HasPrefix(r.URL.Path, "/hooks/") {
+		h.handleHook(w, r)
+		return
+	}
 	session, ok := h.auth.authenticate(w, r)
 	if !ok {
 		return
@@ -165,6 +175,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeText(w, config.Reference)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/keys":
 		writeJSON(w, http.StatusOK, config.Keys())
+	case r.Method == http.MethodGet && r.URL.Path == "/api/hooks":
+		h.hooks(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/hooks/run":
+		h.hookRun(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/hooks/rotate":
+		h.hookRotate(w, r, session)
 	default:
 		http.NotFound(w, r)
 	}
@@ -296,6 +312,132 @@ func (h *Handler) configEffective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeText(w, contents)
+}
+
+// handleHook accepts a signed ping at /hooks/<app>/<hook> and starts the hook. It is the one
+// console route outside the session flow: the Git host cannot carry a session, so the hook's own
+// secret is the credential. The request body is read raw for the GitHub HMAC.
+func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/hooks/")
+	app, hookName, ok := strings.Cut(rest, "/")
+	if !ok || app == "" || hookName == "" || strings.Contains(hookName, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	secret, err := h.service.HookSecret(app, hookName)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !hookAuthorized(r, secret, body) {
+		http.Error(w, "forbidden", http.StatusUnauthorized)
+		return
+	}
+	// GitHub sends a ping event when the webhook is created; acknowledge it without running.
+	if r.Header.Get("X-GitHub-Event") == "ping" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "event": "ping", "app": app, "hook": hookName})
+		return
+	}
+	if err := h.service.RunHook(app, hookName); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "app": app, "hook": hookName})
+}
+
+// hookAuthorized accepts either a GitHub HMAC signature over the raw body or a bearer token in
+// the query, Authorization header or X-Gitlab-Token. Every comparison is constant time.
+func hookAuthorized(r *http.Request, secret string, body []byte) bool {
+	if signature := r.Header.Get("X-Hub-Signature-256"); strings.HasPrefix(signature, "sha256=") {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		expected := hex.EncodeToString(mac.Sum(nil))
+		return hmac.Equal([]byte(expected), []byte(strings.TrimPrefix(signature, "sha256=")))
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		if authorization := r.Header.Get("Authorization"); strings.HasPrefix(authorization, "Bearer ") {
+			token = strings.TrimPrefix(authorization, "Bearer ")
+		}
+	}
+	if token == "" {
+		token = r.Header.Get("X-Gitlab-Token")
+	}
+	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
+}
+
+func (h *Handler) hooks(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	infos, err := h.service.Hooks(app)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hooks": infos, "updated_at": time.Now().UTC()})
+}
+
+func (h *Handler) hookRun(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	request, ok := h.decodeHookAction(w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.RunHook(request.App, request.Hook); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *Handler) hookRotate(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	request, ok := h.decodeHookAction(w, r)
+	if !ok {
+		return
+	}
+	info, err := h.service.RotateHook(request.App, request.Hook)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hook": info})
+}
+
+type hookAction struct {
+	App  string `json:"app"`
+	Hook string `json:"hook"`
+}
+
+func (h *Handler) decodeHookAction(w http.ResponseWriter, r *http.Request) (hookAction, bool) {
+	var request hookAction
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return request, false
+	}
+	request.App, request.Hook = strings.TrimSpace(request.App), strings.TrimSpace(request.Hook)
+	if request.App == "" || request.Hook == "" {
+		writeError(w, http.StatusBadRequest, "app and hook are required")
+		return request, false
+	}
+	return request, true
 }
 
 var yamlLinePattern = regexp.MustCompile(`line (\d+)`)

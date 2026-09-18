@@ -4,6 +4,25 @@
       app: { type: Object, required: true },
     }
 
+    init() {
+      this.state.hookMeta = {}
+    }
+
+    onMount() {
+      this.loadHooks()
+    }
+
+    async loadHooks() {
+      try {
+        const data = await Boss.api(`/api/hooks?app=${encodeURIComponent(this.props.app.name)}`)
+        const meta = {}
+        for (const hook of data.hooks || []) meta[hook.name] = hook
+        this.state.hookMeta = meta
+      } catch (error) {
+        this.state.hookMeta = {}
+      }
+    }
+
     beforeRender() {
       const app = this.props.app
       const host = (app.canonical_host || (app.hosts || [])[0] || '').replace(/^\*?\./, '')
@@ -11,6 +30,7 @@
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.processes = app.processes || []
       this.state.cron = app.cron || []
+      this.state.hooks = (app.hooks || []).map((hook) => ({ ...hook, url: this.state.hookMeta[hook.name]?.url || '', source: this.state.hookMeta[hook.name]?.source || '' }))
       this.state.errorLog = (app.error_log || []).join('\n')
     }
 
@@ -73,6 +93,40 @@
 
     runCron(job) {
       Boss.runAction(this.props.app.name, 'cron-run', { job: job.name })
+    }
+
+    async runHook(hook) {
+      try {
+        await Boss.api('/api/hooks/run', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
+        Toast.show(`${this.props.app.name}: ${hook.name} started`)
+        this.loadHooks()
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async rotateHook(hook) {
+      if (!window.confirm(`Rotate the secret for ${hook.name}? Existing ping URLs stop working.`)) return
+      try {
+        await Boss.api('/api/hooks/rotate', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
+        Toast.show('Secret rotated')
+        this.loadHooks()
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async copy(value) {
+      if (!value) {
+        Toast.show('Set management.url to get a full ping URL', true)
+        return
+      }
+      try {
+        await navigator.clipboard.writeText(value)
+        Toast.show('Ping URL copied')
+      } catch (error) {
+        Toast.show(value)
+      }
     }
   }
 </script>
@@ -192,6 +246,38 @@
             <svg class="icon"><use href="#i-play"></use></svg>
             Run
           </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if state.hooks.length}
+    <div class="service-list">
+      <div class="hook-row hook-head">
+        <span class="subheader">Hook</span>
+        <span class="subheader">Last</span>
+        <span class="subheader">Ping URL</span>
+        <span></span>
+      </div>
+      {#each state.hooks as hook}
+        <div class="hook-row" data-running={hook.running ? 'true' : 'false'}>
+          <span class="service-name">{hook.name}{#if hook.disabled} <span class="text-muted">(disabled)</span>{/if}{#if hook.restart} <span class="text-muted">(restarts)</span>{/if}</span>
+          <span class="service-value">{lastRun(hook)}</span>
+          <span class="hook-url" title={hook.url}>{hook.url || 'management.url not set'}</span>
+          <span class="hook-actions">
+            <button class="btn btn-sm" type="button" onclick={() => fez.copy(hook.url)} disabled={!hook.url} title="Copy the ping URL">
+              <svg class="icon"><use href="#i-file-text"></use></svg>
+              Copy
+            </button>
+            <button class="btn btn-sm" type="button" onclick={() => fez.rotateHook(hook)} disabled={hook.source === 'config'} title={hook.source === 'config' ? 'The secret comes from the config; change it there' : 'Mint a new secret'}>
+              <svg class="icon"><use href="#i-rotate"></use></svg>
+              Rotate
+            </button>
+            <button class="btn btn-sm" type="button" onclick={() => fez.runHook(hook)} disabled={hook.running || hook.disabled} title="Run this hook now">
+              <svg class="icon"><use href="#i-play"></use></svg>
+              Run
+            </button>
+          </span>
         </div>
       {/each}
     </div>

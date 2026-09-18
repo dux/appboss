@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"app-boss/internal/logstore"
 	"app-boss/internal/super"
@@ -29,6 +30,10 @@ const (
 	ActionPorts       = "ports"
 	ActionCron        = "cron"
 	ActionCronRun     = "cron-run"
+	ActionHook        = "hook"
+	ActionHookRun     = "hook-run"
+	ActionHookRotate  = "hook-rotate"
+	ActionExec        = "exec"
 )
 
 // Runtime is the supervisor surface the service drives.
@@ -40,6 +45,11 @@ type Runtime interface {
 	Restart(name string) error
 	SetMaintenance(name string, on bool) error
 	RunCron(name, job string) error
+	RunHook(name, hook string) error
+	RotateHook(name, hook string) (super.HookInfo, error)
+	Hooks(name string) ([]super.HookInfo, error)
+	HookSecret(name, hook string) (string, error)
+	Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
 	Logs(name, process string, lines int) (map[string][]string, error)
@@ -62,12 +72,15 @@ type LogStore interface {
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
 // the console builds it from the HTTP body.
 type Request struct {
-	Method  string `json:"method"`
-	App     string `json:"app,omitempty"`
-	Process string `json:"process,omitempty"`
-	Job     string `json:"job,omitempty"`
-	Lines   int    `json:"lines,omitempty"`
-	On      bool   `json:"on,omitempty"`
+	Method  string        `json:"method"`
+	App     string        `json:"app,omitempty"`
+	Process string        `json:"process,omitempty"`
+	Job     string        `json:"job,omitempty"`
+	Hook    string        `json:"hook,omitempty"`
+	Argv    []string      `json:"argv,omitempty"`
+	Timeout time.Duration `json:"timeout,omitempty"`
+	Lines   int           `json:"lines,omitempty"`
+	On      bool          `json:"on,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -154,6 +167,14 @@ func (s *Service) Do(request Request) (any, error) {
 		return s.Cron(request.App)
 	case ActionCronRun:
 		return nil, s.RunCron(request.App, request.Job)
+	case ActionHook:
+		return s.Hooks(request.App)
+	case ActionHookRun:
+		return nil, s.RunHook(request.App, request.Hook)
+	case ActionHookRotate:
+		return s.RotateHook(request.App, request.Hook)
+	case ActionExec:
+		return s.Exec(request.App, request.Argv, request.Timeout)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -205,6 +226,25 @@ func (s *Service) Cron(name string) ([]super.CronSnapshot, error) {
 
 // RunCron starts one scheduled job now.
 func (s *Service) RunCron(name, job string) error { return s.runtime.RunCron(name, job) }
+
+// Hooks lists an app's deploy hooks with their effective secrets.
+func (s *Service) Hooks(name string) ([]super.HookInfo, error) { return s.runtime.Hooks(name) }
+
+// RunHook starts one deploy hook now.
+func (s *Service) RunHook(name, hook string) error { return s.runtime.RunHook(name, hook) }
+
+// RotateHook mints a new generated secret for one hook and returns it with its URL.
+func (s *Service) RotateHook(name, hook string) (super.HookInfo, error) {
+	return s.runtime.RotateHook(name, hook)
+}
+
+// HookSecret returns the effective secret of one hook, for verifying a ping.
+func (s *Service) HookSecret(name, hook string) (string, error) { return s.runtime.HookSecret(name, hook) }
+
+// Exec runs one command in the app's environment and returns its combined output.
+func (s *Service) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
+	return s.runtime.Exec(name, argv, timeout)
+}
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.
 func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired() }

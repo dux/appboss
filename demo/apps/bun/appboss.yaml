@@ -14,3 +14,8 @@ cron:
     schedule: "0 7 * * *"
     command: ./cron.sh
 
+hooks:
+  deploy:
+    command: ./deploy.sh
+    timeout: 1m
+

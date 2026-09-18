@@ -347,6 +347,7 @@ web/                      starting.html, crashed.html, 404.html, maintenance.htm
 5. **Proxy features.** Canonical host, allow list, basic auth, maintenance mode, static files, body limit, response headers, request id; global-or-per-app config; console config editor.
 6. **Later.** cgroup backend and per-app memory limits.
 7. **Cron.** Per-app `cron:` jobs with `every <interval>` or 5-field cron schedules, run by the supervisor independently of the app's state, logged as a `cron-<job>` channel, with `appboss cron` and a console Run button.
+8. **Deploy hooks.** Per-app `hooks:` with a signed `POST /hooks/<app>/<hook>` on the management host that runs a one-shot command in the app environment and can restart the app on success; the secret comes from the config or is generated under `state_dir`. `appboss hooks` lists, runs and rotates; `appboss exec` runs one-off commands. The command is operator-supplied, so lux-deploy still owns releases.
 
 ## Open questions
 

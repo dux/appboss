@@ -641,6 +641,50 @@ code {
   justify-self: end;
 }
 
+/* --- Hook list (one row per deploy hook) ----------------------------------- */
+
+.hook-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 3fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.hook-row:first-child {
+  border-top: 0;
+}
+
+.hook-row[data-running="true"] {
+  --state-color: var(--success);
+}
+
+.hook-row[data-running="true"] .service-name::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.hook-url {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hook-actions {
+  display: flex;
+  justify-self: end;
+  gap: 6px;
+}
+
 .alert {
   display: flex;
   align-items: flex-start;
@@ -973,12 +1017,13 @@ code {
 
 .keys-search input {
   width: 100%;
-  min-height: 34px;
+  min-height: 38px;
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
   background: var(--card);
+  font-size: 16px;
 }
 
 .keys-search input:focus {

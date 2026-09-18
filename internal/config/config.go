@@ -663,6 +663,21 @@ func validateCron(jobs map[string]CronJob) error {
 	return nil
 }
 
+func validateHooks(hooks map[string]Hook) error {
+	for name, hook := range hooks {
+		if !cronName.MatchString(name) {
+			return keyErr("hooks", "invalid hook name %q", name)
+		}
+		if strings.TrimSpace(hook.Command) == "" {
+			return keyErr("hooks."+name+".command", "must not be empty")
+		}
+		if hook.Timeout < 0 {
+			return keyErr("hooks."+name+".timeout", "cannot be negative")
+		}
+	}
+	return nil
+}
+
 func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, cidr := range cidrs {
@@ -682,6 +697,7 @@ type App struct {
 	CanonicalHost string             `yaml:"canonical_host" json:"canonical_host"`
 	Autostart     bool               `yaml:"autostart" json:"autostart"`
 	Cron          map[string]CronJob `yaml:"cron" json:"cron"`
+	Hooks         map[string]Hook    `yaml:"hooks" json:"hooks"`
 	Defaults      `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
@@ -697,6 +713,19 @@ type CronJob struct {
 	Disabled bool     `yaml:"disabled" json:"disabled"`
 }
 
+// Hook is one named one-shot command triggered by a signed HTTP ping to
+// /hooks/<app>/<hook>. Restart restarts the app when the command exits 0. Secret is the token
+// the caller must present; when empty, appboss generates one under state_dir and it never
+// belongs in the committed config.
+type Hook struct {
+	Command  string   `yaml:"command" json:"command"`
+	Timeout  Duration `yaml:"timeout" json:"timeout"`
+	Restart  bool     `yaml:"restart" json:"restart"`
+	Overlap  bool     `yaml:"overlap" json:"overlap"`
+	Disabled bool     `yaml:"disabled" json:"disabled"`
+	Secret   string   `yaml:"secret" json:"-"`
+}
+
 type appFile struct {
 	Procfile      map[string]string  `yaml:"procfile"`
 	Hosts         List               `yaml:"hosts"`
@@ -704,6 +733,7 @@ type appFile struct {
 	CanonicalHost string             `yaml:"canonical_host"`
 	Autostart     *bool              `yaml:"autostart"`
 	Cron          map[string]CronJob `yaml:"cron"`
+	Hooks         map[string]Hook    `yaml:"hooks"`
 	Overrides     `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -741,7 +771,7 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Cron: raw.Cron, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
 	if raw.WebProcess != "" {
 		app.WebProcess = raw.WebProcess
 	}
@@ -756,6 +786,9 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 		return App{}, err
 	}
 	if err := validateCron(app.Cron); err != nil {
+		return App{}, err
+	}
+	if err := validateHooks(app.Hooks); err != nil {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)

@@ -2,6 +2,7 @@ package super
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 
 	"app-boss/internal/apps"
 	"app-boss/internal/config"
+	"app-boss/internal/hook"
 	"app-boss/internal/ports"
 	"app-boss/internal/res"
 )
@@ -55,6 +57,12 @@ type RequestRates struct {
 	LastDay    int64 `json:"last_day"`
 }
 
+// ExecResult is the combined output and exit code of a one-off command.
+type ExecResult struct {
+	Output   string `json:"output"`
+	ExitCode int    `json:"exit_code"`
+}
+
 type Snapshot struct {
 	Name            string            `json:"name"`
 	State           State             `json:"state"`
@@ -66,6 +74,7 @@ type Snapshot struct {
 	Web             config.Web        `json:"web"`
 	Processes       []ProcessSnapshot `json:"processes"`
 	Cron            []CronSnapshot    `json:"cron,omitempty"`
+	Hooks           []HookSnapshot    `json:"hooks,omitempty"`
 	LastActivity    time.Time         `json:"last_activity,omitempty"`
 	Uptime          string            `json:"uptime,omitempty"`
 	Resources       res.Stats         `json:"resources"`
@@ -84,6 +93,7 @@ type Manager struct {
 	ports           *ports.Allocator
 	backend         res.Backend
 	echo            *Echo
+	secrets         *hook.Store
 	closeOnce       sync.Once
 	mu              sync.RWMutex
 	apps            map[string]*appRuntime
@@ -127,8 +137,12 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	if err != nil {
 		return nil, invalid, err
 	}
+	secrets, err := hook.Open(cfg.StateDir)
+	if err != nil {
+		return nil, invalid, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -136,6 +150,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 		}
 		m.add(ctx, spec)
 	}
+	m.syncHookSecrets(discovered)
 	if cfg.Daemon.ResumeRunning {
 		for name := range desired {
 			if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart {
@@ -188,10 +203,11 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*cronState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, secrets: m.secrets, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	runtime.syncCron(time.Now())
+	runtime.syncHooks()
 	m.apps[spec.Name] = runtime
 	go runtime.loop()
 }
@@ -272,6 +288,144 @@ func (m *Manager) RunCron(name, job string) error {
 		return err
 	}
 	return runtime.call(request{kind: requestCronRun, job: job})
+}
+
+// RunHook starts one deploy hook now, whether the app is running or stopped.
+func (m *Manager) RunHook(name, hookName string) error {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	return runtime.call(request{kind: requestHookRun, hook: hookName})
+}
+
+// Hooks returns every hook of one app with its effective secret. It is the only read path that
+// carries secrets, so it stays off the regular snapshot.
+func (m *Manager) Hooks(name string) ([]HookInfo, error) {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return nil, err
+	}
+	response := runtime.query(request{kind: requestHooks})
+	return response.hooks, response.err
+}
+
+// HookSecret returns the effective secret of one hook, for verifying a ping.
+func (m *Manager) HookSecret(name, hookName string) (string, error) {
+	hooks, err := m.Hooks(name)
+	if err != nil {
+		return "", err
+	}
+	for _, info := range hooks {
+		if info.Name == hookName {
+			if info.Secret == "" {
+				return "", fmt.Errorf("hook %q has no secret", hookName)
+			}
+			return info.Secret, nil
+		}
+	}
+	return "", fmt.Errorf("unknown hook %q", hookName)
+}
+
+// RotateHook mints a new generated secret for one hook and returns the hook with its new URL. A
+// hook whose secret comes from the config is rejected: the operator changes it in the file.
+func (m *Manager) RotateHook(name, hookName string) (HookInfo, error) {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return HookInfo{}, err
+	}
+	response := runtime.query(request{kind: requestHookRotate, hook: hookName})
+	if response.err != nil {
+		return HookInfo{}, response.err
+	}
+	hooks, err := m.Hooks(name)
+	if err != nil {
+		return HookInfo{}, err
+	}
+	for _, info := range hooks {
+		if info.Name == hookName {
+			return info, nil
+		}
+	}
+	return HookInfo{}, fmt.Errorf("unknown hook %q", hookName)
+}
+
+// Exec runs one command in the app's environment and returns its combined output. It resolves
+// the executable against the app PATH, captures both streams and kills the process group on
+// timeout. It runs off the app's goroutine so a slow command cannot stall the supervisor.
+func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecResult, error) {
+	if len(argv) == 0 {
+		return ExecResult{}, errors.New("no command given")
+	}
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	response := runtime.query(request{kind: requestExecInfo})
+	if response.err != nil {
+		return ExecResult{}, response.err
+	}
+	spec := response.app
+	resolved, err := resolveExecutable(argv[0], spec.Dir, spec.Env["PATH"])
+	if err != nil {
+		return ExecResult{}, err
+	}
+	command := exec.Command(resolved, argv[1:]...)
+	command.Dir = spec.Dir
+	command.Env = environment(spec, "exec", 0, m.cfg.Socket, nil)
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		return ExecResult{}, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	var waitErr error
+	select {
+	case waitErr = <-done:
+	case <-time.After(timeout):
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		<-done
+		return ExecResult{Output: output.String(), ExitCode: -1}, fmt.Errorf("command timed out after %s", timeout)
+	}
+	exitCode := 0
+	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	return ExecResult{Output: output.String(), ExitCode: exitCode}, nil
+}
+
+// syncHookSecrets mints and prunes generated hook secrets against the discovered specs, using
+// the same list the runtimes were built from so no running spec is read off its goroutine.
+func (m *Manager) syncHookSecrets(discovered []*apps.App) {
+	if m.secrets == nil {
+		return
+	}
+	live := map[string]map[string]bool{}
+	for _, spec := range discovered {
+		hooks := map[string]bool{}
+		for name, hookConfig := range spec.Hooks {
+			if hookConfig.Disabled {
+				continue
+			}
+			hooks[name] = true
+			if configured, ok := spec.Config.Hooks[name]; ok && configured.Secret != "" {
+				continue
+			}
+			_, _ = m.secrets.Ensure(spec.Name, name)
+		}
+		live[spec.Name] = hooks
+	}
+	_ = m.secrets.Reconcile(live)
 }
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.
@@ -395,6 +549,7 @@ func (m *Manager) Rescan() ([]error, error) {
 		}
 	}
 	m.mu.Unlock()
+	m.syncHookSecrets(discovered)
 	return invalid, nil
 }
 
@@ -545,6 +700,10 @@ const (
 	requestSealLogs
 	requestCron
 	requestCronRun
+	requestHookRun
+	requestHooks
+	requestHookRotate
+	requestExecInfo
 )
 
 type request struct {
@@ -552,6 +711,7 @@ type request struct {
 	reply       chan response
 	processName string
 	job         string
+	hook        string
 	lines       int
 	now         time.Time
 	spec        *apps.App
@@ -561,6 +721,8 @@ type response struct {
 	snapshot    Snapshot
 	logs        map[string][]string
 	sealed      []string
+	hooks       []HookInfo
+	app         *apps.App
 	err         error
 	idleStopped bool
 }
@@ -570,7 +732,7 @@ type response struct {
 type processEvent struct {
 	kind     string
 	proc     *process
-	cron     *cronRun
+	job      *jobRun
 	err      error
 	exitCode int
 }
@@ -599,7 +761,9 @@ type appRuntime struct {
 	events           chan processEvent
 	state            State
 	processes        map[string]*process
-	cron             map[string]*cronState
+	cron             map[string]*jobState
+	hooks            map[string]*jobState
+	secrets          *hook.Store
 	failures         map[string]int
 	lastActivity     time.Time
 	lastError        string
@@ -624,7 +788,7 @@ func (a *appRuntime) loop() {
 	for {
 		select {
 		case <-a.ctx.Done():
-			a.stopCron()
+			a.stopJobs()
 			for _, process := range a.processes {
 				if process.log != nil {
 					_ = process.log.Close()
@@ -669,6 +833,7 @@ func (a *appRuntime) handle(req request) response {
 	case requestUpdate:
 		a.spec = req.spec
 		a.syncCron(time.Now())
+		a.syncHooks()
 	case requestMaintenance:
 		a.maintenance = req.on
 	case requestSealLogs:
@@ -678,8 +843,35 @@ func (a *appRuntime) handle(req request) response {
 		a.cronTick(req.now)
 	case requestCronRun:
 		return response{err: a.runCron(req.job, time.Now())}
+	case requestHookRun:
+		return response{err: a.runHook(req.hook, time.Now())}
+	case requestHooks:
+		return response{hooks: a.hookInfos()}
+	case requestHookRotate:
+		return response{err: a.rotateHook(req.hook)}
+	case requestExecInfo:
+		return response{app: a.spec}
 	}
 	return response{}
+}
+
+// rotateHook mints a new generated secret for one hook. A hook whose secret lives in the config
+// cannot be rotated here.
+func (a *appRuntime) rotateHook(name string) error {
+	if a.hooks[name] == nil {
+		return fmt.Errorf("unknown hook %q", name)
+	}
+	if configured, ok := a.spec.Config.Hooks[name]; ok && configured.Secret != "" {
+		return fmt.Errorf("hook %q uses a secret from the config; change it there", name)
+	}
+	if a.secrets == nil {
+		return errors.New("hook secret store is not available")
+	}
+	secret, err := hook.Generate()
+	if err != nil {
+		return err
+	}
+	return a.secrets.Set(a.spec.Name, name, secret)
 }
 
 // sealLogs renames every process's current log segment aside and opens a fresh one, returning
@@ -699,7 +891,7 @@ func (a *appRuntime) sealLogs() ([]string, error) {
 			sealed = append(sealed, path)
 		}
 	}
-	cronSealed, err := a.sealCronLogs()
+	cronSealed, err := a.sealJobLogs()
 	if err != nil {
 		return sealed, err
 	}
@@ -936,12 +1128,12 @@ func healthCheck(check string, port int, host string, timeout time.Duration) (bo
 }
 
 func (a *appRuntime) handleEvent(event processEvent) {
-	if event.cron != nil {
+	if event.job != nil {
 		switch event.kind {
-		case "cron-exit":
-			a.cronRunExited(event.cron, event.exitCode, event.err)
-		case "cron-timeout":
-			a.cronRunTimeout(event.cron)
+		case "job-exit":
+			a.jobExited(event.job, event.exitCode, event.err)
+		case "job-timeout":
+			a.jobTimeout(event.job)
 		}
 		return
 	}
@@ -1047,7 +1239,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {

@@ -32,6 +32,7 @@ type App struct {
 	Dir      string             `json:"dir"`
 	Commands map[string]Command `json:"commands"`
 	Cron     map[string]CronJob `json:"cron"`
+	Hooks    map[string]Hook    `json:"hooks"`
 	Env      map[string]string  `json:"-"`
 	Config   config.App         `json:"config"`
 }
@@ -43,6 +44,15 @@ type CronJob struct {
 	Timeout  time.Duration     `json:"timeout"`
 	Overlap  bool              `json:"overlap"`
 	Disabled bool              `json:"disabled"`
+}
+
+// Hook is one named one-shot command with its command line parsed once at load time.
+type Hook struct {
+	Command  Command       `json:"command"`
+	Timeout  time.Duration `json:"timeout"`
+	Restart  bool          `json:"restart"`
+	Overlap  bool          `json:"overlap"`
+	Disabled bool          `json:"disabled"`
 }
 
 type ScanError struct {
@@ -211,6 +221,10 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	hooks, err := buildHooks(appCfg.Hooks)
+	if err != nil {
+		return nil, err
+	}
 	env := minimalEnvironment()
 	if _, err := os.Stat(filepath.Join(dir, "mise.toml")); err == nil {
 		mise, miseErr := miseEnvironment(dir)
@@ -227,7 +241,7 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		}
 		merge(env, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Env: env, Config: appCfg}, nil
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Env: env, Config: appCfg}, nil
 }
 
 // buildCron parses every schedule once so the supervisor only has to work with next run times.
@@ -244,6 +258,21 @@ func buildCron(jobs map[string]config.CronJob) (map[string]CronJob, error) {
 			Timeout:  job.Timeout.Value(),
 			Overlap:  job.Overlap,
 			Disabled: job.Disabled,
+		}
+	}
+	return result, nil
+}
+
+// buildHooks parses every hook command once; hooks have no schedule, they only fire on a ping.
+func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
+	result := make(map[string]Hook, len(hooks))
+	for name, hook := range hooks {
+		result[name] = Hook{
+			Command:  Command{Name: name, Line: hook.Command, Argv: strings.Fields(hook.Command)},
+			Timeout:  hook.Timeout.Value(),
+			Restart:  hook.Restart,
+			Overlap:  hook.Overlap,
+			Disabled: hook.Disabled,
 		}
 	}
 	return result, nil

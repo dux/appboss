@@ -80,11 +80,21 @@ func (c CLI) Run(args []string) int {
 		err = c.remote(command, args[1:])
 	}
 	if err != nil {
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			return exitErr.code
+		}
 		fmt.Fprintln(c.Err, "appboss:", err)
 		return 1
 	}
 	return 0
 }
+
+// exitError carries a child process's exit code out of `appboss exec` so it becomes appboss's own
+// exit code, like a shell.
+type exitError struct{ code int }
+
+func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
 
 // configFlag registers -c and --config on set; both write to the same variable.
 func configFlag(set *flag.FlagSet) *string {
@@ -314,6 +324,9 @@ func (c CLI) kill(cfg config.Config, jsonOutput bool) error {
 // remote sends one command to the running host over its control socket. Commands that take an
 // app default to the current folder's app when run inside one.
 func (c CLI) remote(command string, args []string) error {
+	if command == "exec" {
+		return c.exec(args)
+	}
 	opts, err := commonArgs(args)
 	if err != nil {
 		return err
@@ -390,6 +403,28 @@ func (c CLI) remote(command string, args []string) error {
 				return fmt.Errorf("usage: appboss cron <app> (%w)", err)
 			}
 		}
+	case "hooks":
+		hooks := opts.rest
+		if len(hooks) > 0 && (hooks[0] == "run" || hooks[0] == "rotate") {
+			sub, args := hooks[0], hooks[1:]
+			if len(args) == 0 {
+				return fmt.Errorf("usage: appboss hooks %s [app] <hook>", sub)
+			}
+			request.Hook = args[len(args)-1]
+			if sub == "run" {
+				request.Method = ops.ActionHookRun
+			} else {
+				request.Method = ops.ActionHookRotate
+			}
+			if request.App, err = appArgument(args[:len(args)-1], opts.config); err != nil {
+				return fmt.Errorf("usage: appboss hooks %s <app> <hook> (%w)", sub, err)
+			}
+		} else {
+			request.Method = ops.ActionHook
+			if request.App, err = appArgument(hooks, opts.config); err != nil {
+				return fmt.Errorf("usage: appboss hooks <app> (%w)", err)
+			}
+		}
 	}
 	jsonOutput := opts.json
 	var data any
@@ -424,6 +459,18 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = jobs
+	case "hook":
+		var hooks []super.HookInfo
+		if err := client.Call(request, &hooks); err != nil {
+			return err
+		}
+		data = hooks
+	case "hook-rotate":
+		var result map[string]any
+		if err := client.Call(request, &result); err != nil {
+			return err
+		}
+		data = result
 	case "rescan":
 		var result map[string]any
 		if err := client.Call(request, &result); err != nil {
@@ -448,6 +495,99 @@ func (c CLI) remote(command string, args []string) error {
 		return nil
 	}
 	return c.printHuman(request.Method, data)
+}
+
+// exec runs a one-off command. Flags are parsed only before the command starts, so the command's
+// own flags (including -c) reach it untouched.
+func (c CLI) exec(args []string) error {
+	parsed, err := parseExecArgs(args)
+	if err != nil {
+		return err
+	}
+	path, err := findConfig(parsed.configPath)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	app, command := "", parsed.rest
+	if cfg.App != nil {
+		app = filepath.Base(cfg.Dir)
+	} else {
+		if len(parsed.rest) < 2 {
+			return errors.New("usage: appboss exec [app] <command> [args...]")
+		}
+		if _, lookupErr := apps.Lookup(cfg, parsed.rest[0]); lookupErr != nil {
+			return fmt.Errorf("usage: appboss exec <app> <command> (%w)", lookupErr)
+		}
+		app, command = parsed.rest[0], parsed.rest[1:]
+	}
+	if len(command) == 0 {
+		return errors.New("usage: appboss exec [app] <command> [args...]")
+	}
+	resolved, err := findSocket(parsed.socket, parsed.configPath)
+	if err != nil {
+		return err
+	}
+	client := ctl.Client{Socket: resolved}
+	var result super.ExecResult
+	if err := client.Call(ctl.Request{Method: ops.ActionExec, App: app, Argv: command, Timeout: parsed.timeout}, &result); err != nil {
+		return err
+	}
+	if parsed.json {
+		encoded, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	fmt.Fprint(c.Out, result.Output)
+	if result.ExitCode != 0 {
+		return &exitError{code: result.ExitCode}
+	}
+	return nil
+}
+
+type execOptions struct {
+	socket     string
+	configPath string
+	timeout    time.Duration
+	json       bool
+	rest       []string
+}
+
+// parseExecArgs reads the shared flags until the first positional, which begins the command.
+func parseExecArgs(args []string) (execOptions, error) {
+	var options execOptions
+	for index := 0; index < len(args); {
+		switch args[index] {
+		case "--json":
+			options.json = true
+			index++
+		case "--socket", "-c", "--config", "--timeout":
+			if index+1 >= len(args) {
+				return options, fmt.Errorf("%s requires a value", args[index])
+			}
+			value := args[index+1]
+			switch args[index] {
+			case "--socket":
+				options.socket = value
+			case "--timeout":
+				parsed, err := time.ParseDuration(value)
+				if err != nil {
+					return options, fmt.Errorf("invalid --timeout %q", value)
+				}
+				options.timeout = parsed
+			default:
+				options.configPath = value
+			}
+			index += 2
+		default:
+			options.rest = args[index:]
+			index = len(args)
+		}
+	}
+	return options, nil
 }
 
 // flagsFirst moves flags ahead of positional arguments so `appboss config app -d` and
@@ -592,6 +732,35 @@ func (c CLI) printHuman(method string, data any) error {
 			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, job.Schedule, next, last, job.Command)
 		}
 		return writer.Flush()
+	case "hook":
+		hooks := data.([]super.HookInfo)
+		if len(hooks) == 0 {
+			fmt.Fprintln(c.Out, "no hooks")
+			return nil
+		}
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "HOOK\tSOURCE\tLAST\tCOMMAND\tURL")
+		for _, hook := range hooks {
+			last := "-"
+			switch {
+			case hook.Running:
+				last = "running"
+			case hook.LastError != "":
+				last = hook.LastError
+			case !hook.LastEnd.IsZero():
+				last = fmt.Sprintf("exit %d at %s", hook.LastExit, hook.LastEnd.Format("15:04"))
+			}
+			name := hook.Name
+			if hook.Disabled {
+				name += " (disabled)"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, hook.Source, last, hook.Command, hook.URL)
+		}
+		return writer.Flush()
+	case "hook-rotate":
+		info := data.(map[string]any)["hook"].(map[string]any)
+		fmt.Fprintln(c.Out, "rotated; new ping URL:")
+		fmt.Fprintln(c.Out, info["url"])
 	case "rescan":
 		result := data.(map[string]any)
 		invalid, _ := result["invalid"].([]any)

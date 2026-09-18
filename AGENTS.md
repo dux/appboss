@@ -59,6 +59,13 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * The config editor keeps the textarea and gutter under `fez:keep` and drives them with direct DOM writes; typing must never re-render the component.
 * Check components with `bun ~/dev/gems/fez/bin/fez compile 'internal/console/static/fez/*.fez'` and then look at the real page in a browser.
 
+## Deploy hooks and one-off commands
+
+* Hooks are named one-shot commands under `hooks:` in the app file, triggered by a signed POST to `/hooks/<app>/<hook>` on the management host. The endpoint lives in `./internal/console/console.go:handleHook` and runs before the session auth; its own secret is the credential (query token, bearer, `X-Gitlab-Token`, or a GitHub HMAC over the raw body).
+* A hook with no config `secret` gets a 64-character generated one in `state_dir/hook-secrets.json`, owned by `./internal/hook`. The config secret wins; `RotateHook` rejects a config secret. `hookInfos` is the only path that carries secrets and is kept off the regular snapshot.
+* Hooks reuse the cron runner (`jobState`/`jobRun` in `./internal/super/cron.go`); both live in `a.cron` and `a.hooks`. Output goes to a `hook-<name>` channel. `restart: true` restarts (or starts) the app after a clean exit.
+* `appboss exec` runs off the app goroutine via `Manager.Exec`; it only reads the immutable spec through `requestExecInfo`, so a slow command cannot stall the supervisor.
+
 ## Console auth
 
 * `./internal/console/auth.go` holds both sign-in paths: AuthCog (admins only) and `appboss login` (`/login?token=`, 3 minutes, single use, signs in as `cli@localhost`).

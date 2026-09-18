@@ -3,6 +3,7 @@ package ops
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"app-boss/internal/logstore"
 	"app-boss/internal/super"
@@ -51,6 +52,30 @@ func (f *fakeRuntime) SetMaintenance(name string, on bool) error {
 func (f *fakeRuntime) RunCron(name, job string) error {
 	f.actions = append(f.actions, "cron-run "+name+"/"+job)
 	return nil
+}
+
+func (f *fakeRuntime) RunHook(name, hook string) error {
+	f.actions = append(f.actions, "hook-run "+name+"/"+hook)
+	return nil
+}
+
+func (f *fakeRuntime) RotateHook(name, hook string) (super.HookInfo, error) {
+	f.actions = append(f.actions, "hook-rotate "+name+"/"+hook)
+	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, URL: "https://boss.example.com/hooks/" + name + "/" + hook}, nil
+}
+
+func (f *fakeRuntime) Hooks(name string) ([]super.HookInfo, error) {
+	f.actions = append(f.actions, "hook "+name)
+	return []super.HookInfo{{HookSnapshot: super.HookSnapshot{Name: "deploy"}}}, nil
+}
+
+func (f *fakeRuntime) HookSecret(name, hook string) (string, error) {
+	return "secret", nil
+}
+
+func (f *fakeRuntime) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
+	f.actions = append(f.actions, "exec "+name)
+	return super.ExecResult{Output: "ok", ExitCode: 0}, nil
 }
 
 func (f *fakeRuntime) Rescan() ([]error, error) {

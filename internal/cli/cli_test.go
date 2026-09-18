@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"app-boss/internal/config"
 	"golang.org/x/crypto/bcrypt"
@@ -32,6 +33,25 @@ func TestCommonArgsExtractsSharedFlags(t *testing.T) {
 	}
 	if _, err := commonArgs([]string{"--config"}); err == nil {
 		t.Fatal("expected missing path error")
+	}
+}
+
+func TestParseExecArgsStopsAtTheCommand(t *testing.T) {
+	options, err := parseExecArgs([]string{"--timeout", "5m", "-c", "host.yaml", "demo", "/bin/sh", "-c", "exit 3", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.timeout != 5*time.Minute || options.configPath != "host.yaml" || options.json {
+		t.Fatalf("unexpected options: %+v", options)
+	}
+	if strings.Join(options.rest, "|") != "demo|/bin/sh|-c|exit 3|--json" {
+		t.Fatalf("rest = %v", options.rest)
+	}
+	if _, err := parseExecArgs([]string{"--config"}); err == nil {
+		t.Fatal("expected missing value error")
+	}
+	if _, err := parseExecArgs([]string{"--timeout", "soon", "cmd"}); err == nil {
+		t.Fatal("expected bad duration error")
 	}
 }
 
