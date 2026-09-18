@@ -15,6 +15,22 @@ The design documents are `./doc/plan.md` (v1) and `./doc/plan-v2.md` (proxy feat
 * Linux for production, macOS for development.
 * Nothing else at runtime: the binary embeds the console assets and the configuration reference.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dux/appboss/main/install.sh | sh
+```
+
+The installer asks GitHub for the latest release, downloads the `linux` or `darwin` binary for the machine's architecture (`amd64` or `arm64`), verifies it against the release checksums and installs it as `/usr/local/bin/appboss`.
+Set `APPBOSS_INSTALL_DIR` to change the target, or `APPBOSS_VERSION` (for example `v0.1.0`) to pin a release:
+
+```sh
+APPBOSS_INSTALL_DIR=$HOME/bin APPBOSS_VERSION=v0.1.0 \
+  curl -fsSL https://raw.githubusercontent.com/dux/appboss/main/install.sh | sh
+```
+
+Releases are built by `.github/workflows/release.yml` on every `v*` tag push; building from source is still the option below and needs Go 1.25+.
+
 ## Build and run the demo
 
 ```sh
