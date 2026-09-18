@@ -34,6 +34,9 @@ var commands = []command{
 	{name: "kill", args: "[-c path]", group: "Host session", summary: "stop every app and terminate every listener left in ports.range",
 		details: []string{"Asks the running host to stop each app, then kills whatever still listens in the range. Use it to clean up after a crash or a stray process."},
 		options: []option{configOption, jsonOption}},
+	{name: "login", args: "", group: "Host session", summary: "print a one-time console URL that signs you in as cli@localhost",
+		details: []string{"The link is valid for 3 minutes and works once. It needs management.host to be set in the host config."},
+		options: []option{socketOption, configOption, jsonOption}},
 
 	{name: "ls", args: "", group: "Apps", summary: "list apps with state, ports, uptime, last activity and memory",
 		details: []string{"STATE shows stopped, starting, running, stopping or crashed, plus `maintenance` while the app answers with the maintenance page."},

@@ -32,6 +32,11 @@ const (
 	authStateTTL        = 5 * time.Minute
 	maxAuthChallenges   = 4096
 	maxAuthResponseSize = 1 << 20
+	// `dboss login` mints a one-time link for a local operator; the session it creates belongs
+	// to cliEmail, which AuthCog can never vouch for.
+	cliLoginPath = "/login"
+	cliEmail     = "cli@localhost"
+	cliTokenTTL  = 3 * time.Minute
 )
 
 type authProfile struct {
@@ -59,6 +64,7 @@ type authenticator struct {
 	exchange   func(context.Context, string, string) (authProfile, error)
 	mu         sync.Mutex
 	challenges map[string]authChallenge
+	cliTokens  map[string]time.Time
 }
 
 func newAuthenticator(cfg config.Config) (*authenticator, error) {
@@ -94,6 +100,10 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 			return authSession{}, false
 		}
 		a.callback(w, r)
+		return authSession{}, false
+	}
+	if r.URL.Path == cliLoginPath {
+		a.cliLogin(w, r)
 		return authSession{}, false
 	}
 	if session, ok := a.validSession(r); ok {
@@ -183,6 +193,49 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, challenge.RedirectTo, http.StatusSeeOther)
 }
 
+// issueCLIToken returns a fresh single-use login token that expires after cliTokenTTL.
+func (a *authenticator) issueCLIToken() (string, error) {
+	token, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cliTokens == nil {
+		a.cliTokens = map[string]time.Time{}
+	}
+	for key, expiresAt := range a.cliTokens {
+		if !expiresAt.After(now) {
+			delete(a.cliTokens, key)
+		}
+	}
+	a.cliTokens[token] = now.Add(cliTokenTTL)
+	return token, nil
+}
+
+func (a *authenticator) cliLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	a.mu.Lock()
+	expiresAt, ok := a.cliTokens[token]
+	delete(a.cliTokens, token)
+	a.mu.Unlock()
+	if token == "" || !ok || !expiresAt.After(time.Now()) {
+		http.Error(w, "login link is invalid or expired; run dboss login again", http.StatusBadRequest)
+		return
+	}
+	if err := a.setSessionCookie(w, r, cliEmail); err != nil {
+		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (a *authenticator) exchangeProfile(ctx context.Context, destination, callback string) (authProfile, error) {
 	exchangeURL := url.URL{Scheme: "https", Host: a.cfg.Realm, Path: destination}
 	query := exchangeURL.Query()
@@ -253,7 +306,10 @@ func (a *authenticator) validSession(r *http.Request) (authSession, bool) {
 		return authSession{}, false
 	}
 	var session authSession
-	if json.Unmarshal(payload, &session) != nil || session.CSRF == "" || session.ExpiresAt <= time.Now().Unix() || !a.admins[strings.ToLower(session.Email)] {
+	if json.Unmarshal(payload, &session) != nil || session.CSRF == "" || session.ExpiresAt <= time.Now().Unix() {
+		return authSession{}, false
+	}
+	if email := strings.ToLower(session.Email); !a.admins[email] && email != cliEmail {
 		return authSession{}, false
 	}
 	return session, true

@@ -7,7 +7,9 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -52,11 +54,12 @@ type ConfigStore interface {
 }
 
 type Handler struct {
-	manager AppManager
-	rates   RateReader
-	store   ConfigStore
-	auth    *authenticator
-	static  fs.FS
+	manager   AppManager
+	rates     RateReader
+	store     ConfigStore
+	auth      *authenticator
+	static    fs.FS
+	loginPort string
 }
 
 type dashboard struct {
@@ -105,7 +108,23 @@ func New(cfg config.Config, manager AppManager, rates RateReader, store ConfigSt
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static}, nil
+	_, loginPort, _ := net.SplitHostPort(cfg.Proxy.Listen)
+	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static, loginPort: loginPort}, nil
+}
+
+// LoginURL mints a one-time link for `dboss login`. It points at the management host on the
+// proxy's port, the same way a browser on this machine reaches the console.
+func (h *Handler) LoginURL() (string, error) {
+	token, err := h.auth.issueCLIToken()
+	if err != nil {
+		return "", err
+	}
+	host := h.auth.host
+	if h.loginPort != "" && h.loginPort != "80" {
+		host += ":" + h.loginPort
+	}
+	link := url.URL{Scheme: "http", Host: host, Path: cliLoginPath, RawQuery: "token=" + url.QueryEscape(token)}
+	return link.String(), nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

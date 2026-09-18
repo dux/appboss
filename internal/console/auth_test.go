@@ -12,6 +12,84 @@ import (
 	"deploy-boss/internal/config"
 )
 
+func TestCLILoginLinkSignsInOnce(t *testing.T) {
+	auth := &authenticator{
+		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
+		host:       "boss.lvh.me",
+		key:        []byte("01234567890123456789012345678901"),
+		admins:     map[string]bool{"admin@example.com": true},
+		challenges: map[string]authChallenge{},
+	}
+	handler := &Handler{auth: auth, loginPort: "8080"}
+	link, err := handler.LoginURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "http://boss.lvh.me:8080/login?token=") {
+		t.Fatalf("unexpected login URL: %s", link)
+	}
+
+	loginRequest := httptest.NewRequest(http.MethodGet, link, nil)
+	loginResponse := httptest.NewRecorder()
+	if _, ok := auth.authenticate(loginResponse, loginRequest); ok {
+		t.Fatal("login request reached the console")
+	}
+	if loginResponse.Code != http.StatusSeeOther || loginResponse.Header().Get("Location") != "/" {
+		t.Fatalf("unexpected login response: %d %s", loginResponse.Code, loginResponse.Header().Get("Location"))
+	}
+	sessionCookie := cookieNamed(t, loginResponse.Result().Cookies(), authSessionCookie)
+
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8080/", nil)
+	authorizedRequest.AddCookie(sessionCookie)
+	session, ok := auth.authenticate(httptest.NewRecorder(), authorizedRequest)
+	if !ok || session.Email != cliEmail {
+		t.Fatalf("cli session was not accepted: %+v %v", session, ok)
+	}
+
+	reusedResponse := httptest.NewRecorder()
+	auth.authenticate(reusedResponse, httptest.NewRequest(http.MethodGet, link, nil))
+	if reusedResponse.Code != http.StatusBadRequest {
+		t.Fatalf("reused link status = %d", reusedResponse.Code)
+	}
+
+	expired, err := auth.issueCLIToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.cliTokens[expired] = time.Now().Add(-time.Second)
+	expiredResponse := httptest.NewRecorder()
+	auth.authenticate(expiredResponse, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8080/login?token="+url.QueryEscape(expired), nil))
+	if expiredResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expired link status = %d", expiredResponse.Code)
+	}
+}
+
+func TestAuthCogRejectsCLIEmail(t *testing.T) {
+	auth := &authenticator{
+		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
+		host:       "boss.lvh.me",
+		key:        []byte("01234567890123456789012345678901"),
+		admins:     map[string]bool{"admin@example.com": true},
+		challenges: map[string]authChallenge{},
+	}
+	auth.exchange = func(_ context.Context, _, _ string) (authProfile, error) {
+		return authProfile{Email: cliEmail}, nil
+	}
+	response := httptest.NewRecorder()
+	auth.authenticate(response, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil))
+	login, err := url.Parse(response.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackRequest := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/authcog?callback=verified-callback&state="+url.QueryEscape(login.Query().Get("state")), nil)
+	callbackRequest.AddCookie(cookieNamed(t, response.Result().Cookies(), authStateCookie))
+	callbackResponse := httptest.NewRecorder()
+	auth.authenticate(callbackResponse, callbackRequest)
+	if callbackResponse.Code != http.StatusForbidden {
+		t.Fatalf("AuthCog callback with %s status = %d", cliEmail, callbackResponse.Code)
+	}
+}
+
 func TestAuthCogLoginAndSession(t *testing.T) {
 	auth := &authenticator{
 		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},

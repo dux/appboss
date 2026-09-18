@@ -146,17 +146,24 @@ func (c CLI) start(args []string) error {
 	}
 	requestLogs := reqlog.New(cfg.LogDir, cfg.Defaults.LogFlush.Value())
 	defer requestLogs.Close()
-	control, err := ctl.Listen(cfg.Socket, manager, requestLogs)
+	var edge http.Handler
+	var management *console.Handler
+	if cfg.Proxy.Listen != "" {
+		if edge, management, err = edgeHandler(cfg, manager, requestLogs); err != nil {
+			return err
+		}
+	}
+	var login func() (string, error)
+	if management != nil {
+		login = management.LoginURL
+	}
+	control, err := ctl.Listen(cfg.Socket, manager, requestLogs, login)
 	if err != nil {
 		return err
 	}
 	defer control.Close()
 	var servers []*http.Server
-	if cfg.Proxy.Listen != "" {
-		edge, management, err := edgeHandler(cfg, manager, requestLogs)
-		if err != nil {
-			return err
-		}
+	if edge != nil {
 		server, err := startHTTPServer("proxy", cfg.Proxy.Listen, edge)
 		if err != nil {
 			return err
@@ -197,20 +204,21 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 
 // edgeHandler is the single public listener: Cloudflare hands it the full request and the
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
-// The console handler is returned as well so it can be served on its own port.
-func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, http.Handler, error) {
+// The console handler is returned as well so it can be served on its own port and mint
+// login links; it is nil when the console is not enabled.
+func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, *console.Handler, error) {
 	appProxy, err := proxy.New(cfg, manager, requestLogs)
 	if err != nil {
 		return nil, nil, err
 	}
-	var handler, management http.Handler = appProxy, nil
+	var handler http.Handler = appProxy
+	var management *console.Handler
 	if cfg.Management.Enabled() {
-		consoleHandler, err := console.New(cfg, manager, requestLogs, apps.NewStore(cfg))
+		management, err = console.New(cfg, manager, requestLogs, apps.NewStore(cfg))
 		if err != nil {
 			return nil, nil, fmt.Errorf("management console: %w", err)
 		}
-		management = consoleHandler
-		handler = proxy.HostSwitch(cfg.Management.Host, consoleHandler, appProxy)
+		handler = proxy.HostSwitch(cfg.Management.Host, management, appProxy)
 	}
 	edge, err := proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
 	return edge, management, err
@@ -446,7 +454,7 @@ func (c CLI) remote(command string, args []string) error {
 		request.Method = "start"
 	}
 	switch command {
-	case "ls", "rescan", "ports":
+	case "ls", "rescan", "ports", "login":
 		if len(opts.rest) != 0 {
 			return fmt.Errorf("usage: dboss %s", command)
 		}
@@ -525,6 +533,12 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = result
+	case "login":
+		var result map[string]string
+		if err := client.Call(request, &result); err != nil {
+			return err
+		}
+		data = result
 	default:
 		if err := client.Call(request, nil); err != nil {
 			return err
@@ -595,6 +609,9 @@ func (c CLI) printHuman(method string, data any) error {
 		if keys, _ := result["restart_required"].([]any); len(keys) > 0 {
 			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart dboss, or Ctrl-C and dboss start)\n", joinAny(keys))
 		}
+	case "login":
+		fmt.Fprintln(c.Out, data.(map[string]string)["url"])
+		fmt.Fprintln(c.Out, "Opens the console as cli@localhost. Valid for 3 minutes, one use.")
 	default:
 		fmt.Fprintln(c.Out, "ok")
 	}

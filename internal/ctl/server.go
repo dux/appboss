@@ -18,9 +18,12 @@ type Server struct {
 	listener net.Listener
 	manager  *super.Manager
 	logs     *reqlog.Manager
+	login    func() (string, error)
 }
 
-func Listen(path string, manager *super.Manager, logs *reqlog.Manager) (*Server, error) {
+// Listen serves the control socket. login mints a console login link and is nil when the
+// management console is not enabled.
+func Listen(path string, manager *super.Manager, logs *reqlog.Manager, login func() (string, error)) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
@@ -42,7 +45,7 @@ func Listen(path string, manager *super.Manager, logs *reqlog.Manager) (*Server,
 		_ = listener.Close()
 		return nil, err
 	}
-	server := &Server{path: path, listener: listener, manager: manager, logs: logs}
+	server := &Server{path: path, listener: listener, manager: manager, logs: logs, login: login}
 	go server.serve()
 	return server, nil
 }
@@ -122,6 +125,14 @@ func (s *Server) dispatch(request Request) Response {
 		data, err = s.manager.Logs(request.App, request.Process, request.Lines)
 	case "ports":
 		data = s.manager.Ports()
+	case "login":
+		if s.login == nil {
+			err = errors.New("management console is not enabled: set management.host in the host config")
+			break
+		}
+		var link string
+		link, err = s.login()
+		data = map[string]string{"url": link}
 	default:
 		err = fmt.Errorf("unknown method %q", request.Method)
 	}
