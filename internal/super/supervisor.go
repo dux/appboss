@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -68,6 +69,7 @@ type Snapshot struct {
 	Name            string            `json:"name"`
 	State           State             `json:"state"`
 	Maintenance     bool              `json:"maintenance"`
+	Draining        bool              `json:"draining,omitempty"`
 	Dir             string            `json:"dir"`
 	Hosts           []string          `json:"hosts"`
 	CanonicalHost   string            `json:"canonical_host,omitempty"`
@@ -105,6 +107,8 @@ type Manager struct {
 	desired         map[string]bool
 	maintenance     map[string]bool
 	activities      map[string]time.Time
+	inflightMu      sync.Mutex
+	inflight        map[string]*atomic.Int64
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -149,7 +153,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -251,6 +255,7 @@ func (m *Manager) Stop(name string) error {
 	if err != nil {
 		return err
 	}
+	m.drain(runtime, name)
 	if err := runtime.call(request{kind: requestStop}); err != nil {
 		return err
 	}
@@ -262,10 +267,57 @@ func (m *Manager) Restart(name string) error {
 	if err != nil {
 		return err
 	}
+	m.drain(runtime, name)
 	if err := runtime.call(request{kind: requestRestart}); err != nil {
 		return err
 	}
 	return m.setDesired(name, true)
+}
+
+// drain marks the app as draining so the proxy stops sending new requests, then waits for the
+// in-flight ones to finish, bounded by the host stop_timeout. It runs on the caller's goroutine,
+// never the app's, so snapshots stay responsive while it waits.
+func (m *Manager) drain(runtime *appRuntime, name string) {
+	if err := runtime.call(request{kind: requestDrain, on: true}); err != nil {
+		return
+	}
+	timeout := m.cfg.Defaults.StopTimeout.Value()
+	if timeout <= 0 {
+		return
+	}
+	counter := m.traffic(name)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if counter.Load() == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Enter registers one in-flight proxied request and returns the counter Leave expects.
+func (m *Manager) Enter(name string) *atomic.Int64 {
+	counter := m.traffic(name)
+	counter.Add(1)
+	return counter
+}
+
+// Leave clears one in-flight request.
+func (m *Manager) Leave(counter *atomic.Int64) {
+	if counter != nil {
+		counter.Add(-1)
+	}
+}
+
+func (m *Manager) traffic(name string) *atomic.Int64 {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	counter := m.inflight[name]
+	if counter == nil {
+		counter = &atomic.Int64{}
+		m.inflight[name] = counter
+	}
+	return counter
 }
 
 // Wake starts an app on behalf of the proxy and reports a failed start, which an explicit run or
@@ -726,6 +778,7 @@ const (
 	requestHooks
 	requestHookRotate
 	requestExecInfo
+	requestDrain
 )
 
 type request struct {
@@ -792,6 +845,7 @@ type appRuntime struct {
 	lastError        string
 	lastErrorProcess string
 	maintenance      bool
+	draining         bool
 	closed           chan struct{}
 }
 
@@ -834,9 +888,13 @@ func (a *appRuntime) handle(req request) response {
 	switch req.kind {
 	case requestStart:
 		return response{err: a.start()}
+	case requestDrain:
+		a.draining = req.on
 	case requestStop:
+		a.draining = false
 		return response{err: a.stop()}
 	case requestRestart:
+		a.draining = false
 		if err := a.stop(); err != nil {
 			return response{err: err}
 		}
@@ -927,7 +985,8 @@ func (a *appRuntime) start() error {
 	}
 	a.failures = map[string]int{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
-	for name, command := range a.spec.Commands {
+	for _, name := range a.startOrder() {
+		command := a.spec.Commands[name]
 		port, err := a.allocator.Allocate(a.spec.Name, name)
 		if err != nil {
 			a.lastErrorProcess = name
@@ -945,6 +1004,23 @@ func (a *appRuntime) start() error {
 		go a.readiness(web, a.spec.Config.Process(web.name), a.webHost())
 	}
 	return nil
+}
+
+// startOrder lists the processes in the order start spawns them: the web process first, then the
+// rest by name, so a web process that expects earlier setup still gets it. Port assignment is
+// unaffected because assignPorts keeps its own name order.
+func (a *appRuntime) startOrder() []string {
+	names := slices.Sorted(maps.Keys(a.spec.Commands))
+	web := a.spec.Config.WebProcess
+	for index, name := range names {
+		if name != web || index == 0 {
+			continue
+		}
+		copy(names[1:index+1], names[0:index])
+		names[0] = name
+		break
+	}
+	return names
 }
 
 // webHost is the Host header the readiness probe and proxy use for the web process.
@@ -1277,7 +1353,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Autostart: a.spec.Config.Autostart, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Autostart: a.spec.Config.Autostart, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {

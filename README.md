@@ -245,6 +245,14 @@ notify:
 
 `crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up, `wake-failed` a request that could not start a stopped app, and `hook-failed` a deploy hook that exited non-zero. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
 
+## Restarts and forwarded headers
+
+`appboss stop` and `appboss restart` (and the console buttons) first mark the app **draining**: the proxy answers new requests with `503` and `Retry-After`, while requests already in flight finish, bounded by `stop_timeout`. Only then does the supervisor send `stop_signal` to the process group. The app card shows a `draining` badge and `appboss ls` prints it in the state.
+
+On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Real-IP` when they are missing; whatever Cloudflare sent is left untouched. `X-Forwarded-For` is appended by the reverse proxy.
+
+An app's processes start with the `web_process` first, then the rest in name order, so a web process that expects other services to be up still gets that.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.

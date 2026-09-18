@@ -37,6 +37,8 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * `./internal/daemon` is the only place a session is assembled: supervisor, `module.Manager`, proxy, console and control socket. `cli.start` loads the config and calls `daemon.Build`/`Run`. Register a new module there, not in the CLI.
 * A long-running feature implements `module.Module` (`Name`, `Start`, `Close`) in `./internal/module`. `logstore.Store` and `./internal/ingest` are the current modules.
 * The proxy pipeline is an ordered `[]proxy.Filter` built in `proxy.initFilters`. A new request filter is a function of that shape, inserted before the forward stage; the built-ins live in `./internal/proxy/filter.go`.
+* `Manager.Stop`/`Restart` drain first: `requestDrain` sets the snapshot's `Draining`, new requests get 503, and `Manager.drain` waits on the per-app in-flight counter (`Manager.Enter`/`Leave`) up to the host `stop_timeout`. Draining runs off the app goroutine, so snapshots stay responsive.
+* `forward` adds `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Real-IP` only when missing, so Cloudflare's values win. `startOrder` spawns `web_process` first, then the rest by name; `assignPorts` keeps its own name order.
 * Actions reachable from both the CLI and the console belong on `ops.Service` (`./internal/ops`), not in either transport.
 
 ## Health and metrics

@@ -140,12 +140,21 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if chunkedResponse.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("chunked body over max_body: %d %s", chunkedResponse.Code, chunkedResponse.Body.String())
 	}
+	forwarded := httptest.NewRequest(http.MethodGet, "http://demo.test/headers", nil)
+	forwarded.Host = "demo.test"
+	forwarded.Header.Set("CF-Connecting-IP", "203.0.113.9")
+	forwardedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(forwardedResponse, forwarded)
+	forwardedBody, _ := io.ReadAll(forwardedResponse.Result().Body)
+	if forwardedResponse.Code != http.StatusOK || string(forwardedBody) != "proto=http;host=demo.test;real=203.0.113.9" {
+		t.Fatalf("forwarded headers = %d %q", forwardedResponse.Code, forwardedBody)
+	}
 	time.Sleep(30 * time.Millisecond)
 	rates, err := requestLogs.Rates("demo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rates.LastMinute != 3 {
+	if rates.LastMinute != 4 {
 		t.Fatalf("requests were not logged: %+v", rates)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "appboss.sqlite"))
@@ -211,6 +220,9 @@ func TestProxyHelperProcess(t *testing.T) {
 			return
 		}
 		_, _ = io.WriteString(w, "uploaded")
+	})
+	http.HandleFunc("/headers", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "proto=%s;host=%s;real=%s", r.Header.Get("X-Forwarded-Proto"), r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Real-IP"))
 	})
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {

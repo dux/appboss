@@ -266,6 +266,11 @@ func (s *spillWriter) close() {
 }
 
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) {
+	// A draining app is stopping or restarting: answer new requests now, let in-flight ones run.
+	if snapshot.Draining {
+		h.unavailablePage(w, r, h.starting, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
+		return
+	}
 	if snapshot.State != super.Running {
 		if snapshot.State == super.Stopped {
 			go h.manager.Wake(snapshot.Name)
@@ -289,7 +294,10 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 		return
 	}
 	h.manager.Touch(snapshot.Name)
+	h.applyForwardedHeaders(r)
 	target := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(port)}
+	counter := h.manager.Enter(snapshot.Name)
+	defer h.manager.Leave(counter)
 	reverse := httputil.NewSingleHostReverseProxy(target)
 	reverse.Transport = h.transport
 	reverse.ModifyResponse = func(response *http.Response) error {
@@ -306,6 +314,34 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	}
 	reverse.ServeHTTP(w, r)
 	h.manager.Touch(snapshot.Name)
+}
+
+// applyForwardedHeaders adds the headers an app expects from a reverse proxy, but never
+// overrides what Cloudflare already sent.
+func (h *Handler) applyForwardedHeaders(r *http.Request) {
+	if r.Header.Get("X-Forwarded-Proto") == "" {
+		r.Header.Set("X-Forwarded-Proto", requestScheme(r))
+	}
+	if r.Header.Get("X-Forwarded-Host") == "" {
+		r.Header.Set("X-Forwarded-Host", r.Host)
+	}
+	if r.Header.Get("X-Real-IP") == "" {
+		if ip := clientIP(r, h.cfg.Proxy.ClientIPHeaders); ip != "" {
+			r.Header.Set("X-Real-IP", ip)
+		}
+	}
+}
+
+// requestScheme is the public scheme of the request: X-Forwarded-Proto when Cloudflare set it,
+// else TLS, else plain HTTP.
+func requestScheme(r *http.Request) string {
+	if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); proto != "" {
+		return strings.ToLower(proto)
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // applyHeaders sets the configured response headers; an empty value removes the header instead.

@@ -345,7 +345,7 @@ func (h *Handler) healthz(w http.ResponseWriter) {
 func (h *Handler) readyz(w http.ResponseWriter) {
 	var notReady []string
 	for _, app := range h.service.Apps() {
-		if app.Autostart && app.State != super.Running {
+		if app.Autostart && (app.State != super.Running || app.Draining) {
 			notReady = append(notReady, app.Name+"="+string(app.State))
 		}
 	}

@@ -350,6 +350,7 @@ web/                      starting.html, crashed.html, 404.html, maintenance.htm
 8. **Deploy hooks.** Per-app `hooks:` with a signed `POST /hooks/<app>/<hook>` on the management host that runs a one-shot command in the app environment and can restart the app on success; the secret comes from the config or is generated under `state_dir`. `appboss hooks` lists, runs and rotates; `appboss exec` runs one-off commands. The command is operator-supplied, so lux-deploy still owns releases.
 9. **Health and metrics.** `/healthz`, `/readyz` and Prometheus `/metrics` on the management host, rendered from the same snapshots the console shows (`./internal/metrics`); `management.metrics.enabled` and `.token` gate them.
 10. **Notifications.** A host `notify:` webhook posts `crash`, `restart-loop`, `health-timeout`, `wake-failed` and `hook-failed` events with per-app debounce, best-effort and off the supervisor goroutine (`./internal/notify`); counts show up as `appboss_notifications_total`.
+11. **Draining and forwarded headers.** Stop/restart marks an app draining so the proxy stops sending new requests while in-flight ones finish, bounded by `stop_timeout`; the proxy fills in `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Real-IP` when missing; processes start web-first.
 
 ## Open questions
 

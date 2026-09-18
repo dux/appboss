@@ -38,6 +38,21 @@ func serveFeature(t *testing.T, handler *Handler, snapshot super.Snapshot, reque
 	return response
 }
 
+func TestDrainingAppAnswers503(t *testing.T) {
+	snapshot := featureSnapshot(t, "")
+	snapshot.Draining = true
+	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	request.Host = "demo.test"
+	request.Header.Set("Accept", "text/html")
+	response := serveFeature(t, featureHandler(), snapshot, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("draining status = %d: %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Fatal("draining response is missing Retry-After")
+	}
+}
+
 func TestCanonicalHostRedirect(t *testing.T) {
 	snapshot := featureSnapshot(t, "canonical_host: demo.test\n")
 	request := httptest.NewRequest(http.MethodGet, "http://www.demo.test:8080/path?x=1", nil)

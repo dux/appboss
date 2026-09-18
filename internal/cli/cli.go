@@ -680,6 +680,9 @@ func (c CLI) printHuman(method string, data any) error {
 				last = snapshot.LastActivity.Format(time.RFC3339)
 			}
 			state := string(snapshot.State)
+			if snapshot.Draining {
+				state += " draining"
+			}
 			if snapshot.Maintenance {
 				state += " maintenance"
 			}
