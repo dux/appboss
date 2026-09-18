@@ -506,6 +506,9 @@ func (c CLI) printHuman(method string, data any) error {
 		for _, snapshot := range data.([]super.Snapshot) {
 			var values []string
 			for _, process := range snapshot.Processes {
+				if process.State != super.Running {
+					continue
+				}
 				values = append(values, fmt.Sprintf("%s:%d", process.Name, process.Port))
 			}
 			last := "-"

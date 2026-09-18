@@ -85,7 +85,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := ensureRequestID(r)
 	recorder := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 	h.serve(recorder, r, snapshot)
-	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID})
+	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: snapshot.WebProcess})
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
@@ -284,7 +284,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	}
 	port := 0
 	for _, process := range snapshot.Processes {
-		if process.Name == snapshot.WebProcess {
+		if process.Name == snapshot.WebProcess && process.State == super.Running {
 			port = process.Port
 			break
 		}

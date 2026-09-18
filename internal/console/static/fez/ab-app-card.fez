@@ -117,28 +117,28 @@
       <span class="subheader">Requests / hour</span>
       <span class="datagrid-content">{number(props.app.request_rates?.last_hour)}</span>
     </div>
+  </div>
+
+  <div class="service-list">
+    <div class="service-row service-head">
+      <span class="subheader">Service</span>
+      <span class="subheader">State</span>
+      <span class="subheader">Port</span>
+      <span class="subheader">PID</span>
+      <span class="subheader">Restarts</span>
+      <span class="subheader">Memory</span>
+    </div>
     {#each state.processes as process}
-      <div class="datagrid-item">
-        <span class="subheader">Process</span>
-        <span class="datagrid-content">{process.name}</span>
-      </div>
-      <div class="datagrid-item">
-        <span class="subheader">Port</span>
-        <span class="datagrid-content">{process.port || '-'}</span>
-      </div>
-      <div class="datagrid-item">
-        <span class="subheader">PID</span>
-        <span class="datagrid-content">{process.pid || '-'}</span>
-      </div>
-      <div class="datagrid-item">
-        <span class="subheader">Restarts</span>
-        <span class="datagrid-content">{process.restarts || 0}</span>
+      <div class="service-row" data-state={process.state}>
+        <span class="service-name">{process.name}</span>
+        <span class="badge">{process.state}</span>
+        <span class="service-value">{process.port || '-'}</span>
+        <span class="service-value">{process.pid || '-'}</span>
+        <span class="service-value">{process.restarts || 0}</span>
+        <span class="service-value">{bytes(process.memory_bytes)}</span>
       </div>
     {:else}
-      <div class="datagrid-item">
-        <span class="subheader">Process</span>
-        <span class="datagrid-content text-muted">No active processes</span>
-      </div>
+      <div class="service-row service-empty text-muted">No services in the procfile</div>
     {/each}
   </div>
 </article>

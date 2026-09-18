@@ -66,6 +66,10 @@ func TestChannelsFilterAndPruneBySource(t *testing.T) {
 	waitForLogs(t, func() ([]LogEntry, error) {
 		return store.SearchLogs("demo", LogFilter{Channel: "file:production.log"})
 	})
+	if err := store.Record("demo", time.Hour, RequestEntry{Time: now, Method: "GET", Host: "demo.test", Path: "/", Status: 200, Process: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() ([]RequestEntry, error) { return store.SearchRequests("demo", RequestFilter{Process: "web"}) })
 
 	channels, err := store.Channels("demo")
 	if err != nil {
@@ -75,7 +79,7 @@ func TestChannelsFilterAndPruneBySource(t *testing.T) {
 	for _, channel := range channels {
 		ids[channel.ID] = true
 	}
-	for _, want := range []string{"request", "stdout", "file:production.log"} {
+	for _, want := range []string{"request:web", "stdout:web", "file:production.log"} {
 		if !ids[want] {
 			t.Fatalf("missing channel %q in %+v", want, channels)
 		}
@@ -133,13 +137,13 @@ func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 	for _, channel := range tree[0].Channels {
 		ids[channel.ID] = true
 	}
-	for _, want := range []string{"request", "stdout", "file:production.log"} {
+	for _, want := range []string{"stdout:web", "file:production.log"} {
 		if !ids[want] {
 			t.Fatalf("missing channel %q in %+v", want, tree[0].Channels)
 		}
 	}
-	if tree[1].Name != "ghost" || tree[1].Bytes != 0 || len(tree[1].Channels) != 2 {
-		t.Fatalf("ghost should be empty request/stdout: %+v", tree[1])
+	if tree[1].Name != "ghost" || tree[1].Bytes != 0 || len(tree[1].Channels) != 0 {
+		t.Fatalf("ghost should have no channels: %+v", tree[1])
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ghost", "appboss.sqlite")); !os.IsNotExist(err) {
 		t.Fatalf("tree should not create ghost: %v", err)

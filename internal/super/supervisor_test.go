@@ -72,8 +72,53 @@ func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, _ := manager.Snapshot("demo")
-	if snapshot.State != Stopped || len(snapshot.Processes) != 0 {
+	if snapshot.State != Stopped || len(snapshot.Processes) != 1 {
 		t.Fatalf("app did not stop: %+v", snapshot)
+	}
+	service := snapshot.Processes[0]
+	if service.Name != "web" || service.State != Stopped || service.PID != 0 || service.Port != 32100 {
+		t.Fatalf("stopped app should still list its procfile service: %+v", service)
+	}
+}
+
+func TestSnapshotListsEveryProcfileService(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "apps", "demo")
+	if err := os.MkdirAll(appDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte("procfile:\n  web: /usr/bin/true\n  job: /usr/bin/true\nautostart: false\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Apps = filepath.Join(root, "apps")
+	cfg.StateDir = filepath.Join(root, "state")
+	cfg.LogDir = filepath.Join(root, "log")
+	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Ports.Range = [2]int{32600, 32620}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	snapshot, err := manager.Snapshot("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Processes) != 2 {
+		t.Fatalf("stopped app should list both procfile services: %+v", snapshot.Processes)
+	}
+	// Processes follow the sorted procfile names, and ports are assigned in the same order.
+	if snapshot.Processes[0].Name != "job" || snapshot.Processes[1].Name != "web" {
+		t.Fatalf("unexpected service order: %+v", snapshot.Processes)
+	}
+	for _, service := range snapshot.Processes {
+		if service.State != Stopped || service.PID != 0 {
+			t.Fatalf("service not stopped: %+v", service)
+		}
+	}
+	if snapshot.Processes[0].Port != 32600 || snapshot.Processes[1].Port != 32601 {
+		t.Fatalf("reserved ports missing: %+v", snapshot.Processes)
 	}
 }
 

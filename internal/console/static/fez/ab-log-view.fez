@@ -9,15 +9,13 @@
     init(props) {
       this.state.page = Boolean(props.page)
       this.state.app = props.app || ''
-      this.state.channel = props.channel || 'stdout'
+      this.state.channel = props.channel || ''
       this.state.range = '1h'
       this.state.level = ''
-      this.state.process = ''
       this.state.method = ''
       this.state.status = ''
       this.state.query = ''
       this.state.tree = []
-      this.state.open = {}
       this.state.rows = []
       this.state.kind = 'log'
       this.state.loaded = false
@@ -34,7 +32,6 @@
         this.state.level = Pjax.qs('level') || ''
         this.state.method = Pjax.qs('method') || ''
         this.state.status = Pjax.qs('status') || ''
-        this.state.process = Pjax.qs('process') || ''
         this.state.query = Pjax.qs('q') || ''
       }
     }
@@ -48,13 +45,12 @@
       clearTimeout(this.state.queryTimer)
     }
 
-    // Process and search inputs are fez:keep-style fields: typing must not fight a re-render.
+    // The search input is a fez:keep-style field: typing must not fight a re-render.
     afterRender() {
       this.syncValue(this.state.rangeNode, this.state.range)
       this.syncValue(this.state.levelNode, this.state.level)
       this.syncValue(this.state.methodNode, this.state.method)
       this.syncValue(this.state.statusNode, this.state.status)
-      this.syncValue(this.state.processNode, this.state.process)
       this.syncValue(this.state.queryNode, this.state.query)
     }
 
@@ -76,13 +72,10 @@
         const data = await Boss.api('/api/log/tree')
         this.state.tree = data.apps || []
         const names = this.state.tree.map((group) => group.name)
-        if (!this.state.app && names.length) this.state.app = names[0]
+        if (!names.includes(this.state.app)) this.state.app = names[0] || ''
         const group = this.state.tree.find((entry) => entry.name === this.state.app)
         const ids = (group?.channels || []).map((channel) => channel.id)
-        if (ids.length && !ids.includes(this.state.channel)) this.state.channel = ids[0]
-        if (this.state.app && !this.state.open[this.state.app]) {
-          this.state.open = { ...this.state.open, [this.state.app]: true }
-        }
+        if (!ids.includes(this.state.channel)) this.state.channel = ids[0] || ''
         this.state.error = ''
       } catch (error) {
         this.state.error = error.message
@@ -106,28 +99,40 @@
       return name === '_appboss' ? 'Host (appboss)' : name
     }
 
-    toggleApp(index) {
-      const group = this.state.tree[index]
-      if (!group) return
-      const open = { ...this.state.open }
-      open[group.name] = !open[group.name]
-      this.state.open = open
+    // serviceLabel adds the fixed port to a service channel, so two processes with different
+    // outputs are told apart by more than their name.
+    serviceLabel(channel, appName) {
+      const id = channel.id
+      const request = id.startsWith('request:')
+      const stdout = id.startsWith('stdout:')
+      if (!request && !stdout) return channel.label
+      const processName = id.slice(request ? 8 : 7)
+      const app = (this.globalState.apps || []).find((entry) => entry.name === appName)
+      const process = (app?.processes || []).find((entry) => entry.name === processName)
+      const label = request ? `${processName} requests` : processName
+      return process?.port ? `${label} :${process.port}` : label
     }
 
-    pickLog(appIndex, channelIndex) {
+    isRequest() {
+      return this.state.channel === 'request' || this.state.channel.startsWith('request:')
+    }
+
+    pickService(appIndex, channelIndex) {
       const group = this.state.tree[appIndex]
       const channel = group?.channels?.[channelIndex]
       if (!group || !channel) return
-      if (!this.state.open[group.name]) this.state.open = { ...this.state.open, [group.name]: true }
       if (this.state.app === group.name && this.state.channel === channel.id) return
       this.state.app = group.name
       this.state.channel = channel.id
-      this.state.process = ''
+      this.resetFilters()
+      this.load()
+    }
+
+    resetFilters() {
       this.state.level = ''
       this.state.method = ''
       this.state.status = ''
       this.state.expandedKey = ''
-      this.load()
     }
 
     rangeMs() {
@@ -149,7 +154,6 @@
         if (since) params.set('since', since)
         if (this.state.query) params.set('q', this.state.query)
         if (this.state.level) params.set('level', this.state.level)
-        if (this.state.process) params.set('process', this.state.process)
         if (this.state.method) params.set('method', this.state.method)
         if (this.state.status) params.set('status', this.state.status)
         if (append && this.state.before) params.set('before', this.state.before)
@@ -194,15 +198,6 @@
       this.load()
     }
 
-    pickProcess(value) {
-      this.state.process = value.trim()
-      this.load()
-    }
-
-    pickProcessKey(event) {
-      if (event.key === 'Enter') this.pickProcess(event.target.value)
-    }
-
     pickMethod(value) {
       this.state.method = value
       this.load()
@@ -230,7 +225,6 @@
 
     clearFilters() {
       this.state.level = ''
-      this.state.process = ''
       this.state.method = ''
       this.state.status = ''
       this.state.query = ''
@@ -280,7 +274,6 @@
       if (since) params.set('since', since)
       if (this.state.query) params.set('q', this.state.query)
       if (this.state.level) params.set('level', this.state.level)
-      if (this.state.process) params.set('process', this.state.process)
       if (this.state.method) params.set('method', this.state.method)
       if (this.state.status) params.set('status', this.state.status)
       return `/logs.txt?${params}`
@@ -291,7 +284,6 @@
       this.setQs('channel', this.state.channel)
       this.setQs('range', this.state.range === '1h' ? '' : this.state.range)
       this.setQs('level', this.state.level)
-      this.setQs('process', this.state.process)
       this.setQs('method', this.state.method)
       this.setQs('status', this.state.status)
       this.setQs('q', this.state.query)
@@ -324,19 +316,18 @@
   <nav class="log-nav" aria-label="Apps">
     {#each state.tree as group, appIndex}
       <div class="log-nav-group">
-        <button class="log-nav-app" class:open={state.open[group.name]} class:current={group.name === state.app} type="button" aria-expanded={state.open[group.name] ? 'true' : 'false'} onclick="fez.toggleApp({appIndex})">
-          <span class="log-nav-chevron" aria-hidden="true"></span>
+        <div class="log-nav-app" class:current={group.name === state.app}>
           <span class="log-nav-name">{appLabel(group.name)}</span>
           <span class="log-nav-size">{bytes(group.bytes)}</span>
-        </button>
-        <div class="log-nav-fold" class:open={state.open[group.name]}>
-          <div class="log-nav-logs">
-            {#each group.channels as channel, channelIndex}
-              <button class="log-nav-log" class:active={group.name === state.app && channel.id === state.channel} type="button" onclick="fez.pickLog({appIndex},{channelIndex})">
-                {channel.label}
-              </button>
-            {/each}
-          </div>
+        </div>
+        <div class="log-nav-logs">
+          {#each group.channels as channel, channelIndex}
+            <button class="log-nav-log" class:active={group.name === state.app && channel.id === state.channel} type="button" onclick="fez.pickService({appIndex},{channelIndex})">
+              {serviceLabel(channel, group.name)}
+            </button>
+          {:else}
+            <span class="log-nav-empty text-muted">No logs</span>
+          {/each}
         </div>
       </div>
     {:else}
@@ -351,7 +342,7 @@
           <option value={option[0]} selected={option[0] === state.range}>{option[1]}</option>
         {/each}
       </select>
-      {#if state.channel === 'request'}
+      {#if isRequest()}
         <select class="log-control" fez:this="methodNode" aria-label="Method" onchange="fez.pickMethod(this.value)">
           <option value="">Any method</option>
           {#each ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as method}
@@ -378,9 +369,6 @@
         <svg class="icon"><use href="#i-search"></use></svg>
         <input fez:this="queryNode" placeholder="Search (prefix match)" oninput="fez.queueSearch()" onkeydown="fez.searchKey(event)">
       </label>
-      {#if state.channel === 'stdout'}
-        <input class="log-control log-process-input" fez:this="processNode" placeholder="Process" onchange="fez.pickProcess(this.value)" onkeydown="fez.pickProcessKey(event)">
-      {/if}
       <button class="btn btn-sm" type="button" onclick="fez.clearFilters()">Clear</button>
       <span class="log-spacer"></span>
       <button class="btn btn-sm" type="button" onclick="fez.load()" title="Refresh (r)">

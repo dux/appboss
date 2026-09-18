@@ -20,7 +20,7 @@ import (
 
 const queueSize = 4096
 
-// RequestEntry is one proxied request.
+// RequestEntry is one proxied request. Process is the service that answered it.
 type RequestEntry struct {
 	Time       time.Time `json:"time"`
 	Method     string    `json:"method"`
@@ -32,6 +32,7 @@ type RequestEntry struct {
 	IP         string    `json:"ip"`
 	UserAgent  string    `json:"user_agent"`
 	RequestID  string    `json:"request_id"`
+	Process    string    `json:"process"`
 }
 
 // LogEntry is one line of an app's process output.
@@ -91,9 +92,11 @@ type LogFilter struct {
 }
 
 // RequestFilter narrows SearchRequests. Query matches host, path, ip or user agent. Status is an
-// exact code; StatusClass (200, 300, 400 or 500) matches a whole class.
+// exact code; StatusClass (200, 300, 400 or 500) matches a whole class. Process selects the
+// service that answered.
 type RequestFilter struct {
 	Method      string
+	Process     string
 	Status      int
 	StatusClass int
 	Query       string
@@ -225,6 +228,9 @@ func (s *Store) writer(app string) (*appWriter, error) {
 			return nil, err
 		}
 	}
+	// Databases written before requests carried a process are missing the column; the log cache is
+	// disposable but a failed insert would silently drop rows, so add it in place once.
+	_, _ = db.Exec(`ALTER TABLE requests ADD COLUMN process TEXT NOT NULL DEFAULT ''`)
 	w := &appWriter{db: db, entries: make(chan entry, queueSize), stop: make(chan struct{}), done: make(chan struct{})}
 	s.apps[app] = w
 	go w.loop(s.flush)
@@ -234,8 +240,9 @@ func (s *Store) writer(app string) (*appWriter, error) {
 var schema = []string{
 	`PRAGMA journal_mode=WAL`,
 	`PRAGMA busy_timeout=5000`,
-	`CREATE TABLE IF NOT EXISTS requests (ts TEXT NOT NULL, method TEXT NOT NULL, host TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, bytes_out INTEGER NOT NULL, ip TEXT NOT NULL, ua TEXT NOT NULL, request_id TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS requests (ts TEXT NOT NULL, method TEXT NOT NULL, host TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, bytes_out INTEGER NOT NULL, ip TEXT NOT NULL, ua TEXT NOT NULL, request_id TEXT NOT NULL DEFAULT '', process TEXT NOT NULL DEFAULT '')`,
 	`CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts)`,
+	`CREATE INDEX IF NOT EXISTS requests_process ON requests(process)`,
 	`CREATE TABLE IF NOT EXISTS logs (ts TEXT NOT NULL, source TEXT NOT NULL, process TEXT NOT NULL, stream TEXT NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL, request_id TEXT NOT NULL, raw TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts)`,
 	`CREATE INDEX IF NOT EXISTS logs_process ON logs(process)`,
@@ -299,13 +306,13 @@ func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry) error {
 		return err
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 		for _, e := range requests {
-			if _, err := statement.Exec(stamp(e.Time), e.Method, e.Host, e.Path, e.Status, e.DurationMS, e.BytesOut, e.IP, e.UserAgent, e.RequestID); err != nil {
+			if _, err := statement.Exec(stamp(e.Time), e.Method, e.Host, e.Path, e.Status, e.DurationMS, e.BytesOut, e.IP, e.UserAgent, e.RequestID, e.Process); err != nil {
 				_ = statement.Close()
 				_ = tx.Rollback()
 				return err
@@ -345,16 +352,22 @@ func (s *Store) SearchLogs(app string, filter LogFilter) ([]LogEntry, error) {
 	}
 	where := []string{}
 	args := []any{}
+	channelProcess := false
 	if filter.Channel != "" {
 		if path, ok := strings.CutPrefix(filter.Channel, "file:"); ok {
 			where = append(where, "logs.source = 'file'", "logs.process = ?")
 			args = append(args, path)
+			channelProcess = true
+		} else if name, ok := strings.CutPrefix(filter.Channel, "stdout:"); ok {
+			where = append(where, "logs.source = 'stdout'", "logs.process = ?")
+			args = append(args, name)
+			channelProcess = true
 		} else {
 			where = append(where, "logs.source = ?")
 			args = append(args, filter.Channel)
 		}
 	}
-	if filter.Process != "" {
+	if filter.Process != "" && !channelProcess {
 		where = append(where, "logs.process = ?")
 		args = append(args, filter.Process)
 	}
@@ -416,6 +429,10 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 		where = append(where, "method = ?")
 		args = append(args, filter.Method)
 	}
+	if filter.Process != "" {
+		where = append(where, "process = ?")
+		args = append(args, filter.Process)
+	}
 	if filter.Status != 0 {
 		where = append(where, "status = ?")
 		args = append(args, filter.Status)
@@ -437,7 +454,7 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 		like := "%" + filter.Query + "%"
 		args = append(args, like, like, like, like)
 	}
-	query := `SELECT ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id FROM requests`
+	query := `SELECT ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process FROM requests`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -452,7 +469,7 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	for rows.Next() {
 		var e RequestEntry
 		var ts string
-		if err := rows.Scan(&ts, &e.Method, &e.Host, &e.Path, &e.Status, &e.DurationMS, &e.BytesOut, &e.IP, &e.UserAgent, &e.RequestID); err != nil {
+		if err := rows.Scan(&ts, &e.Method, &e.Host, &e.Path, &e.Status, &e.DurationMS, &e.BytesOut, &e.IP, &e.UserAgent, &e.RequestID, &e.Process); err != nil {
 			return nil, err
 		}
 		e.Time, _ = time.Parse(time.RFC3339Nano, ts)
@@ -462,7 +479,8 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 }
 
 // Channels lists the log types an app has. The reserved HostApp exposes only the appboss daemon
-// log; every real app exposes the request table, process stdout and one channel per app log file.
+// log; every real app exposes the request table, one channel per service that wrote stdout, and one
+// channel per app log file.
 func (s *Store) Channels(app string) ([]Channel, error) {
 	return s.channelsFor(app)
 }
@@ -485,8 +503,22 @@ func (s *Store) channelsFor(app string) ([]Channel, error) {
 	if app == HostApp {
 		return []Channel{{ID: "appboss", Label: "appboss"}}, nil
 	}
-	channels := []Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}}
-	files, err := s.fileProcesses(app)
+	channels := []Channel{}
+	requesters, err := s.distinct(app, `SELECT DISTINCT process FROM requests WHERE process <> '' ORDER BY process`)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range requesters {
+		channels = append(channels, Channel{ID: "request:" + name, Label: name + " requests"})
+	}
+	services, err := s.distinct(app, `SELECT DISTINCT process FROM logs WHERE source = 'stdout' ORDER BY process`)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range services {
+		channels = append(channels, Channel{ID: "stdout:" + name, Label: name})
+	}
+	files, err := s.distinct(app, `SELECT DISTINCT process FROM logs WHERE source = 'file' ORDER BY process`)
 	if err != nil {
 		return nil, err
 	}
@@ -509,12 +541,13 @@ func (s *Store) diskBytes(app string) int64 {
 	return total
 }
 
-func (s *Store) fileProcesses(app string) ([]string, error) {
+// distinct runs a single-column query against the app database, without creating one.
+func (s *Store) distinct(app, query string) ([]string, error) {
 	s.mu.Lock()
 	w := s.apps[app]
 	s.mu.Unlock()
 	if w != nil {
-		return queryFileProcesses(w.db)
+		return queryValues(w.db, query)
 	}
 	path := filepath.Join(s.dir, app, "appboss.sqlite")
 	if _, err := os.Stat(path); err != nil {
@@ -528,24 +561,24 @@ func (s *Store) fileProcesses(app string) ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	return queryFileProcesses(db)
+	return queryValues(db, query)
 }
 
-func queryFileProcesses(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`SELECT DISTINCT process FROM logs WHERE source = 'file' ORDER BY process`)
+func queryValues(db *sql.DB, query string) ([]string, error) {
+	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var files []string
+	var values []string
 	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
+		var value string
+		if err := rows.Scan(&value); err != nil {
 			return nil, err
 		}
-		files = append(files, path)
+		values = append(values, value)
 	}
-	return files, rows.Err()
+	return values, rows.Err()
 }
 
 // TailOffsets returns every tracked app log file for app, keyed by absolute path.

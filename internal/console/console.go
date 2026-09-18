@@ -376,8 +376,12 @@ func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	channel := channelParam(r)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if channel == "request" {
-		entries, err := h.service.SearchRequests(app, requestFilter(r, 5000))
+	if process, ok := requestProcess(channel); ok {
+		filter := requestFilter(r, 5000)
+		if process != "" {
+			filter.Process = process
+		}
+		entries, err := h.service.SearchRequests(app, filter)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -428,8 +432,12 @@ func (h *Handler) logSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "app is required")
 		return
 	}
-	if channelParam(r) == "request" {
-		entries, err := h.service.SearchRequests(app, requestFilter(r, 200))
+	if process, ok := requestProcess(channelParam(r)); ok {
+		filter := requestFilter(r, 200)
+		if process != "" {
+			filter.Process = process
+		}
+		entries, err := h.service.SearchRequests(app, filter)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -471,6 +479,7 @@ func requestFilter(r *http.Request, fallback int) logstore.RequestFilter {
 	status, class := statusParam(query.Get("status"))
 	return logstore.RequestFilter{
 		Method:      strings.TrimSpace(query.Get("method")),
+		Process:     strings.TrimSpace(query.Get("process")),
 		Status:      status,
 		StatusClass: class,
 		Query:       strings.TrimSpace(query.Get("q")),
@@ -478,6 +487,18 @@ func requestFilter(r *http.Request, fallback int) logstore.RequestFilter {
 		Before:      sinceParam(query.Get("before")),
 		Limit:       limitParam(query.Get("limit"), fallback),
 	}
+}
+
+// requestProcess reads a request channel id: "request" means every service, "request:<process>"
+// means one.
+func requestProcess(channel string) (string, bool) {
+	if channel == "request" {
+		return "", true
+	}
+	if name, ok := strings.CutPrefix(channel, "request:"); ok {
+		return name, true
+	}
+	return "", false
 }
 
 // statusParam reads "404" as an exact code and "4xx" as a class.

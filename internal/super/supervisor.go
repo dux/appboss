@@ -39,12 +39,14 @@ const (
 )
 
 type ProcessSnapshot struct {
-	Name      string    `json:"name"`
-	Command   string    `json:"command"`
-	PID       int       `json:"pid,omitempty"`
-	Port      int       `json:"port"`
-	Restarts  int       `json:"restarts"`
-	StartedAt time.Time `json:"started_at,omitempty"`
+	Name        string    `json:"name"`
+	Command     string    `json:"command"`
+	State       State     `json:"state"`
+	PID         int       `json:"pid,omitempty"`
+	Port        int       `json:"port"`
+	Restarts    int       `json:"restarts"`
+	MemoryBytes int64     `json:"memory_bytes,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
 }
 
 type RequestRates struct {
@@ -982,20 +984,32 @@ func (a *appRuntime) snapshot() Snapshot {
 		}
 		result.ErrorLog, _ = tail(filepath.Join(a.cfg.LogDir, a.spec.Name, processName+".log"), failureLogLines)
 	}
-	pids := make([]int, 0, len(a.processes))
+	// Every procfile service is listed so the console can show the full set even while stopped;
+	// only live processes carry a pid and count toward uptime and resource stats.
+	total := res.Stats{Approximate: true}
 	var earliest time.Time
-	for _, p := range a.processes {
-		result.Processes = append(result.Processes, ProcessSnapshot{Name: p.name, Command: p.command.Line, PID: p.pid, Port: p.port, Restarts: a.failures[p.name], StartedAt: p.startedAt})
-		pids = append(pids, p.pid)
-		if earliest.IsZero() || p.startedAt.Before(earliest) {
-			earliest = p.startedAt
+	for _, name := range slices.Sorted(maps.Keys(a.spec.Commands)) {
+		entry := ProcessSnapshot{Name: name, Command: a.spec.Commands[name].Line, State: Stopped, Restarts: a.failures[name]}
+		if port, ok := a.allocator.Lookup(a.spec.Name, name); ok {
+			entry.Port = port
 		}
+		if p := a.processes[name]; p != nil {
+			entry.State = Running
+			entry.PID, entry.Port, entry.StartedAt = p.pid, p.port, p.startedAt
+			stats, _ := a.backend.Stats([]int{p.pid})
+			entry.MemoryBytes = stats.MemoryBytes
+			total.MemoryBytes += stats.MemoryBytes
+			total.CPUPercent += stats.CPUPercent
+			if earliest.IsZero() || p.startedAt.Before(earliest) {
+				earliest = p.startedAt
+			}
+		}
+		result.Processes = append(result.Processes, entry)
 	}
-	sort.Slice(result.Processes, func(i, j int) bool { return result.Processes[i].Name < result.Processes[j].Name })
 	if !earliest.IsZero() {
 		result.Uptime = time.Since(earliest).Round(time.Second).String()
 	}
-	result.Resources, _ = a.backend.Stats(pids)
+	result.Resources = total
 	return result
 }
 
