@@ -30,7 +30,7 @@
 #   single mode) -> per app: appboss.local.yaml or appboss.yaml, .env, .env.local
 #   -> validate each app (an invalid app is reported and skipped, it does not stop the session)
 #   -> terminate listeners in ports.range -> assign one fixed port per (app, proctype)
-#   -> start apps that were running before -> listen.
+#   -> start apps that were running before and have autostart: true -> listen.
 
 # =============================================================================
 # PART 1: <host>/appboss.yaml
@@ -261,8 +261,9 @@ defaults:
 daemon:
   # How often the idle-stop ticker runs.
   idle_tick: 1m
-  # On daemon start, restart apps that running.json says were running before.
-  # Without a running.json yet (first start) every discovered app is started.
+  # On daemon start, restart apps that running.json says were running before
+  # and have autostart: true. Without a running.json yet (first start) every
+  # discovered app with autostart: true is started.
   resume_running: true
   # Daily prune of logs and request rows older than log_retention, at this local time.
   prune_at: "04:10"
@@ -298,6 +299,10 @@ hosts:
 
 # Which proctype receives proxied traffic. Only one. Default: web.
 web_process: web
+
+# Start this app when the host starts. false leaves it stopped until `appboss run`,
+# the console, or the first proxied request. A host restart does not bring it back.
+autostart: true
 
 # Optional. Must be one of hosts. Requests for any other host of this app answer 301 to
 # <scheme>://<canonical_host><path?query>; the scheme follows X-Forwarded-Proto, default https.

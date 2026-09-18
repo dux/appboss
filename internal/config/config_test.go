@@ -105,6 +105,33 @@ func TestLoadAppRequiresProcfileAndRejectsHostKeys(t *testing.T) {
 	}
 }
 
+func TestParseAppAutostart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	omitted, err := ParseApp([]byte("procfile:\n  web: ./server\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !omitted.Autostart {
+		t.Fatalf("omitted autostart = %v, want true", omitted.Autostart)
+	}
+	off, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: false\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Autostart {
+		t.Fatalf("autostart: false = %v, want false", off.Autostart)
+	}
+	on, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: true\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.Autostart {
+		t.Fatalf("autostart: true = %v, want true", on.Autostart)
+	}
+}
+
 func TestListKeysAcceptScalarOrSequence(t *testing.T) {
 	dir := t.TempDir()
 	defaults := Default().Defaults

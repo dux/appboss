@@ -70,6 +70,7 @@ var keyDocs = map[string]keyDoc{
 	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains", example: "[myapp.com, \"*.myapp.com\"]"},
 	"web_process":    {description: "process that receives proxied traffic", def: "web"},
 	"canonical_host": {description: "301 every other host of this app to this one; must be in hosts", example: "myapp.com"},
+	"autostart":      {description: "start this app when the host starts; false waits for run or a request", def: "true"},
 	"processes":      {description: "per-process overrides of the process keys, by process name", example: "{worker: {stop_timeout: 120s}}"},
 
 	"idle_stop":        {description: "stop the app after this long without proxied requests; 0 never"},
@@ -111,7 +112,7 @@ func Keys() []Key {
 			keys = append(keys, key)
 		}
 	})
-	app := App{WebProcess: "web"}
+	app := App{WebProcess: "web", Autostart: true}
 	walk(reflect.ValueOf(app), "", GroupApp, false, func(key Key) {
 		if _, shared := keyDocs[key.Path]; shared && isSharedKey(key.Path) {
 			return

@@ -609,6 +609,7 @@ type App struct {
 	Hosts         List              `yaml:"hosts" json:"hosts"`
 	WebProcess    string            `yaml:"web_process" json:"web_process"`
 	CanonicalHost string            `yaml:"canonical_host" json:"canonical_host"`
+	Autostart     bool              `yaml:"autostart" json:"autostart"`
 	Defaults      `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
@@ -618,6 +619,7 @@ type appFile struct {
 	Hosts         List              `yaml:"hosts"`
 	WebProcess    string            `yaml:"web_process"`
 	CanonicalHost string            `yaml:"canonical_host"`
+	Autostart     *bool             `yaml:"autostart"`
 	Overrides     `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -655,9 +657,12 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Defaults: defaults, Processes: raw.Processes}
 	if raw.WebProcess != "" {
 		app.WebProcess = raw.WebProcess
+	}
+	if raw.Autostart != nil {
+		app.Autostart = *raw.Autostart
 	}
 	if app.Processes == nil {
 		app.Processes = map[string]ProcessOverrides{}

@@ -275,14 +275,66 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 	}
 }
 
+func TestSupervisorSkipsAutostartFalseOnFirstStart(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{32700, 32720}, "autostart: false\n")
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(invalid) != 0 {
+		t.Fatalf("invalid apps: %v", invalid)
+	}
+	snapshot, err := manager.Snapshot("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != Stopped {
+		t.Fatalf("autostart: false app started on first start: %+v", snapshot)
+	}
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+}
+
+func TestSupervisorSkipsAutostartFalseWhenListedInRunningJSON(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{32800, 32820}, "autostart: false\n")
+	if err := os.MkdirAll(cfg.StateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.StateDir, "running.json"), []byte("[\n  \"demo\"\n]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(invalid) != 0 {
+		t.Fatalf("invalid apps: %v", invalid)
+	}
+	snapshot, err := manager.Snapshot("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != Stopped {
+		t.Fatalf("autostart: false app started from running.json: %+v", snapshot)
+	}
+}
+
 func supervisorTestConfig(t *testing.T, portRange [2]int) config.Config {
+	return supervisorTestConfigApp(t, portRange, "")
+}
+
+func supervisorTestConfigApp(t *testing.T, portRange [2]int, extraYAML string) config.Config {
 	t.Helper()
 	root := t.TempDir()
 	appDir := filepath.Join(root, "apps", "demo")
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestSupervisorHelperProcess\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestSupervisorHelperProcess\n%s", os.Args[0], extraYAML)
 	if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte(appConfig), 0o640); err != nil {
 		t.Fatal(err)
 	}

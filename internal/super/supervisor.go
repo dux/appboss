@@ -93,8 +93,9 @@ type Manager struct {
 	cancel          context.CancelFunc
 }
 
-// New discovers the apps and starts the ones that were running before. A non-nil echo mirrors
-// every process's output to it, which the foreground session uses when attached to a terminal.
+// New discovers the apps and starts the ones that were running before, skipping autostart: false.
+// A non-nil echo mirrors every process's output to it, which the foreground session uses when
+// attached to a terminal.
 func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, []error, error) {
 	discovered, invalid, err := apps.Discover(cfg)
 	if err != nil {
@@ -105,11 +106,14 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	if err != nil {
 		return nil, invalid, err
 	}
-	// A host with no running list yet starts everything it found. Once the list exists it is
-	// authoritative, so an app someone stopped stays stopped across restarts.
+	// A host with no running list yet starts every autostart app. Once the list exists it is
+	// authoritative, so an app someone stopped stays stopped across restarts. autostart: false
+	// apps are not started here even when listed; run, the console, or a request starts them.
 	if _, statErr := os.Stat(runningPath); errors.Is(statErr, os.ErrNotExist) {
 		for _, spec := range discovered {
-			desired[spec.Name] = true
+			if spec.Config.Autostart {
+				desired[spec.Name] = true
+			}
 		}
 	}
 	maintenance, err := loadNames(filepath.Join(cfg.StateDir, "maintenance.json"))
@@ -131,7 +135,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	}
 	if cfg.Daemon.ResumeRunning {
 		for name := range desired {
-			if runtime := m.apps[name]; runtime != nil {
+			if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart {
 				_ = runtime.call(request{kind: requestStart})
 			}
 		}

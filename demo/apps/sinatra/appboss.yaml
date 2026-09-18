@@ -9,3 +9,4 @@ canonical_host: sinatra.lvh.me
 static: ./public
 
 health: http:/up
+autostart: false

@@ -26,7 +26,7 @@ The demo listens on `127.0.0.1:8080` and hosts two apps.
 Use the hostnames with the port; the bare hostnames refuse to connect.
 
 * http://boss.lvh.me:8080 - management console
-* http://sinatra.lvh.me:8080 - Ruby app (needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
+* http://sinatra.lvh.me:8080 - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
 * http://bun.lvh.me:8080 - Bun app
 
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
@@ -124,9 +124,10 @@ Inside an app folder the app argument defaults to that app.
 
 ### Startup and the running list
 
-On start the host clears every listener in `ports.range`, then starts the apps listed in `state_dir/running.json`.
+On start the host clears every listener in `ports.range`, then starts the apps listed in `state_dir/running.json` that have `autostart: true` (the default).
 That file is written on every `run` and `stop`, so an app you stopped stays stopped across restarts.
-When the file does not exist yet, which is the case on a first start, every discovered app is started.
+When the file does not exist yet, which is the case on a first start, every discovered app with `autostart: true` is started.
+An app with `autostart: false` stays down across host restarts until `appboss run`, the console, or the first proxied request starts it.
 A stopped app is also started by the first proxied request, which gets a "starting" page that refreshes after `proxy.wake.retry_after` seconds.
 
 ## Logs
