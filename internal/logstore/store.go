@@ -6,10 +6,13 @@ package logstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +55,18 @@ type Rates struct {
 	LastHour   int64
 	LastDay    int64
 }
+
+// Latency summarizes request durations over a window, in milliseconds. Count is the sample size
+// (capped) and the quantiles are 0 when it is 0.
+type Latency struct {
+	Count int
+	P50   float64
+	P95   float64
+	P99   float64
+}
+
+// latencySampleLimit bounds how many rows a latency query reads, newest first.
+const latencySampleLimit = 50000
 
 // HostApp is the reserved app name that backs appboss's own daemon log. It never collides with a
 // discovered app because app process names must match [a-z][a-z0-9_-]*.
@@ -150,6 +165,7 @@ type Store struct {
 	flush          time.Duration
 	snapshotter    Snapshotter
 	pruneAt        string
+	vacuumAt       string
 	hostRetention  time.Duration
 	auditRetention time.Duration
 	mu             sync.Mutex
@@ -159,20 +175,24 @@ type Store struct {
 }
 
 // New returns a store that writes under dir (one <app>/appboss.sqlite per app). snapshotter and
-// pruneAt drive the daily retention prune; pass nil to disable it. hostRetention bounds the
-// reserved HostApp database that holds appboss's own daemon log; auditRetention bounds the audit
-// table (0 keeps audit rows forever).
-func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string, hostRetention, auditRetention time.Duration) *Store {
-	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
+// pruneAt drive the daily retention prune; pass nil to disable it. vacuumAt schedules the daily
+// VACUUM (empty disables it). hostRetention bounds the reserved HostApp database that holds
+// appboss's own daemon log; auditRetention bounds the audit table (0 keeps audit rows forever).
+func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt, vacuumAt string, hostRetention, auditRetention time.Duration) *Store {
+	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, vacuumAt: vacuumAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
 }
 
 func (s *Store) Name() string { return "logstore" }
 
-// Start launches the retention prune loop. Databases open lazily on first write.
+// Start launches the retention prune loop and the daily vacuum. Databases open lazily on first
+// write.
 func (s *Store) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	if s.snapshotter != nil {
 		go s.pruneLoop()
+		if s.vacuumAt != "" {
+			go s.vacuumLoop()
+		}
 	}
 	return nil
 }
@@ -744,6 +764,48 @@ func (s *Store) Rates(app string) (Rates, error) {
 	return rates, nil
 }
 
+// Latency computes duration quantiles for requests newer than since. It reads the newest rows up
+// to latencySampleLimit and sorts them in memory.
+func (s *Store) Latency(app string, since time.Time) (Latency, error) {
+	w, err := s.writer(app)
+	if err != nil {
+		return Latency{}, err
+	}
+	rows, err := w.db.Query(`SELECT duration_ms FROM requests WHERE ts >= ? ORDER BY ts DESC LIMIT ?`, stamp(since), latencySampleLimit)
+	if err != nil {
+		return Latency{}, err
+	}
+	defer rows.Close()
+	durations := make([]int64, 0, 1024)
+	for rows.Next() {
+		var duration int64
+		if err := rows.Scan(&duration); err != nil {
+			return Latency{}, err
+		}
+		durations = append(durations, duration)
+	}
+	if err := rows.Err(); err != nil {
+		return Latency{}, err
+	}
+	slices.Sort(durations)
+	return Latency{Count: len(durations), P50: percentile(durations, 0.5), P95: percentile(durations, 0.95), P99: percentile(durations, 0.99)}, nil
+}
+
+// percentile picks the nearest-rank value from an ascending slice: ceil(q*n)-1, clamped.
+func percentile(sorted []int64, q float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	index := int(math.Ceil(q*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return float64(sorted[index])
+}
+
 // Prune deletes rows older than their retention from one app's database. Request rows and app
 // log files use retention, process stdout and the appboss daemon log use stdoutRetention. A zero
 // retention disables the whole store, matching Request/RecordLogs.
@@ -802,6 +864,58 @@ func (s *Store) pruneLoop() {
 			}
 			if err := s.Prune(s.ctx, HostApp, s.hostRetention, s.hostRetention); err != nil {
 				log.Printf("log prune %s: %v", HostApp, err)
+			}
+		}
+	}
+}
+
+// Vacuum rewrites one app's database to reclaim the space the prune freed. A missing database is
+// a no-op.
+func (s *Store) Vacuum(ctx context.Context, app string) error {
+	s.mu.Lock()
+	w := s.apps[app]
+	s.mu.Unlock()
+	if w != nil {
+		_, err := w.db.ExecContext(ctx, `VACUUM`)
+		return err
+	}
+	path := filepath.Join(s.dir, app, "appboss.sqlite")
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `VACUUM`)
+	return err
+}
+
+func (s *Store) vacuumLoop() {
+	for {
+		now := time.Now()
+		target, _ := time.ParseInLocation("15:04", s.vacuumAt, now.Location())
+		next := time.Date(now.Year(), now.Month(), now.Day(), target.Hour(), target.Minute(), 0, 0, now.Location())
+		if !next.After(now) {
+			next = next.Add(24 * time.Hour)
+		}
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-s.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			for _, snapshot := range s.snapshotter.Snapshots() {
+				if err := s.Vacuum(s.ctx, snapshot.Name); err != nil {
+					log.Printf("log vacuum %s: %v", snapshot.Name, err)
+				}
+			}
+			if err := s.Vacuum(s.ctx, HostApp); err != nil {
+				log.Printf("log vacuum %s: %v", HostApp, err)
 			}
 		}
 	}

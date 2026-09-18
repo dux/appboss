@@ -239,6 +239,10 @@ defaults:
   # Regular files only; directories and missing files fall through to the app. No index lookup.
   # Served with Last-Modified, If-Modified-Since and range support, without waking the app.
   static: ""
+  # Public status path on the app's own hosts, so a Cloudflare health check or uptime monitor
+  # can probe the app domain. GET/HEAD answer 200 {"app","state"} while the app runs and is not
+  # draining, 503 otherwise. It runs before basic auth and never wakes the app. Empty disables it.
+  health_endpoint: /.well-known/appboss/health
   # Path prefixes under static that get "public, max-age=31536000, immutable".
   # Everything else under static gets "public, max-age=3600".
   static_immutable: [/assets/]
@@ -281,6 +285,10 @@ daemon:
   resume_running: true
   # Daily prune of logs and request rows older than log_retention, at this local time.
   prune_at: "04:10"
+  # Daily SQLite VACUUM of every app database and the host database, at this local time.
+  # Reclaims the space the prune freed. Set to "" to disable; run it off peak if the box
+  # is busy, since VACUUM rewrites each database.
+  vacuum_at: "04:30"
   # appboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
   log_level: info           # debug | info | warn | error
   # How often each running process's log segment is sealed and ingested into the per-app
@@ -310,7 +318,9 @@ notify:
   #   health-timeout  the readiness check gave up on the web process
   #   wake-failed     a request tried to start a stopped app and the start failed
   #   hook-failed     a deploy hook exited non-zero
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed]
+  #   deploy          a deploy hook with restart: true succeeded and the app rolled
+  #   config-changed  a config write needs a restart (host keys changed on disk)
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed]
   # Quiet period per app and event. 0 posts every event.
   min_interval: 5m
   # Extra headers sent with every request.

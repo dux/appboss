@@ -10,7 +10,7 @@ import (
 
 func TestRecordSearchAndPrune(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
 
 	if err := store.Record("demo", time.Hour, RequestEntry{Time: time.Now(), Method: "GET", Host: "demo.test", Path: "/hello", Status: 200, IP: "1.2.3.4", UserAgent: "curl", RequestID: "abc"}); err != nil {
@@ -52,7 +52,7 @@ func TestRecordSearchAndPrune(t *testing.T) {
 
 func TestChannelsFilterAndPruneBySource(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now()
@@ -109,7 +109,7 @@ func TestChannelsFilterAndPruneBySource(t *testing.T) {
 
 func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now()
@@ -154,7 +154,7 @@ func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 }
 
 func TestTailOffsetsRoundTrip(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, 0)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
 
 	path := "/app/log/production.log"

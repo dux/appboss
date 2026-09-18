@@ -81,6 +81,23 @@ func TestHookFailureEmitsNotification(t *testing.T) {
 	}
 }
 
+func TestDeployHookEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{33100, 33120}, "procfile:\n  web: /bin/sleep 30\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/true\n    restart: true\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.RunHook("demo", "deploy"); err != nil {
+		t.Fatal(err)
+	}
+	waitForHookEnd(t, manager, "demo", "deploy")
+	if event := sink.waitFor(t, "deploy"); event.App != "demo" {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
 func TestWakeFailureEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
 	cfg := hookConfig(t, [2]int{32960, 32980}, "procfile:\n  web: ./missing-binary\nautostart: false\n")

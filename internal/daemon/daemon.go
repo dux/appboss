@@ -70,13 +70,13 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	for _, scanErr := range invalid {
 		log.Printf("skip invalid app: %v", scanErr)
 	}
-	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
+	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Daemon.VacuumAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
 	ingester := ingest.New(manager, manager, logs, cfg.Daemon.LogIngestInterval.Value())
 	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester), notifier: notifier, managementPort: managementPort}
-	service := ops.New(manager, logs, logs)
+	service := ops.New(manager, logs, logs, notifier)
 	if len(cfg.Proxy.Listen) > 0 {
 		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier)
 		if err != nil {

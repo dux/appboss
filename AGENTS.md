@@ -44,7 +44,8 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 ## Health and metrics
 
 * The management host serves `/healthz`, `/readyz` and `/metrics` from `./internal/console/console.go` before the session auth. `management.metrics.enabled` (default true) turns them off; `management.metrics.token` gates only `/metrics`.
-* `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler.
+* `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler. Request latency quantiles come from `logstore.Latency` through `ops.Service.Latency`.
+* `Web.HealthEndpoint` (default `/.well-known/appboss/health`) is answered by the `publicHealth` filter in `./internal/proxy/filter.go` before auth: 200 while running and not draining, 503 otherwise, never wakes the app. `appboss doctor` uses `super.ListenersInRange`.
 * `./internal/version.Version` is the release version; the release workflow does not inject it yet, so `String()` falls back to the module version or the short VCS revision.
 
 ## Audit and config history
@@ -57,7 +58,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 
 * `notify:` in the host config points at one operator webhook. `./internal/notify` debounces per app and event, queues with a bounded buffer and posts best-effort, so it can never block the supervisor.
 * `daemon.Build` creates the notifier and passes it to `super.New` (as a `notify.Sink`) and to `console.New` for its `appboss_notifications_total` counters. `Manager.Wake` is the proxy's start path and the only source of `wake-failed`; explicit run/console starts do not notify.
-* Events are emitted by `appRuntime.emit` in `./internal/super`: `crash`, `restart-loop`, `health-timeout` and `hook-failed`. A new event needs a name in `notifyEvents` in `./internal/config/config.go` and a line in the reference.
+* Events are emitted by `appRuntime.emit` in `./internal/super`: `crash`, `restart-loop`, `health-timeout`, `hook-failed` and `deploy` (a `restart: true` hook succeeded). `ops.Service.Notify` covers `config-changed` from the console. A new event needs a name in `notifyEvents` in `./internal/config/config.go` and a line in the reference.
 
 ## Log store
 
@@ -66,6 +67,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * The supervisor writes through `super.logWriter`, which owns the file, rotates by size and can `Seal` a segment; `Manager.SealLogs` exposes it. Do not rename a live process log from outside the supervisor.
 * `./internal/ingest` seals stdout segments and tails every `*.log` under `<app dir>/log` on `daemon.log_ingest_interval`. App log files are app-owned: track offsets, never delete them. Parse changes belong in `ingest.ParseLine`.
 * `log_retention` (default `336h`) covers requests and app log files; `stdout_retention` (default `3h`) covers stdout and the appboss daemon log; `log_retention: 0` disables the whole store for the app. The `appboss.sqlite` name is fixed; there is no config key for it.
+* `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database through `Store.Vacuum`; empty disables it. It is separate from the prune loop.
 
 ## Console frontend (fez)
 

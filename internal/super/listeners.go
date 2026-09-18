@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// ListenersInRange lists PIDs listening in the reserved app range without touching them, for
+// `appboss doctor`.
+func ListenersInRange(portRange [2]int) ([]int, error) {
+	return listenerPIDs(portRange)
+}
+
 // ClearPortRange terminates every process group listening in the reserved app range.
 func ClearPortRange(portRange [2]int, timeout time.Duration) ([]int, error) {
 	pids, err := listenerPIDs(portRange)

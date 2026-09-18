@@ -352,6 +352,7 @@ web/                      starting.html, crashed.html, 404.html, maintenance.htm
 10. **Notifications.** A host `notify:` webhook posts `crash`, `restart-loop`, `health-timeout`, `wake-failed` and `hook-failed` events with per-app debounce, best-effort and off the supervisor goroutine (`./internal/notify`); counts show up as `appboss_notifications_total`.
 11. **Draining and forwarded headers.** Stop/restart marks an app draining so the proxy stops sending new requests while in-flight ones finish, bounded by `stop_timeout`; the proxy fills in `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Real-IP` when missing; processes start web-first.
 12. **Audit and config history.** Every mutating action writes an `audit` row (actor, app, action, detail, result) in the reserved `_appboss` database, pruned by `daemon.audit_retention`, shown in the console Audit tab and `appboss audit`. `apps.Store.Write` snapshots the previous file to `state_dir/config-history` (50 per file) for the console History panel and `appboss config history|restore`.
+13. **Health endpoint, doctor, latency, log search, vacuum.** A per-app `health_endpoint` for Cloudflare health checks, `appboss doctor` preflight, request duration quantiles in `/metrics`, `appboss logs --search` over the store, `deploy` and `config-changed` notifications, and a daily SQLite `VACUUM` at `daemon.vacuum_at`.
 
 ## Open questions
 

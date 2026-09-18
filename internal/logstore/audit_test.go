@@ -7,7 +7,7 @@ import (
 )
 
 func TestAuditRecordSearchAndPrune(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, time.Hour)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
 	defer store.Close()
 	now := time.Now()
 	rows := []AuditEntry{
@@ -58,5 +58,42 @@ func TestAuditRecordSearchAndPrune(t *testing.T) {
 		if row.App == "old" {
 			t.Fatalf("old audit row was not pruned: %+v", remaining)
 		}
+	}
+}
+
+func TestLatencyQuantiles(t *testing.T) {
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
+	defer store.Close()
+	for _, duration := range []int64{10, 20, 30, 40, 100} {
+		if err := store.Record("web", time.Hour, RequestEntry{Time: time.Now(), DurationMS: duration}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	latency, err := store.Latency("web", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latency.Count != 5 || latency.P50 != 30 || latency.P95 != 100 || latency.P99 != 100 {
+		t.Fatalf("latency = %+v", latency)
+	}
+}
+
+func TestVacuumKeepsDatabaseUsable(t *testing.T) {
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
+	defer store.Close()
+	if err := store.RecordLogs("web", []LogEntry{{Time: time.Now(), Source: "stdout", Process: "web", Level: "info", Message: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := store.Vacuum(context.Background(), "web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Vacuum(context.Background(), "missing"); err != nil {
+		t.Fatalf("missing database vacuum: %v", err)
+	}
+	logs, err := store.SearchLogs("web", LogFilter{Channel: "stdout", Limit: 5})
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("logs after vacuum = %+v, %v", logs, err)
 	}
 }

@@ -266,6 +266,7 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 	}
 	// A deploy hook that finished cleanly brings the app onto the new release.
 	if state.kind == "hook" && state.restart && exitCode == 0 {
+		a.emit("deploy", fmt.Sprintf("deploy hook %s succeeded", state.name))
 		a.restartApp(state)
 	}
 }

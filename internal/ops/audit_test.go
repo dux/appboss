@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"app-boss/internal/logstore"
+	"app-boss/internal/notify"
 )
 
 type auditStore struct {
@@ -50,4 +51,21 @@ func TestAuditDisabledWithoutAuditor(t *testing.T) {
 		t.Fatal("SearchAudit should fail without an auditor")
 	}
 	service.Audit("cli", "app", "restart", "", nil) // must not panic
+}
+
+type sinkRecorder struct{ events []notify.Event }
+
+func (s *sinkRecorder) Send(event notify.Event) { s.events = append(s.events, event) }
+
+func TestNotifyForwardsToSink(t *testing.T) {
+	sink := &sinkRecorder{}
+	service := New(&fakeRuntime{}, nil, nil, sink)
+	service.Notify("config-changed", "web", "restart required: management")
+	if len(sink.events) != 1 || sink.events[0].Type != "config-changed" || sink.events[0].App != "web" {
+		t.Fatalf("events = %+v", sink.events)
+	}
+	service.Notify("config-changed", "web", "again")
+	if len(sink.events) != 2 {
+		t.Fatalf("second notify dropped: %+v", sink.events)
+	}
 }

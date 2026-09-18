@@ -25,9 +25,17 @@ var stateValue = map[super.State]int{
 // NotifyStats is the notifier's counter set; the alias keeps the handler's signature stable.
 type NotifyStats = notify.Stats
 
-// Render writes the Prometheus exposition for apps and the notifier counters, already sorted by
-// name.
-func Render(apps []super.Snapshot, now time.Time, notify NotifyStats) string {
+// Latency is the request duration summary of one app, in milliseconds.
+type Latency struct {
+	Count int
+	P50   float64
+	P95   float64
+	P99   float64
+}
+
+// Render writes the Prometheus exposition for apps, the notifier counters and the request
+// latency, already sorted by name.
+func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency map[string]Latency) string {
 	var b strings.Builder
 	metric := func(name, help, kind string) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
@@ -132,6 +140,25 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats) string {
 	sample("appboss_notifications_total", `{result="sent"}`, float64(notify.Sent))
 	sample("appboss_notifications_total", `{result="failed"}`, float64(notify.Failed))
 	sample("appboss_notifications_total", `{result="dropped"}`, float64(notify.Dropped))
+
+	metric("appboss_request_duration_ms", "Request duration over the last hour, milliseconds, by quantile.", "gauge")
+	for _, app := range apps {
+		stats := latency[app.Name]
+		if stats.Count == 0 {
+			continue
+		}
+		for _, quantile := range []struct {
+			label string
+			value float64
+		}{{"0.5", stats.P50}, {"0.95", stats.P95}, {"0.99", stats.P99}} {
+			labels := "{app=" + quote(app.Name) + ",quantile=" + quote(quantile.label) + "}"
+			sample("appboss_request_duration_ms", labels, quantile.value)
+		}
+	}
+	metric("appboss_request_duration_ms_samples", "Requests sampled for the duration quantiles.", "gauge")
+	for _, app := range apps {
+		sample("appboss_request_duration_ms_samples", name(app.Name), float64(latency[app.Name].Count))
+	}
 
 	return b.String()
 }

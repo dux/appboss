@@ -241,6 +241,7 @@ type Process struct {
 // Web drives the proxy in front of the app. BasicAuth never leaves the process as JSON so the
 // hashes stay out of the console and `appboss status --json`.
 type Web struct {
+	HealthEndpoint  string            `yaml:"health_endpoint" json:"health_endpoint"`
 	Static          string            `yaml:"static" json:"static"`
 	StaticImmutable List              `yaml:"static_immutable" json:"static_immutable"`
 	MaxBody         Size              `yaml:"max_body" json:"max_body"`
@@ -258,6 +259,7 @@ type Daemon struct {
 	IdleTick          Duration `yaml:"idle_tick" json:"idle_tick"`
 	ResumeRunning     bool     `yaml:"resume_running" json:"resume_running"`
 	PruneAt           string   `yaml:"prune_at" json:"prune_at"`
+	VacuumAt          string   `yaml:"vacuum_at" json:"vacuum_at"`
 	LogLevel          string   `yaml:"log_level" json:"log_level"`
 	LogIngestInterval Duration `yaml:"log_ingest_interval" json:"log_ingest_interval"`
 	AuditRetention    Duration `yaml:"audit_retention" json:"audit_retention"`
@@ -278,9 +280,9 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
-		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
-		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/appboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
+		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
+		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
 	}
 }
 
@@ -484,6 +486,11 @@ func (c Config) validate(hasApp bool) error {
 	if _, err := time.Parse("15:04", c.Daemon.PruneAt); err != nil {
 		return &Error{Key: "daemon.prune_at", Message: fmt.Sprintf("invalid time %q", c.Daemon.PruneAt), Hint: "use 24h clock HH:MM, e.g. \"04:10\""}
 	}
+	if c.Daemon.VacuumAt != "" {
+		if _, err := time.Parse("15:04", c.Daemon.VacuumAt); err != nil {
+			return &Error{Key: "daemon.vacuum_at", Message: fmt.Sprintf("invalid time %q", c.Daemon.VacuumAt), Hint: "use 24h clock HH:MM, e.g. \"04:30\"; leave empty to disable"}
+		}
+	}
 	if c.Daemon.IdleTick <= 0 {
 		return keyErr("daemon.idle_tick", "must be positive")
 	}
@@ -506,7 +513,7 @@ func (c Config) validate(hasApp bool) error {
 }
 
 var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
-var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true}
+var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true}
 
 func validateNotify(n Notify) error {
 	if !notifyFormats[n.Format] {
@@ -674,6 +681,9 @@ func validateProcess(d Process) error {
 }
 
 func validateWeb(w Web) error {
+	if w.HealthEndpoint != "" && !strings.HasPrefix(w.HealthEndpoint, "/") {
+		return keyErr("health_endpoint", "must start with /")
+	}
 	if _, err := parsePrefixes(w.AllowIPs); err != nil {
 		return err
 	}

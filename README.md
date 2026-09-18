@@ -128,10 +128,12 @@ Apps
   cron          list an app's scheduled jobs, or run one now
   hooks         list an app's deploy hooks, run one, or rotate its secret
   exec          run a one-off command in the app's environment
+  audit         list operator actions: start, stop, restart, hook runs and config writes
 
 Config
-  config        validate and print a config file, the resolved config, or the key reference
+  config        print a config file, the resolved config, the key reference, or saved revisions
   check         validate the config and every app without starting anything
+  doctor        preflight a box: tools, writable dirs, valid config and a clear port range
   rescan        re-read the apps directory, every appboss.yaml and the host defaults
   ports         show the live port table, one fixed port per app process
   password      print a bcrypt hash for basic_auth
@@ -169,12 +171,13 @@ Each row belongs to a channel and the console's **Logs** viewer selects one:
 `REQUEST` rows and app log files are kept for `log_retention` (default `336h`, two weeks);
 `STDOUT` and the appboss daemon log for `stdout_retention` (default `3h`). Both are deleted by the
 daily prune; `log_retention: 0` disables the store for the app.
+A second daily job at `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database to reclaim the freed space; set it to `""` to disable.
 The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it
 seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
 ingestion module parses the sealed segment, batches it into the database and deletes the file.
 A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
 keyword guess for the level.
-`appboss logs -f` still tails the live file.
+`appboss logs -f` still tails the live file, while `appboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
 
 The full-screen viewer at `/logs` (the **Logs** button on an app card, opened in a new window)
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,
@@ -226,9 +229,13 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 * `GET /healthz` - `200 ok` while the daemon is up.
 * `GET /readyz` - `200` only while every `autostart` app is running, else `503` with the apps that are not ready.
-* `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-process restarts and memory, request rates per window, and the last exit of each cron job and hook.
+* `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-process restarts and memory, request rates per window, request duration quantiles (p50/p95/p99 over the last hour), and the last exit of each cron job and hook.
 
 `healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
+
+Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/appboss/health`): `200 {"app","state"}` while it runs and is not draining, `503` otherwise. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
+
+`appboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
 
 ## Notifications
 
@@ -238,12 +245,24 @@ A host can post runtime events to one operator webhook:
 notify:
   url: $ALERT_WEBHOOK_URL
   format: generic       # generic | slack | discord | ntfy
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed]
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed]
   min_interval: 5m       # per app and event, so a crash loop does not spam
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up, `wake-failed` a request that could not start a stopped app, and `hook-failed` a deploy hook that exited non-zero. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, and `config-changed` a config write that changed a host key and needs a restart. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+
+## Containers
+
+appboss supervises native processes and does not start or manage containers.
+Run a Docker-packaged app with Docker Compose as its own system and let Cloudflare reach the container's published port directly; appboss stays out of that path.
+
+Two rules keep the two systems from colliding:
+
+* Keep container ports outside `ports.range`. On start appboss clears every listener in the range and before each spawn frees the app's fixed port, so a container listening there would be killed.
+* A hostname is routed by one proxy only. appboss routes just the hosts of the apps in its own `apps` directory, so a container host must be served by Cloudflare or another reverse proxy.
+
+The one bridge without code is a procfile wrapper (`shell: true` with `docker run -p 127.0.0.1:$PORT:$PORT ...`), which makes a container answer as an appboss app but leaves its lifecycle on the docker CLI, with the usual caveats around stopping it.
 
 ## Restarts and forwarded headers
 

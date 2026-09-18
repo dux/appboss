@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -75,7 +76,7 @@ func (c CLI) Run(args []string) int {
 		err = c.systemd(args[1:])
 	case "password":
 		err = c.password(args[1:])
-	case "config", "check", "kill":
+	case "config", "check", "kill", "doctor":
 		err = c.local(command, args[1:])
 	default:
 		err = c.remote(command, args[1:])
@@ -222,6 +223,12 @@ func (c CLI) local(command string, args []string) error {
 			return c.configRestore(cfg, positionals[1:], *jsonOutput)
 		}
 	}
+	if command == "doctor" {
+		if set.NArg() != 0 {
+			return errors.New("usage: appboss doctor [-c path]")
+		}
+		return c.doctor(cfg, *jsonOutput)
+	}
 	if command == "kill" {
 		if set.NArg() != 0 {
 			return errors.New("usage: appboss kill [-c path]")
@@ -339,6 +346,79 @@ func configID(cfg config.Config, args []string) (string, error) {
 	return "app:" + app.Name, nil
 }
 
+// doctor runs the preflight checks a first start or a deploy needs: the tools, the writable
+// directories, a valid config and any listeners still holding the app port range.
+func (c CLI) doctor(cfg config.Config, jsonOutput bool) error {
+	type finding struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+	}
+	var findings []finding
+	failed := false
+	add := func(level, message string) {
+		findings = append(findings, finding{Level: level, Message: message})
+		if level == "fail" {
+			failed = true
+		}
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		add("fail", "lsof is not on PATH; appboss needs it to clear the port range")
+	} else {
+		add("ok", "lsof found")
+	}
+	for _, dir := range []struct{ name, path string }{{"state_dir", cfg.StateDir}, {"log_dir", cfg.LogDir}, {"socket dir", filepath.Dir(cfg.Socket)}} {
+		if err := writable(dir.path); err != nil {
+			add("fail", fmt.Sprintf("%s %s is not writable: %v", dir.name, dir.path, err))
+			continue
+		}
+		add("ok", fmt.Sprintf("%s %s is writable", dir.name, dir.path))
+	}
+	_, invalid, scanErr := apps.Discover(cfg)
+	switch {
+	case scanErr != nil:
+		add("fail", "config: "+scanErr.Error())
+	case len(invalid) > 0:
+		for _, appErr := range invalid {
+			add("fail", appErr.Error())
+		}
+	default:
+		add("ok", "config and every app are valid")
+	}
+	if pids, err := super.ListenersInRange(cfg.Ports.Range); err != nil {
+		add("warn", "port range check failed: "+err.Error())
+	} else if len(pids) > 0 {
+		add("warn", fmt.Sprintf("port range %d-%d has listeners (pids %v); a start clears them", cfg.Ports.Range[0], cfg.Ports.Range[1], pids))
+	} else {
+		add("ok", fmt.Sprintf("port range %d-%d is clear", cfg.Ports.Range[0], cfg.Ports.Range[1]))
+	}
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(map[string]any{"ok": !failed, "findings": findings}, "", "  ")
+		fmt.Fprintln(c.Out, string(encoded))
+	} else {
+		for _, item := range findings {
+			fmt.Fprintf(c.Out, "%-4s %s\n", item.Level, item.Message)
+		}
+	}
+	if failed {
+		return errors.New("doctor found problems")
+	}
+	return nil
+}
+
+// writable checks that a directory can be created and a file written inside it.
+func writable(dir string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, ".appboss-doctor-*")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	_ = file.Close()
+	return os.Remove(name)
+}
+
 // dumpFile prints a config file as written, comments included; it has already been validated.
 func (c CLI) dumpFile(path string, jsonOutput bool) error {
 	data, err := os.ReadFile(path)
@@ -453,17 +533,26 @@ func (c CLI) remote(command string, args []string) error {
 		lines := set.Int("n", 200, "number of lines")
 		follow := set.Bool("f", false, "follow")
 		processName := set.String("process", "", "process name")
+		search := set.String("search", "", "search the log store")
+		level := set.String("level", "", "log level filter")
+		channel := set.String("channel", "", "log channel filter")
 		if err := set.Parse(opts.rest); err != nil {
 			return err
 		}
 		if set.NArg() != 0 {
-			return errors.New("usage: appboss logs [app] [-f] [-n 200] [--process name]")
+			return errors.New("usage: appboss logs [app] [-f] [-n 200] [--process name] [--search q] [--level l] [--channel c]")
 		}
 		request.Lines, request.Process = *lines, *processName
 		if *follow && opts.json {
 			return errors.New("--json and -f cannot be combined")
 		}
-		if *follow {
+		if *search != "" || *level != "" || *channel != "" {
+			if *follow {
+				return errors.New("-f tails the live files; drop it to search the store")
+			}
+			request.Method = ops.ActionLogSearch
+			request.Query, request.Level, request.Channel = *search, *level, *channel
+		} else if *follow {
 			return c.follow(client, request)
 		}
 	case "cron":
@@ -539,6 +628,12 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = logs
+	case "log-search":
+		var rows []logstore.LogEntry
+		if err := client.Call(request, &rows); err != nil {
+			return err
+		}
+		data = rows
 	case "ports":
 		var entries map[string]int
 		if err := client.Call(request, &entries); err != nil {
@@ -798,6 +893,15 @@ func (c CLI) printHuman(method string, data any) error {
 				fmt.Fprintf(c.Out, "[%s] %s\n", name, line)
 			}
 		}
+	case "log-search":
+		rows := data.([]logstore.LogEntry)
+		if len(rows) == 0 {
+			fmt.Fprintln(c.Out, "no matching log rows")
+			return nil
+		}
+		for _, row := range rows {
+			fmt.Fprintf(c.Out, "%s %-5s %-12s %s\n", row.Time.Local().Format("2006-01-02 15:04:05"), strings.ToUpper(row.Level), row.Process, row.Message)
+		}
 	case "ports":
 		entries := data.(map[string]int)
 		names := slices.Sorted(maps.Keys(entries))
@@ -875,7 +979,7 @@ func (c CLI) printHuman(method string, data any) error {
 			if row.Error != "" {
 				result += ": " + row.Error
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Time.Format("2006-01-02 15:04:05"), row.Actor, row.Action, row.App, row.Detail, result)
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Time.Local().Format("2006-01-02 15:04:05"), row.Actor, row.Action, row.App, row.Detail, result)
 		}
 		return writer.Flush()
 	case "rescan":

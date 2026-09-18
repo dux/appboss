@@ -53,6 +53,31 @@ func TestDrainingAppAnswers503(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointReportsState(t *testing.T) {
+	path := "/.well-known/appboss/health"
+	get := func(snapshot super.Snapshot) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "http://demo.test"+path, nil)
+		request.Host = "demo.test"
+		return serveFeature(t, featureHandler(), snapshot, request)
+	}
+	running := featureSnapshot(t, "")
+	running.Web.BasicAuth = map[string]string{"alice": "$2a$10$doesnotmatter"}
+	response := get(running)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"running"`) {
+		t.Fatalf("running health = %d %s", response.Code, response.Body.String())
+	}
+	stopped := featureSnapshot(t, "")
+	stopped.State = super.Stopped
+	if response := get(stopped); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stopped health = %d", response.Code)
+	}
+	draining := featureSnapshot(t, "")
+	draining.Draining = true
+	if response := get(draining); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("draining health = %d", response.Code)
+	}
+}
+
 func TestCanonicalHostRedirect(t *testing.T) {
 	snapshot := featureSnapshot(t, "canonical_host: demo.test\n")
 	request := httptest.NewRequest(http.MethodGet, "http://www.demo.test:8080/path?x=1", nil)

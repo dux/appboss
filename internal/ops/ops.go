@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"app-boss/internal/logstore"
+	"app-boss/internal/notify"
 	"app-boss/internal/super"
 )
 
@@ -36,6 +37,7 @@ const (
 	ActionHookRotate  = "hook-rotate"
 	ActionExec        = "exec"
 	ActionAudit       = "audit"
+	ActionLogSearch   = "log-search"
 )
 
 // auditActions are the methods that write an audit row when they run.
@@ -84,6 +86,11 @@ type Auditor interface {
 	SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error)
 }
 
+// LatencyStore reads request duration quantiles; logstore.Store implements it.
+type LatencyStore interface {
+	Latency(app string, since time.Time) (logstore.Latency, error)
+}
+
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
 // the console builds it from the HTTP body.
 type Request struct {
@@ -98,6 +105,9 @@ type Request struct {
 	On      bool          `json:"on,omitempty"`
 	Actor   string        `json:"actor,omitempty"`
 	Action  string        `json:"action,omitempty"`
+	Query   string        `json:"query,omitempty"`
+	Level   string        `json:"level,omitempty"`
+	Channel string        `json:"channel,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -116,12 +126,16 @@ type Service struct {
 	rates   Rates
 	store   LogStore
 	auditor Auditor
+	sink    notify.Sink
 }
 
-func New(runtime Runtime, rates Rates, store LogStore) *Service {
+func New(runtime Runtime, rates Rates, store LogStore, sinks ...notify.Sink) *Service {
 	service := &Service{runtime: runtime, rates: rates, store: store}
 	if auditor, ok := store.(Auditor); ok {
 		service.auditor = auditor
+	}
+	if len(sinks) > 0 {
+		service.sink = sinks[0]
 	}
 	return service
 }
@@ -206,6 +220,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.Exec(request.App, request.Argv, request.Timeout)
 	case ActionAudit:
 		return s.SearchAudit(auditFilter(request))
+	case ActionLogSearch:
+		return s.SearchLogs(request.App, logstore.LogFilter{Channel: request.Channel, Process: request.Process, Level: request.Level, Query: request.Query, Limit: request.Lines})
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -232,6 +248,15 @@ func (s *Service) Audit(actor, app, action, detail string, err error) {
 		result, message = "error", err.Error()
 	}
 	_ = s.auditor.RecordAudit(logstore.AuditEntry{Time: time.Now(), Actor: actor, App: app, Action: action, Detail: detail, Result: result, Error: message})
+}
+
+// Notify sends one operator notification through the host webhook, for actions outside the
+// supervisor (a config change that needs a restart).
+func (s *Service) Notify(eventType, app, detail string) {
+	if s.sink == nil {
+		return
+	}
+	s.sink.Send(notify.Event{Type: eventType, App: app, Error: detail, Time: time.Now()})
 }
 
 func (s *Service) auditRequest(request Request, err error) {
@@ -328,6 +353,15 @@ func (s *Service) HookSecret(name, hook string) (string, error) { return s.runti
 // Exec runs one command in the app's environment and returns its combined output.
 func (s *Service) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
 	return s.runtime.Exec(name, argv, timeout)
+}
+
+// Latency returns request duration quantiles of one app over the last hour, for /metrics.
+func (s *Service) Latency(name string) (logstore.Latency, error) {
+	store, ok := s.store.(LatencyStore)
+	if !ok {
+		return logstore.Latency{}, errors.New("latency is not available")
+	}
+	return store.Latency(name, time.Now().Add(-time.Hour))
 }
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.

@@ -317,6 +317,9 @@ func (h *Handler) configWrite(w http.ResponseWriter, r *http.Request, session au
 		return
 	}
 	h.service.Audit(session.Email, file.App, "config-write", file.ID, nil)
+	if len(result.RestartRequired) > 0 {
+		h.service.Notify("config-changed", file.App, "restart required: "+strings.Join(result.RestartRequired, ", "))
+	}
 	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
@@ -397,6 +400,9 @@ func (h *Handler) configRestore(w http.ResponseWriter, r *http.Request, session 
 		return
 	}
 	h.service.Audit(session.Email, file.App, "config-restore", file.ID, nil)
+	if len(result.RestartRequired) > 0 {
+		h.service.Notify("config-changed", file.App, "restart required: "+strings.Join(result.RestartRequired, ", "))
+	}
 	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
@@ -440,7 +446,14 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	if h.notifyStats != nil {
 		stats = h.notifyStats()
 	}
-	_, _ = io.WriteString(w, metrics.Render(h.service.Apps(), time.Now(), stats))
+	apps := h.service.Apps()
+	latency := map[string]metrics.Latency{}
+	for _, app := range apps {
+		if value, err := h.service.Latency(app.Name); err == nil {
+			latency[app.Name] = metrics.Latency{Count: value.Count, P50: value.P50, P95: value.P95, P99: value.P99}
+		}
+	}
+	_, _ = io.WriteString(w, metrics.Render(apps, time.Now(), stats, latency))
 }
 
 // handleHook accepts a signed ping at /hooks/<app>/<hook> and starts the hook. It is the one
