@@ -39,10 +39,10 @@ type ProcessOverrides struct {
 
 type WebOverrides struct {
 	Static          *string           `yaml:"static,omitempty" json:"static,omitempty"`
-	StaticImmutable []string          `yaml:"static_immutable,omitempty" json:"static_immutable,omitempty"`
+	StaticImmutable List              `yaml:"static_immutable,omitempty" json:"static_immutable,omitempty"`
 	MaxBody         *Size             `yaml:"max_body,omitempty" json:"max_body,omitempty"`
 	BasicAuth       map[string]string `yaml:"basic_auth,omitempty" json:"-"`
-	AllowIPs        []string          `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
+	AllowIPs        List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
 	Headers         map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	MaintenancePage *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
 }

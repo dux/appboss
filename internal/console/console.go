@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -54,12 +53,12 @@ type ConfigStore interface {
 }
 
 type Handler struct {
-	manager   AppManager
-	rates     RateReader
-	store     ConfigStore
-	auth      *authenticator
-	static    fs.FS
-	loginPort string
+	manager        AppManager
+	rates          RateReader
+	store          ConfigStore
+	auth           *authenticator
+	static         fs.FS
+	managementPort string
 }
 
 type dashboard struct {
@@ -108,28 +107,33 @@ func New(cfg config.Config, manager AppManager, rates RateReader, store ConfigSt
 	if err != nil {
 		return nil, err
 	}
-	_, loginPort, _ := net.SplitHostPort(cfg.Proxy.Listen)
-	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static, loginPort: loginPort}, nil
+	// The console's own listener sits on the first port of the range, reserved by the allocator.
+	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0])}, nil
 }
 
-// LoginURL mints a one-time link for `dboss login`. It points at the management host on the
-// proxy's port, the same way a browser on this machine reaches the console.
+// LoginURL mints a one-time link for `dboss login`. It points at the console's loopback
+// listener, so it works without DNS and, through an SSH tunnel, from another machine.
 func (h *Handler) LoginURL() (string, error) {
 	token, err := h.auth.issueCLIToken()
 	if err != nil {
 		return "", err
 	}
-	host := h.auth.host
-	if h.loginPort != "" && h.loginPort != "80" {
-		host += ":" + h.loginPort
-	}
-	link := url.URL{Scheme: "http", Host: host, Path: cliLoginPath, RawQuery: "token=" + url.QueryEscape(token)}
+	link := url.URL{Scheme: "http", Host: "127.0.0.1:" + h.managementPort, Path: cliLoginPath, RawQuery: "token=" + url.QueryEscape(token)}
 	return link.String(), nil
+}
+
+// consoleHost accepts the configured management hostname, which AuthCog can sign in, and the
+// loopback names that only the CLI login can sign in.
+func (h *Handler) consoleHost(rawHost string) bool {
+	if _, err := authDestination(rawHost, h.auth.hosts); err == nil {
+		return true
+	}
+	return loopbackHost(rawHost)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	secureHeaders(w)
-	if _, err := authDestination(r.Host, h.auth.host); err != nil {
+	if !h.consoleHost(r.Host) {
 		http.NotFound(w, r)
 		return
 	}
@@ -169,6 +173,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.configEffective(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/reference":
 		writeText(w, config.Reference)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/keys":
+		writeJSON(w, http.StatusOK, config.Keys())
 	default:
 		http.NotFound(w, r)
 	}

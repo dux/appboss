@@ -95,6 +95,30 @@ func (s Size) String() string {
 	return strconv.FormatInt(value, 10)
 }
 
+// List is a []string that also accepts a single scalar in YAML, so `hosts: myapp.com` and
+// `hosts: [myapp.com]` mean the same thing. It marshals as a sequence.
+type List []string
+
+func (l *List) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			*l = nil
+			return nil
+		}
+		*l = List{node.Value}
+		return nil
+	case yaml.SequenceNode:
+		var items []string
+		if err := node.Decode(&items); err != nil {
+			return err
+		}
+		*l = List(items)
+		return nil
+	}
+	return &Error{Line: node.Line, Message: "must be a value or a list of values"}
+}
+
 // FileName and LocalFileName are the two config file names looked up in a folder.
 // The local file is server-only and, when present, replaces the committed one entirely.
 const (
@@ -129,25 +153,26 @@ type Config struct {
 	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
 }
 
+// Proxy has one listener per Listen address; every listener serves the same routing.
 type Proxy struct {
-	Listen          string   `yaml:"listen" json:"listen"`
-	TrustedCIDRs    []string `yaml:"trusted_cidrs" json:"trusted_cidrs"`
-	ClientIPHeaders []string `yaml:"client_ip_headers" json:"client_ip_headers"`
+	Listen          List     `yaml:"listen" json:"listen"`
+	TrustedCIDRs    List     `yaml:"trusted_cidrs" json:"trusted_cidrs"`
+	ClientIPHeaders List     `yaml:"client_ip_headers" json:"client_ip_headers"`
 	Wake            Wake     `yaml:"wake" json:"wake"`
 	Upstream        Upstream `yaml:"upstream" json:"upstream"`
 }
 
-// Management is served by the proxy listener; the host header selects the console.
+// Management is served by the proxy listener; any of the Host names selects the console.
 type Management struct {
-	Host string         `yaml:"host" json:"host"`
+	Host List           `yaml:"host" json:"host"`
 	Auth ManagementAuth `yaml:"auth" json:"auth"`
 }
 
-func (m Management) Enabled() bool { return m.Host != "" }
+func (m Management) Enabled() bool { return len(m.Host) > 0 }
 
 type ManagementAuth struct {
 	Realm       string   `yaml:"realm" json:"realm"`
-	AdminEmails []string `yaml:"admin_emails" json:"admin_emails"`
+	AdminEmails List     `yaml:"admin_emails" json:"admin_emails"`
 	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
 }
 
@@ -203,10 +228,10 @@ type Process struct {
 // hashes stay out of the console and `dboss status --json`.
 type Web struct {
 	Static          string            `yaml:"static" json:"static"`
-	StaticImmutable []string          `yaml:"static_immutable" json:"static_immutable"`
+	StaticImmutable List              `yaml:"static_immutable" json:"static_immutable"`
 	MaxBody         Size              `yaml:"max_body" json:"max_body"`
 	BasicAuth       map[string]string `yaml:"basic_auth" json:"-"`
-	AllowIPs        []string          `yaml:"allow_ips" json:"allow_ips"`
+	AllowIPs        List              `yaml:"allow_ips" json:"allow_ips"`
 	Headers         map[string]string `yaml:"headers" json:"headers"`
 	MaintenancePage string            `yaml:"maintenance_page" json:"maintenance_page"`
 	allowPrefixes   []netip.Prefix
@@ -225,10 +250,10 @@ type Daemon struct {
 func Default() Config {
 	return Config{
 		StateDir: ".dboss/state", LogDir: ".dboss/log", Socket: ".dboss/dboss.sock",
-		Proxy:      Proxy{Listen: "127.0.0.1:8080", ClientIPHeaders: []string{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
+		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: []string{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info"},
 	}
 }
@@ -346,7 +371,7 @@ func (c Config) validate(hasApp bool) error {
 	if c.StateDir == "" || c.LogDir == "" || c.Socket == "" {
 		return &Error{Message: "state_dir, log_dir, and socket are required"}
 	}
-	if err := validateManagement(c.Management, c.Proxy.Listen); err != nil {
+	if err := validateManagement(c.Management, len(c.Proxy.Listen) > 0); err != nil {
 		return scoped(err, "management")
 	}
 	for _, cidr := range c.Proxy.TrustedCIDRs {
@@ -360,10 +385,11 @@ func (c Config) validate(hasApp bool) error {
 	if c.Proxy.Wake.RetryAfter < 1 {
 		return keyErr("proxy.wake.retry_after", "must be positive")
 	}
-	if c.Proxy.Listen != "" {
-		_, portValue, err := net.SplitHostPort(c.Proxy.Listen)
+	listeners := map[string]bool{}
+	for _, address := range c.Proxy.Listen {
+		_, portValue, err := net.SplitHostPort(address)
 		if err != nil {
-			return &Error{Key: "proxy.listen", Message: fmt.Sprintf("invalid address %q", c.Proxy.Listen), Hint: "use host:port such as \":80\" or 127.0.0.1:8080"}
+			return &Error{Key: "proxy.listen", Message: fmt.Sprintf("invalid address %q", address), Hint: "use host:port such as \":80\" or 127.0.0.1:8080"}
 		}
 		port, err := strconv.Atoi(portValue)
 		if err != nil || port < 1 || port > 65535 {
@@ -372,6 +398,10 @@ func (c Config) validate(hasApp bool) error {
 		if port >= c.Ports.Range[0] && port <= c.Ports.Range[1] {
 			return keyErr("proxy.listen", "port %d overlaps ports.range", port)
 		}
+		if listeners[address] {
+			return keyErr("proxy.listen", "duplicate entry %q", address)
+		}
+		listeners[address] = true
 	}
 	if err := validateDefaults(c.Defaults); err != nil {
 		return scoped(err, "defaults")
@@ -391,18 +421,25 @@ func (c Config) validate(hasApp bool) error {
 	return nil
 }
 
-func validateManagement(management Management, proxyListen string) error {
+func validateManagement(management Management, proxyEnabled bool) error {
 	if !management.Enabled() {
 		if len(management.Auth.AdminEmails) > 0 {
 			return keyErr("host", "is required when management is configured")
 		}
 		return nil
 	}
-	if proxyListen == "" {
+	if !proxyEnabled {
 		return keyErr("host", "needs proxy.listen because the console is served by the proxy listener")
 	}
-	if !validHostname(management.Host) {
-		return keyErr("host", "invalid hostname %q", management.Host)
+	hosts := map[string]bool{}
+	for _, host := range management.Host {
+		if !validHostname(host) {
+			return keyErr("host", "invalid hostname %q", host)
+		}
+		if hosts[strings.ToLower(host)] {
+			return keyErr("host", "duplicate entry %q", host)
+		}
+		hosts[strings.ToLower(host)] = true
 	}
 	if !validHostname(management.Auth.Realm) {
 		return keyErr("auth.realm", "invalid hostname %q", management.Auth.Realm)
@@ -553,7 +590,7 @@ func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 
 type App struct {
 	Procfile      map[string]string `yaml:"procfile" json:"procfile"`
-	Hosts         []string          `yaml:"hosts" json:"hosts"`
+	Hosts         List              `yaml:"hosts" json:"hosts"`
 	WebProcess    string            `yaml:"web_process" json:"web_process"`
 	CanonicalHost string            `yaml:"canonical_host" json:"canonical_host"`
 	Defaults      `yaml:",inline"`
@@ -562,7 +599,7 @@ type App struct {
 
 type appFile struct {
 	Procfile      map[string]string `yaml:"procfile"`
-	Hosts         []string          `yaml:"hosts"`
+	Hosts         List              `yaml:"hosts"`
 	WebProcess    string            `yaml:"web_process"`
 	CanonicalHost string            `yaml:"canonical_host"`
 	Overrides     `yaml:",inline"`

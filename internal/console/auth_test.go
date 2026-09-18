@@ -15,17 +15,17 @@ import (
 func TestCLILoginLinkSignsInOnce(t *testing.T) {
 	auth := &authenticator{
 		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		host:       "boss.lvh.me",
+		hosts:      map[string]bool{"boss.lvh.me": true},
 		key:        []byte("01234567890123456789012345678901"),
 		admins:     map[string]bool{"admin@example.com": true},
 		challenges: map[string]authChallenge{},
 	}
-	handler := &Handler{auth: auth, loginPort: "8080"}
+	handler := &Handler{auth: auth, managementPort: "3100"}
 	link, err := handler.LoginURL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(link, "http://boss.lvh.me:8080/login?token=") {
+	if !strings.HasPrefix(link, "http://127.0.0.1:3100/login?token=") {
 		t.Fatalf("unexpected login URL: %s", link)
 	}
 
@@ -39,7 +39,7 @@ func TestCLILoginLinkSignsInOnce(t *testing.T) {
 	}
 	sessionCookie := cookieNamed(t, loginResponse.Result().Cookies(), authSessionCookie)
 
-	authorizedRequest := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8080/", nil)
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/", nil)
 	authorizedRequest.AddCookie(sessionCookie)
 	session, ok := auth.authenticate(httptest.NewRecorder(), authorizedRequest)
 	if !ok || session.Email != cliEmail {
@@ -64,10 +64,49 @@ func TestCLILoginLinkSignsInOnce(t *testing.T) {
 	}
 }
 
+func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	for _, host := range []string{"127.0.0.1:3100", "localhost:3100", "[::1]:3100"} {
+		if !loopbackHost(host) {
+			t.Errorf("%s should be a loopback host", host)
+		}
+	}
+	anonymous := httptest.NewRecorder()
+	handler.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/", nil))
+	if anonymous.Code != http.StatusUnauthorized || !strings.Contains(anonymous.Body.String(), "dboss login") {
+		t.Fatalf("anonymous loopback request = %d %q", anonymous.Code, anonymous.Body.String())
+	}
+	other := httptest.NewRecorder()
+	handler.ServeHTTP(other, httptest.NewRequest(http.MethodGet, "http://evil.example/", nil))
+	if other.Code != http.StatusNotFound {
+		t.Fatalf("foreign host status = %d", other.Code)
+	}
+
+	link, err := handler.LoginURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "http://127.0.0.1:3100/login?token=") {
+		t.Fatalf("unexpected login URL: %s", link)
+	}
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodGet, link, nil))
+	if login.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d", login.Code)
+	}
+	bootstrap := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
+	bootstrap.AddCookie(cookieNamed(t, login.Result().Cookies(), authSessionCookie))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, bootstrap)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"viewer":"cli@localhost"`) {
+		t.Fatalf("bootstrap over loopback = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAuthCogRejectsCLIEmail(t *testing.T) {
 	auth := &authenticator{
 		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		host:       "boss.lvh.me",
+		hosts:      map[string]bool{"boss.lvh.me": true},
 		key:        []byte("01234567890123456789012345678901"),
 		admins:     map[string]bool{"admin@example.com": true},
 		challenges: map[string]authChallenge{},
@@ -93,7 +132,7 @@ func TestAuthCogRejectsCLIEmail(t *testing.T) {
 func TestAuthCogLoginAndSession(t *testing.T) {
 	auth := &authenticator{
 		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		host:       "boss.lvh.me",
+		hosts:      map[string]bool{"boss.lvh.me": true},
 		key:        []byte("01234567890123456789012345678901"),
 		admins:     map[string]bool{"admin@example.com": true},
 		challenges: map[string]authChallenge{},
@@ -151,7 +190,7 @@ func TestAuthCogLoginAndSession(t *testing.T) {
 }
 
 func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
-	auth := &authenticator{host: "boss.lvh.me", admins: map[string]bool{}}
+	auth := &authenticator{hosts: map[string]bool{"boss.lvh.me": true}, admins: map[string]bool{}}
 	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/api/apps", nil)
 	response := httptest.NewRecorder()
 	if _, ok := auth.authenticate(response, request); ok {

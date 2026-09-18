@@ -9,8 +9,8 @@ import (
 func TestHostSwitchRoutesManagementHost(t *testing.T) {
 	management := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	apps := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := HostSwitch("boss.example.com", management, apps)
-	for host, want := range map[string]int{"boss.example.com": http.StatusAccepted, "Boss.Example.com:8080": http.StatusAccepted, "app.example.com": http.StatusOK} {
+	handler := HostSwitch([]string{"boss.example.com", "boss.internal"}, management, apps)
+	for host, want := range map[string]int{"boss.example.com": http.StatusAccepted, "Boss.Example.com:8080": http.StatusAccepted, "boss.internal": http.StatusAccepted, "app.example.com": http.StatusOK} {
 		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)

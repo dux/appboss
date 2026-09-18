@@ -148,7 +148,7 @@ func (c CLI) start(args []string) error {
 	defer requestLogs.Close()
 	var edge http.Handler
 	var management *console.Handler
-	if cfg.Proxy.Listen != "" {
+	if len(cfg.Proxy.Listen) > 0 {
 		if edge, management, err = edgeHandler(cfg, manager, requestLogs); err != nil {
 			return err
 		}
@@ -164,14 +164,16 @@ func (c CLI) start(args []string) error {
 	defer control.Close()
 	var servers []*http.Server
 	if edge != nil {
-		server, err := startHTTPServer("proxy", cfg.Proxy.Listen, edge)
-		if err != nil {
-			return err
+		for _, address := range cfg.Proxy.Listen {
+			server, err := startHTTPServer("proxy", address, edge)
+			if err != nil {
+				return err
+			}
+			defer server.Close()
+			servers = append(servers, server)
 		}
-		defer server.Close()
-		servers = append(servers, server)
 		if management != nil {
-			server, err = startHTTPServer("management", managementAddress(managementPort), management)
+			server, err := startHTTPServer("management", managementAddress(managementPort), management)
 			if err != nil {
 				return err
 			}
@@ -182,7 +184,7 @@ func (c CLI) start(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", cfg.SourcePath, cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host, managementPort)
+	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", cfg.SourcePath, cfg.Socket, strings.Join(cfg.Proxy.Listen, ","), strings.Join(cfg.Management.Host, ","), managementPort)
 	<-ctx.Done()
 	for _, server := range servers {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -227,6 +229,9 @@ func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.
 func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
+		if errors.Is(err, syscall.EACCES) {
+			return nil, fmt.Errorf("%s listen %s: %w (port needs CAP_NET_BIND_SERVICE: run the systemd unit, or set proxy.listen to a high port for a hand-run session)", name, address, err)
+		}
 		return nil, fmt.Errorf("%s listen: %w", name, err)
 	}
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -310,15 +315,22 @@ func (c CLI) local(command string, args []string) error {
 	pathFlag := configFlag(set)
 	jsonOutput := set.Bool("json", false, "JSON output")
 	reference := set.Bool("reference", false, "print the annotated configuration reference")
+	keys := set.Bool("keys", false, "list every configuration key with its description and default")
 	var withDefaults bool
 	set.BoolVar(&withDefaults, "d", false, "include defaults: print the resolved config")
 	set.BoolVar(&withDefaults, "defaults", false, "include defaults: print the resolved config")
-	if err := set.Parse(args); err != nil {
+	if err := set.Parse(flagsFirst(args)); err != nil {
 		return err
 	}
 	if command == "config" && *reference {
 		_, err := io.WriteString(c.Out, config.Reference)
 		return err
+	}
+	if command == "config" && *keys {
+		if set.NArg() > 1 {
+			return errors.New("usage: dboss config --keys [filter]")
+		}
+		return c.printKeys(set.Arg(0), *jsonOutput)
 	}
 	path, err := findConfig(*pathFlag)
 	if err != nil {
@@ -551,6 +563,78 @@ func (c CLI) remote(command string, args []string) error {
 		return nil
 	}
 	return c.printHuman(request.Method, data)
+}
+
+// flagsFirst moves flags ahead of positional arguments so `dboss config app -d` and
+// `dboss config --keys static --json` parse the same as with the flags in front.
+func flagsFirst(args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		if (arg == "-c" || arg == "--config") && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(flags, positional...)
+}
+
+var keyGroups = []struct{ id, title, note string }{
+	{config.GroupHost, "Host keys", "dboss.yaml with apps:"},
+	{config.GroupApp, "App keys", "dboss.yaml with procfile:"},
+	{config.GroupShared, "Shared app keys", "defaults: in the host file, top level in an app file; per-process ones also under processes.<name>"},
+}
+
+// printKeys lists the documented config keys, grouped by file role. filter narrows by a
+// substring of the key path.
+func (c CLI) printKeys(filter string, jsonOutput bool) error {
+	var keys []config.Key
+	for _, key := range config.Keys() {
+		if filter == "" || strings.Contains(key.Path, filter) {
+			keys = append(keys, key)
+		}
+	}
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(keys, "", "  ")
+		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("no config key matches %q", filter)
+	}
+	writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+	for _, group := range keyGroups {
+		first := true
+		for _, key := range keys {
+			if key.Group != group.id {
+				continue
+			}
+			if first {
+				fmt.Fprintf(writer, "%s  (%s)\n", group.title, group.note)
+				first = false
+			}
+			value := key.Default
+			if value == "" {
+				value = "e.g. " + key.Example
+			}
+			// The last text on a line is not a padded cell, so lines without the scope
+			// column end right after the value instead of trailing spaces.
+			if key.PerProcess {
+				fmt.Fprintf(writer, "  %s\t%s\t%s\tper process\n", key.Path, key.Description, value)
+			} else {
+				fmt.Fprintf(writer, "  %s\t%s\t%s\n", key.Path, key.Description, value)
+			}
+		}
+		if !first {
+			fmt.Fprintln(writer)
+		}
+	}
+	return writer.Flush()
 }
 
 func (c CLI) printHuman(method string, data any) error {

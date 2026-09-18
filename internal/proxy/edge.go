@@ -8,11 +8,15 @@ import (
 	"strings"
 )
 
-// HostSwitch serves the management console on its hostname and everything else as app traffic.
-func HostSwitch(managementHost string, management, apps http.Handler) http.Handler {
-	managementHost = strings.ToLower(managementHost)
+// HostSwitch serves the management console on any of its hostnames and everything else as
+// app traffic.
+func HostSwitch(managementHosts []string, management, apps http.Handler) http.Handler {
+	hosts := make(map[string]bool, len(managementHosts))
+	for _, host := range managementHosts {
+		hosts[strings.ToLower(host)] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hostOnly(r.Host) == managementHost {
+		if hosts[hostOnly(r.Host)] {
 			management.ServeHTTP(w, r)
 			return
 		}

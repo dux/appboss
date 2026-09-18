@@ -45,7 +45,7 @@ func TestLoadSingleAppRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.App == nil || cfg.App.Procfile["web"] != "./server" || cfg.App.IdleStop != 0 || cfg.Proxy.Listen != "127.0.0.1:9090" {
+	if cfg.App == nil || cfg.App.Procfile["web"] != "./server" || cfg.App.IdleStop != 0 || strings.Join(cfg.Proxy.Listen, ",") != "127.0.0.1:9090" {
 		t.Fatalf("unexpected single-app config: %+v app=%+v", cfg, cfg.App)
 	}
 	if cfg.Apps != "" {
@@ -105,10 +105,47 @@ func TestLoadAppRequiresProcfileAndRejectsHostKeys(t *testing.T) {
 	}
 }
 
+func TestListKeysAcceptScalarOrSequence(t *testing.T) {
+	dir := t.TempDir()
+	defaults := Default().Defaults
+	scalar, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: demo.test\nstatic_immutable: /packs/\nallow_ips: 10.0.0.0/8\n"), filepath.Join(dir, FileName), defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [demo.test]\nstatic_immutable: [/packs/]\nallow_ips: [10.0.0.0/8]\n"), filepath.Join(dir, FileName), defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scalar.Hosts) != 1 || !reflect.DeepEqual(scalar.Hosts, sequence.Hosts) || !reflect.DeepEqual(scalar.StaticImmutable, sequence.StaticImmutable) || !reflect.DeepEqual(scalar.AllowIPs, sequence.AllowIPs) {
+		t.Fatalf("scalar %+v and sequence %+v differ", scalar, sequence)
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "apps"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, FileName)
+	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", 127.0.0.1:8081]\n  trusted_cidrs: 10.0.0.0/8\nmanagement:\n  host: [boss.example.com, boss.internal]\n  auth:\n    admin_emails: admin@example.com\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.Proxy.Listen, ",") != ":8080,127.0.0.1:8081" || strings.Join(cfg.Management.Host, ",") != "boss.example.com,boss.internal" || strings.Join(cfg.Proxy.TrustedCIDRs, ",") != "10.0.0.0/8" || strings.Join(cfg.Management.Auth.AdminEmails, ",") != "admin@example.com" {
+		t.Fatalf("unexpected lists: listen=%v host=%v cidrs=%v emails=%v", cfg.Proxy.Listen, cfg.Management.Host, cfg.Proxy.TrustedCIDRs, cfg.Management.Auth.AdminEmails)
+	}
+	writeConfigFile(t, path, "apps: ./apps\nmanagement:\n  host: [boss.example.com, Boss.Example.com]\n  auth:\n    admin_emails: admin@example.com\n")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate management host = %v", err)
+	}
+	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", \":8080\"]\n")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate listen address = %v", err)
+	}
+}
+
 func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	cfg := Default()
 	cfg.Apps = "/apps"
-	cfg.Management.Host = "boss.example.com"
+	cfg.Management.Host = List{"boss.example.com"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing admin email error")
 	}
@@ -116,7 +153,7 @@ func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Proxy.Listen = ""
+	cfg.Proxy.Listen = nil
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing proxy listener error")
 	}
@@ -264,7 +301,7 @@ func TestRestartRequiredListsHostKeys(t *testing.T) {
 	if keys := RestartRequired(old, current); len(keys) != 0 {
 		t.Fatalf("defaults change must apply live, got %v", keys)
 	}
-	current.Proxy.Listen = ":81"
+	current.Proxy.Listen = List{":81"}
 	current.Ports.Range = [2]int{4000, 4100}
 	if keys := RestartRequired(old, current); strings.Join(keys, ",") != "proxy,ports" {
 		t.Fatalf("got %v", keys)

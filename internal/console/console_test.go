@@ -245,13 +245,27 @@ func newTestHandler(t *testing.T, manager AppManager, rates RateReader) *Handler
 	cfg := config.Default()
 	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
-	cfg.Management.Host = "boss.lvh.me"
+	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	handler, err := New(cfg, manager, rates, newFakeStore())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func TestConsoleAnswersForEveryManagementHost(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, _ := sessionCookie(t, handler)
+	for host, want := range map[string]int{"boss.lvh.me:8081": http.StatusOK, "boss.internal": http.StatusOK, "other.lvh.me:8081": http.StatusNotFound} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/api/apps", nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("%s: status = %d, want %d", host, response.Code, want)
+		}
+	}
 }
 
 // call sends an authenticated JSON request with the CSRF headers the console requires.

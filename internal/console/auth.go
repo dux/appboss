@@ -57,7 +57,7 @@ type authChallenge struct {
 
 type authenticator struct {
 	cfg        config.ManagementAuth
-	host       string
+	hosts      map[string]bool
 	key        []byte
 	admins     map[string]bool
 	client     *http.Client
@@ -72,9 +72,13 @@ func newAuthenticator(cfg config.Config) (*authenticator, error) {
 	if err != nil {
 		return nil, err
 	}
+	hosts := make(map[string]bool, len(cfg.Management.Host))
+	for _, host := range cfg.Management.Host {
+		hosts[strings.ToLower(host)] = true
+	}
 	auth := &authenticator{
 		cfg:    cfg.Management.Auth,
-		host:   strings.ToLower(cfg.Management.Host),
+		hosts:  hosts,
 		key:    key,
 		admins: map[string]bool{},
 		client: &http.Client{
@@ -115,12 +119,37 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 		_, _ = io.WriteString(w, `{"error":"authentication required"}`+"\n")
 		return authSession{}, false
 	}
+	if loopbackHost(r.Host) {
+		// AuthCog has no destination for a loopback name, so the only way in here is the link
+		// from `dboss login`.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, cliLoginPage)
+		return authSession{}, false
+	}
 	a.startLogin(w, r)
 	return authSession{}, false
 }
 
+const cliLoginPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to Deploy Boss</title><style>body{background:#f1f5f9;color:#182433;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;min-height:100vh;place-items:center;margin:0}main{max-width:32rem;padding:0 1.5rem;text-align:center}code{padding:2px 6px;border:1px solid rgb(4 32 69 / 14%);border-radius:4px;background:#fff}p{color:#667382}</style><main><h1>Sign in from the command line</h1><p>Run <code>dboss login</code> on this host and open the link it prints. The link works once and expires after 3 minutes.</p></main></html>`
+
+// loopbackHost reports whether rawHost names this machine: localhost or a loopback address,
+// with or without a port.
+func loopbackHost(rawHost string) bool {
+	host := rawHost
+	if parsedHost, _, err := net.SplitHostPort(rawHost); err == nil {
+		host = parsedHost
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (a *authenticator) startLogin(w http.ResponseWriter, r *http.Request) {
-	destination, err := authDestination(r.Host, a.host)
+	destination, err := authDestination(r.Host, a.hosts)
 	if err != nil {
 		http.Error(w, "invalid authentication destination", http.StatusBadRequest)
 		return
@@ -170,7 +199,7 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expired authentication callback", http.StatusBadRequest)
 		return
 	}
-	destination, err := authDestination(r.Host, a.host)
+	destination, err := authDestination(r.Host, a.hosts)
 	if err != nil || destination != challenge.Destination {
 		http.Error(w, "authentication destination changed", http.StatusBadRequest)
 		return
@@ -341,7 +370,9 @@ func (a *authenticator) sign(value string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func authDestination(rawHost, expectedHost string) (string, error) {
+// authDestination turns the request host into the AuthCog destination path, or fails when the
+// host is not one of the console's configured hostnames.
+func authDestination(rawHost string, hosts map[string]bool) (string, error) {
 	host, port := rawHost, ""
 	if parsedHost, parsedPort, err := net.SplitHostPort(rawHost); err == nil {
 		host, port = parsedHost, parsedPort
@@ -349,7 +380,7 @@ func authDestination(rawHost, expectedHost string) (string, error) {
 		return "", errors.New("invalid host port")
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host != expectedHost {
+	if !hosts[host] {
 		return "", errors.New("unexpected host")
 	}
 	destination := "/d:" + host
