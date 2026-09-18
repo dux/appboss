@@ -19,6 +19,7 @@ import (
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/ops"
 	"deploy-boss/internal/super"
 )
@@ -132,6 +133,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
 		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/logs":
+		h.searchLogs(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/requests":
+		h.searchRequests(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/action":
 		h.action(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/rescan":
@@ -365,6 +370,58 @@ func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, output.String())
+}
+
+func (h *Handler) searchLogs(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	entries, err := h.service.SearchLogs(app, logstore.LogFilter{
+		Process: strings.TrimSpace(r.URL.Query().Get("process")),
+		Level:   strings.TrimSpace(r.URL.Query().Get("level")),
+		Query:   strings.TrimSpace(r.URL.Query().Get("q")),
+		Since:   sinceParam(r.URL.Query().Get("since")),
+		Limit:   intParam(r.URL.Query().Get("limit")),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"logs": entries, "updated_at": time.Now().UTC()})
+}
+
+func (h *Handler) searchRequests(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	entries, err := h.service.SearchRequests(app, logstore.RequestFilter{
+		Status: intParam(r.URL.Query().Get("status")),
+		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
+		Since:  sinceParam(r.URL.Query().Get("since")),
+		Limit:  intParam(r.URL.Query().Get("limit")),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": entries, "updated_at": time.Now().UTC()})
+}
+
+func sinceParam(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func intParam(value string) int {
+	parsed, _ := strconv.Atoi(value)
+	return parsed
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request, session authSession) {

@@ -25,7 +25,9 @@
     }
 
     viewFromHash() {
-      return location.hash === '#config' ? 'config' : 'overview'
+      if (location.hash === '#config') return 'config'
+      if (location.hash === '#logs') return 'logs'
+      return 'overview'
     }
 
     initials() {
@@ -172,6 +174,7 @@
   <div class="container">
     <ul class="nav-tabs">
       <li><a class="nav-link" class:active={state.view === 'overview'} href="#overview"><svg class="icon"><use href="#i-home"></use></svg>Overview</a></li>
+      <li><a class="nav-link" class:active={state.view === 'logs'} href="#logs"><svg class="icon"><use href="#i-list"></use></svg>Logs</a></li>
       <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Configuration</a></li>
     </ul>
   </div>
@@ -181,6 +184,9 @@
   <div class="container">
     <section class="view" class:d-none={state.view !== 'overview'}>
       <db-overview />
+    </section>
+    <section class="view" class:d-none={state.view !== 'logs'}>
+      <db-logs />
     </section>
     <section class="view" class:d-none={state.view !== 'config'}>
       <db-config />

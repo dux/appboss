@@ -243,10 +243,11 @@ type Web struct {
 func (w Web) AllowPrefixes() []netip.Prefix { return w.allowPrefixes }
 
 type Daemon struct {
-	IdleTick      Duration `yaml:"idle_tick" json:"idle_tick"`
-	ResumeRunning bool     `yaml:"resume_running" json:"resume_running"`
-	PruneAt       string   `yaml:"prune_at" json:"prune_at"`
-	LogLevel      string   `yaml:"log_level" json:"log_level"`
+	IdleTick          Duration `yaml:"idle_tick" json:"idle_tick"`
+	ResumeRunning     bool     `yaml:"resume_running" json:"resume_running"`
+	PruneAt           string   `yaml:"prune_at" json:"prune_at"`
+	LogLevel          string   `yaml:"log_level" json:"log_level"`
+	LogIngestInterval Duration `yaml:"log_ingest_interval" json:"log_ingest_interval"`
 }
 
 func Default() Config {
@@ -255,8 +256,8 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
-		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info"},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
+		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second)},
 	}
 }
 
@@ -413,6 +414,9 @@ func (c Config) validate(hasApp bool) error {
 	}
 	if c.Daemon.IdleTick <= 0 {
 		return keyErr("daemon.idle_tick", "must be positive")
+	}
+	if c.Daemon.LogIngestInterval <= 0 {
+		return keyErr("daemon.log_ingest_interval", "must be positive")
 	}
 	if c.Daemon.LogLevel != "debug" && c.Daemon.LogLevel != "info" && c.Daemon.LogLevel != "warn" && c.Daemon.LogLevel != "error" {
 		return keyErr("daemon.log_level", "must be debug, info, warn or error, not %q", c.Daemon.LogLevel)

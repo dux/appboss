@@ -190,8 +190,8 @@ defaults:
   log_keep: 5               # rotated files kept per proctype
   log_tail_lines: 500       # lines kept in memory for `dboss logs` without -f
 
-  # Request log (SQLite written by the proxy).
-  log_retention: 720h       # 30 days. 0 disables the request log for the app.
+  # Log store (SQLite written by the proxy and the ingestion module).
+  log_retention: 336h       # 14 days. 0 disables both process logs and request rows for the app.
   log_flush: 1s             # batch insert interval
 
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
@@ -259,10 +259,13 @@ daemon:
   # On daemon start, restart apps that running.json says were running before.
   # Without a running.json yet (first start) every discovered app is started.
   resume_running: true
-  # Daily request-log prune at this local time.
+  # Daily prune of logs and request rows older than log_retention, at this local time.
   prune_at: "04:10"
   # dboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
   log_level: info           # debug | info | warn | error
+  # How often each running process's log segment is sealed and ingested into the per-app
+  # log store. A sealed segment stays on disk until its rows are committed.
+  log_ingest_interval: 5s
 
 # =============================================================================
 # PART 2: <app>/dboss.yaml   (required, per app)

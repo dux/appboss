@@ -8,15 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"maps"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -24,12 +20,8 @@ import (
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
-	"deploy-boss/internal/console"
 	"deploy-boss/internal/ctl"
-	"deploy-boss/internal/ops"
-	"deploy-boss/internal/ports"
-	"deploy-boss/internal/proxy"
-	"deploy-boss/internal/reqlog"
+	"deploy-boss/internal/daemon"
 	"deploy-boss/internal/super"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
@@ -125,154 +117,14 @@ func (c CLI) start(args []string) error {
 	if info, statErr := os.Stdout.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
 		echo = super.NewEcho(c.Out)
 	}
-	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-	}
-	cleared, err := super.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	session, err := daemon.Build(cfg, echo)
 	if err != nil {
 		return err
 	}
-	if len(cleared) > 0 {
-		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
-	}
-	allocator, managementPort := newAllocator(cfg)
-	manager, invalid, err := super.New(cfg, allocator, echo)
-	if err != nil {
-		return err
-	}
-	defer manager.Close()
-	for _, scanErr := range invalid {
-		log.Printf("skip invalid app: %v", scanErr)
-	}
-	requestLogs := reqlog.New(cfg.LogDir, cfg.Defaults.LogFlush.Value())
-	defer requestLogs.Close()
-	service := ops.New(manager, requestLogs)
-	var edge http.Handler
-	var management *console.Handler
-	if len(cfg.Proxy.Listen) > 0 {
-		if edge, management, err = edgeHandler(cfg, service, manager, requestLogs); err != nil {
-			return err
-		}
-	}
-	var login func() (string, error)
-	if management != nil {
-		login = management.LoginURL
-	}
-	control, err := ctl.Listen(cfg.Socket, service, login)
-	if err != nil {
-		return err
-	}
-	defer control.Close()
-	var servers []*http.Server
-	if edge != nil {
-		for _, address := range cfg.Proxy.Listen {
-			server, err := startHTTPServer("proxy", address, edge)
-			if err != nil {
-				return err
-			}
-			defer server.Close()
-			servers = append(servers, server)
-		}
-		if management != nil {
-			server, err := startHTTPServer("management", managementAddress(managementPort), management)
-			if err != nil {
-				return err
-			}
-			defer server.Close()
-			servers = append(servers, server)
-		}
-	}
+	defer session.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	if management != nil {
-		log.Printf("management console: http://127.0.0.1:%d (run `dboss login` for a one-time sign-in link)", managementPort)
-		if cfg.Management.URL != "" {
-			log.Printf("management console: %s (AuthCog sign-in)", cfg.Management.URL)
-		}
-	}
-	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", cfg.SourcePath, cfg.Socket, strings.Join(cfg.Proxy.Listen, ","), strings.Join(cfg.Management.Host, ","), managementPort)
-	<-ctx.Done()
-	for _, server := range servers {
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = server.Shutdown(shutdown)
-		cancel()
-	}
-	return nil
-}
-
-// newAllocator reserves the first port of the range for the management console before any app
-// is discovered, so app ports never shift when the console is turned on or off.
-func newAllocator(cfg config.Config) (*ports.Allocator, int) {
-	allocator := ports.New(cfg.Ports.Range)
-	port, _ := allocator.Allocate("dboss", "management")
-	return allocator, port
-}
-
-func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
-
-// edgeHandler is the single public listener: Cloudflare hands it the full request and the
-// host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
-// The console handler is returned as well so it can be served on its own port and mint
-// login links; it is nil when the console is not enabled.
-func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, *console.Handler, error) {
-	appProxy, err := proxy.New(cfg, manager, requestLogs)
-	if err != nil {
-		return nil, nil, err
-	}
-	var handler http.Handler = appProxy
-	var management *console.Handler
-	if cfg.Management.Enabled() {
-		management, err = console.New(cfg, service, apps.NewStore(cfg))
-		if err != nil {
-			return nil, nil, fmt.Errorf("management console: %w", err)
-		}
-		handler = proxy.HostSwitch(cfg.Management.Host, management, appProxy)
-	}
-	edge, err := proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
-	return edge, management, err
-}
-
-func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) {
-			return nil, fmt.Errorf("%s listen %s: %w (port needs CAP_NET_BIND_SERVICE: run the systemd unit, or set proxy.listen to a high port for a hand-run session)", name, address, err)
-		}
-		return nil, fmt.Errorf("%s listen: %w", name, err)
-	}
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("%s: %v", name, err)
-		}
-	}()
-	return server, nil
-}
-
-func pruneLoop(ctx context.Context, logs *reqlog.Manager, manager *super.Manager, at string) {
-	for {
-		now := time.Now()
-		target, _ := time.ParseInLocation("15:04", at, now.Location())
-		next := time.Date(now.Year(), now.Month(), now.Day(), target.Hour(), target.Minute(), 0, 0, now.Location())
-		if !next.After(now) {
-			next = next.Add(24 * time.Hour)
-		}
-		timer := time.NewTimer(time.Until(next))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-			for _, snapshot := range manager.Snapshots() {
-				if err := logs.PruneApp(ctx, snapshot.Name, snapshot.LogRetention); err != nil {
-					log.Printf("request log prune %s: %v", snapshot.Name, err)
-				}
-			}
-		}
-	}
+	return session.Run(ctx)
 }
 
 // password prints a bcrypt hash for basic_auth. The prompt hides input on a terminal; piped

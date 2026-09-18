@@ -1052,6 +1052,67 @@ code {
   border-left-color: var(--danger);
 }
 
+.log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-filters input,
+.log-filters select {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+}
+
+.log-filters input {
+  flex: 1 1 220px;
+}
+
+.log-filters input:focus,
+.log-filters select:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.log-table {
+  display: block;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.log-table td {
+  vertical-align: top;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-table td.log-time {
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.log-level {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.log-level[data-level="error"],
+.log-level[data-level="fatal"] { color: var(--danger); }
+
+.log-level[data-level="warn"] { color: var(--warning); }
+
+.log-level[data-level="debug"] { color: var(--muted); }
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

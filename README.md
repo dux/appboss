@@ -1,8 +1,9 @@
 # deploy-boss
 
 Bare-metal app host for one Linux box, in a single Go binary called `dboss`.
-It runs the processes described by each app's `dboss.yaml`, hands every process a fixed `PORT`, proxies HTTP to the right app by hostname, stops idle apps and wakes them on the next request, and keeps a per-app SQLite request log.
-A built-in management console shows live state, controls the supervisor and edits the config files on disk.
+It runs the processes described by each app's `dboss.yaml`, hands every process a fixed `PORT`, proxies HTTP to the right app by hostname, stops idle apps and wakes them on the next request, and ingests every process log and request row into a per-app SQLite log store.
+A built-in management console shows live state, controls the supervisor, edits the config files on disk and searches the logs.
+Daemon features are modules with a common lifecycle, so a new one (an ingestion sink, a security filter) plugs in at one place.
 
 It sits directly behind Cloudflare as the origin.
 There is no TLS, no containers and no deploy logic; rsync, releases and rollback stay in lux-deploy, which calls `dboss` at the end of a deploy.
@@ -128,6 +129,17 @@ That file is written on every `run` and `stop`, so an app you stopped stays stop
 When the file does not exist yet, which is the case on a first start, every discovered app is started.
 A stopped app is also started by the first proxied request, which gets a "starting" page that refreshes after `proxy.wake.retry_after` seconds.
 
+## Logs
+
+Every app has one SQLite database at `log_dir/<app>/dboss.sqlite` with two tables:
+`requests` (one row per proxied request, written by the proxy) and `logs` (one row per process output line, written by the ingestion module).
+`logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`, and an FTS5 index over `message` and `raw` backs the text search.
+Rows older than `log_retention` (default `336h`, two weeks) are deleted by the daily prune; `0` disables the store for the app.
+
+The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the ingestion module parses the sealed segment, batches it into the database and deletes the file.
+A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a keyword guess for the level.
+`dboss logs -f` still tails the live file; the console's **Logs** tab searches the store by app, process, level and free text.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `dboss login` sessions.
@@ -169,6 +181,7 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 * `fez.min.js` - the fez runtime, copied from https://dux.github.io/fez/dist/fez.min.js.
 * `fez/db-shell.fez` - navbar, section tabs, hash-routed views, API calls, the 5 second poll; exposed as `Boss`.
 * `fez/db-overview.fez` - stat cards and the service list.
+* `fez/db-logs.fez` - log viewer: app, process and level pickers, text search, live refresh.
 * `fez/db-app-card.fez` - one service: status badge, datagrid, process table, actions.
 * `fez/db-config.fez` - config file list and editor.
 * `fez/db-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
@@ -183,14 +196,18 @@ The console's Content Security Policy allows `'unsafe-inline'` and `'unsafe-eval
 ```
 cmd/dboss/            entry point
 internal/cli/         commands, help text, systemd unit, host session wiring
+internal/daemon/      one host session: supervisor, modules, proxy, console, control socket
+internal/module/      module lifecycle (start in order, close in reverse)
 internal/config/      dboss.yaml model, validation, embedded reference.yaml
 internal/apps/        app discovery and the config file store the console edits
-internal/super/       process supervisor, health checks, idle stop, state files
+internal/super/       process supervisor, health checks, idle stop, state files, log writer/seal
 internal/ports/       fixed port allocation inside ports.range
-internal/proxy/       host routing, static files, maintenance, wake, request logging
-internal/reqlog/      per-app SQLite request logs and rates
+internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
+internal/logstore/    per-app SQLite log store: requests, process logs, FTS search, prune
+internal/ingest/      seals process logs on a timer, parses and writes them to the store
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
+internal/ops/         one implementation of every app action, shared by CLI and console
 internal/res/         process placement (process groups)
 web/                  starting, crashed, maintenance and 404 pages
 demo/                 host config and two sample apps

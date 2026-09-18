@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"deploy-boss/internal/reqlog"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/super"
 )
 
@@ -62,19 +62,19 @@ func (f *fakeRuntime) Logs(name, process string, lines int) (map[string][]string
 
 func (f *fakeRuntime) Ports() map[string]int { return map[string]int{"web": 3100} }
 
-type fakeRates map[string]reqlog.Rates
+type fakeRates map[string]logstore.Rates
 
-func (r fakeRates) Rates(app string) (reqlog.Rates, error) {
+func (r fakeRates) Rates(app string) (logstore.Rates, error) {
 	rates, ok := r[app]
 	if !ok {
-		return reqlog.Rates{}, errors.New("missing rate fixture")
+		return logstore.Rates{}, errors.New("missing rate fixture")
 	}
 	return rates, nil
 }
 
 func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}}
-	service := New(runtime, nil)
+	service := New(runtime, nil, nil)
 	cases := []struct {
 		request Request
 		action  string
@@ -98,14 +98,14 @@ func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 }
 
 func TestDoRejectsAnUnknownAction(t *testing.T) {
-	if _, err := New(&fakeRuntime{}, nil).Do(Request{Method: "nope"}); !errors.Is(err, ErrUnknownAction) {
+	if _, err := New(&fakeRuntime{}, nil, nil).Do(Request{Method: "nope"}); !errors.Is(err, ErrUnknownAction) {
 		t.Fatalf("got %v, want ErrUnknownAction", err)
 	}
 }
 
 func TestAppsAttachRequestRates(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
-	service := New(runtime, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}})
+	service := New(runtime, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}}, nil)
 	apps := service.Apps()
 	if apps[0].RequestRates.LastHour != 7 {
 		t.Fatalf("sinatra rates = %+v", apps[0].RequestRates)
@@ -117,7 +117,7 @@ func TestAppsAttachRequestRates(t *testing.T) {
 
 func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}, invalid: []error{errors.New("bun: bad procfile")}, restart: []string{"proxy"}}
-	result, err := New(runtime, nil).Rescan()
+	result, err := New(runtime, nil, nil).Rescan()
 	if err != nil {
 		t.Fatal(err)
 	}

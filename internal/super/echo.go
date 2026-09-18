@@ -59,21 +59,3 @@ func (w *echoWriter) emit(line []byte) {
 	_, _ = io.WriteString(w.echo.out, w.prefix)
 	_, _ = w.echo.out.Write(line)
 }
-
-// tee is the process stdout/stderr sink when echo is on: the log file is authoritative and the
-// terminal copy is best effort.
-type tee struct {
-	file io.WriteCloser
-	echo *echoWriter
-}
-
-func (t tee) Write(p []byte) (int, error) {
-	n, err := t.file.Write(p)
-	_, _ = t.echo.Write(p)
-	return n, err
-}
-
-func (t tee) Close() error {
-	t.echo.flush()
-	return t.file.Close()
-}

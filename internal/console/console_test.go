@@ -15,8 +15,8 @@ import (
 
 	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/ops"
-	"deploy-boss/internal/reqlog"
 	"deploy-boss/internal/super"
 )
 
@@ -153,13 +153,23 @@ func (s *fakeStore) Effective(app string) (string, error) {
 	return "procfile:\n  web: ./server\nidle_stop: 6h0m0s\n", nil
 }
 
-type fakeRates map[string]reqlog.Rates
+type fakeRates map[string]logstore.Rates
 
-func (rates fakeRates) Rates(app string) (reqlog.Rates, error) {
+func (rates fakeRates) Rates(app string) (logstore.Rates, error) {
 	if value, ok := rates[app]; ok {
 		return value, nil
 	}
-	return reqlog.Rates{}, errors.New("missing rate fixture")
+	return logstore.Rates{}, errors.New("missing rate fixture")
+}
+
+type fakeLogs struct{}
+
+func (fakeLogs) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, error) {
+	return []logstore.LogEntry{{Time: time.Now(), Source: "process", Process: "web", Level: "error", Message: "boom"}}, nil
+}
+
+func (fakeLogs) SearchRequests(string, logstore.RequestFilter) ([]logstore.RequestEntry, error) {
+	return []logstore.RequestEntry{{Time: time.Now(), Method: "GET", Path: "/hello", Status: 200}}, nil
 }
 
 func TestConsoleBootstrapAndActions(t *testing.T) {
@@ -252,6 +262,24 @@ func TestConsoleServesAuthenticatedRoot(t *testing.T) {
 	}
 }
 
+func TestConsoleServesLogAndRequestSearch(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, session := sessionCookie(t, handler)
+
+	logs := call(t, handler, cookie, session, http.MethodGet, "/api/logs?app=sinatra&level=error", "")
+	if logs.Code != http.StatusOK || !strings.Contains(logs.Body.String(), `"message":"boom"`) {
+		t.Fatalf("unexpected logs: %d %s", logs.Code, logs.Body.String())
+	}
+	requests := call(t, handler, cookie, session, http.MethodGet, "/api/requests?app=sinatra", "")
+	if requests.Code != http.StatusOK || !strings.Contains(requests.Body.String(), `"path":"/hello"`) {
+		t.Fatalf("unexpected requests: %d %s", requests.Code, requests.Body.String())
+	}
+	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/logs", "")
+	if missingApp.Code != http.StatusBadRequest {
+		t.Fatalf("missing app should be a 400: %d", missingApp.Code)
+	}
+}
+
 func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handler {
 	t.Helper()
 	cfg := config.Default()
@@ -259,7 +287,7 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handle
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	handler, err := New(cfg, ops.New(manager, rates), newFakeStore())
+	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}), newFakeStore())
 	if err != nil {
 		t.Fatal(err)
 	}

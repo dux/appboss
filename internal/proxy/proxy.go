@@ -23,24 +23,32 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"deploy-boss/internal/config"
-	"deploy-boss/internal/reqlog"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/super"
 )
 
 const maintenanceRetryAfter = 30
 
+// Recorder receives one row per proxied request. logstore.Store is the production one.
+type Recorder interface {
+	Record(app string, retention time.Duration, entry logstore.RequestEntry) error
+}
+
 type Handler struct {
 	cfg         config.Config
 	manager     *super.Manager
-	logs        *reqlog.Manager
+	recorder    Recorder
 	transport   *http.Transport
 	starting    []byte
 	crashed     []byte
 	unknown     []byte
 	maintenance []byte
+	filters     []Filter
 }
 
-func New(cfg config.Config, manager *super.Manager, logs *reqlog.Manager) (*Handler, error) {
+// New builds the proxy. extra stages are inserted before the forward stage, which is where a
+// module hooks its own filter into the pipeline.
+func New(cfg config.Config, manager *super.Manager, recorder Recorder, extra ...Filter) (*Handler, error) {
 	starting, err := readPage(cfg.Proxy.Wake.StartingPage)
 	if err != nil {
 		return nil, err
@@ -58,7 +66,9 @@ func New(cfg config.Config, manager *super.Manager, logs *reqlog.Manager) (*Hand
 		return nil, err
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	return &Handler{cfg: cfg, manager: manager, logs: logs, transport: transport, starting: starting, crashed: crashed, unknown: unknown, maintenance: maintenance}, nil
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, transport: transport, starting: starting, crashed: crashed, unknown: unknown, maintenance: maintenance}
+	h.initFilters(extra...)
+	return h, nil
 }
 
 // ServeHTTP resolves the app once and then walks the request through every proxy feature in a
@@ -74,31 +84,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := ensureRequestID(r)
 	recorder := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 	h.serve(recorder, r, snapshot)
-	_ = h.logs.Record(snapshot.Name, snapshot.LogRetention, snapshot.LogFlush, reqlog.Entry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID})
-}
-
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) {
-	if redirectCanonical(w, r, snapshot.CanonicalHost) {
-		return
-	}
-	if !allowed(clientIP(r, h.cfg.Proxy.ClientIPHeaders), snapshot.Web.AllowPrefixes()) {
-		h.forbidden(w, r)
-		return
-	}
-	if !authorized(w, r, snapshot) {
-		return
-	}
-	if snapshot.Maintenance {
-		h.unavailablePage(w, r, h.maintenancePage(snapshot), snapshot.Name, maintenanceRetryAfter)
-		return
-	}
-	if serveStatic(w, r, snapshot) {
-		return
-	}
-	if !limitBody(w, r, int64(snapshot.Web.MaxBody)) {
-		return
-	}
-	h.forward(w, r, snapshot)
+	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID})
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
@@ -188,9 +174,9 @@ func cacheControl(requestPath string, immutable []string) string {
 	return "public, max-age=3600"
 }
 
-// limitBody rejects declared oversize bodies before anything is read and caps chunked ones so
+// limitRequest rejects declared oversize bodies before anything is read and caps chunked ones so
 // the app never sees more than max_body bytes.
-func limitBody(w http.ResponseWriter, r *http.Request, limit int64) bool {
+func limitRequest(w http.ResponseWriter, r *http.Request, limit int64) bool {
 	if limit <= 0 {
 		return true
 	}

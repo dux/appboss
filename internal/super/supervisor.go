@@ -291,6 +291,17 @@ func (m *Manager) Logs(name, processName string, lines int) (map[string][]string
 	return response.logs, response.err
 }
 
+// SealLogs seals every process log segment of one app and returns the sealed file paths. The
+// ingestion module calls it on a schedule, then reads and deletes the segments.
+func (m *Manager) SealLogs(name string) ([]string, error) {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return nil, err
+	}
+	response := runtime.query(request{kind: requestSealLogs})
+	return response.sealed, response.err
+}
+
 func (m *Manager) Touch(name string) {
 	if runtime, err := m.runtime(name); err == nil {
 		select {
@@ -495,6 +506,7 @@ const (
 	requestIdle
 	requestUpdate
 	requestMaintenance
+	requestSealLogs
 )
 
 type request struct {
@@ -509,6 +521,7 @@ type request struct {
 type response struct {
 	snapshot    Snapshot
 	logs        map[string][]string
+	sealed      []string
 	err         error
 	idleStopped bool
 }
@@ -565,8 +578,6 @@ func (a *appRuntime) query(req request) response {
 }
 
 func (a *appRuntime) loop() {
-	logTicker := time.NewTicker(5 * time.Second)
-	defer logTicker.Stop()
 	for {
 		select {
 		case <-a.ctx.Done():
@@ -584,8 +595,6 @@ func (a *appRuntime) loop() {
 			}
 		case event := <-a.events:
 			a.handleEvent(event)
-		case <-logTicker.C:
-			a.rotateLogs()
 		}
 	}
 }
@@ -617,8 +626,31 @@ func (a *appRuntime) handle(req request) response {
 		a.spec = req.spec
 	case requestMaintenance:
 		a.maintenance = req.on
+	case requestSealLogs:
+		sealed, err := a.sealLogs()
+		return response{sealed: sealed, err: err}
 	}
 	return response{}
+}
+
+// sealLogs renames every process's current log segment aside and opens a fresh one, returning
+// the sealed paths for the ingestion module.
+func (a *appRuntime) sealLogs() ([]string, error) {
+	var sealed []string
+	for _, name := range slices.Sorted(maps.Keys(a.processes)) {
+		writer, ok := a.processes[name].log.(*logWriter)
+		if !ok {
+			continue
+		}
+		path, err := writer.Seal()
+		if err != nil {
+			return sealed, err
+		}
+		if path != "" {
+			sealed = append(sealed, path)
+		}
+	}
+	return sealed, nil
 }
 
 func (a *appRuntime) start() error {
@@ -736,13 +768,12 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	if len(killed) > 0 {
 		log.Printf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
 	}
-	var logFile io.WriteCloser
-	logFile, err = openProcessLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
+	logFile, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
 	if err != nil {
 		return err
 	}
 	if a.echo != nil {
-		logFile = tee{file: logFile, echo: a.echo.writer(a.spec.Name, name)}
+		logFile.echo = a.echo.writer(a.spec.Name, name)
 	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -1114,19 +1145,4 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 		result = append(result, key+"="+values[key])
 	}
 	return result
-}
-
-func openProcessLog(path string, maximum int64, keep int) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return nil, err
-	}
-	if info, err := os.Stat(path); err == nil && maximum > 0 && info.Size() >= maximum {
-		if keep > 0 {
-			shiftRotatedLogs(path, keep)
-			_ = os.Rename(path, path+".1")
-		} else {
-			_ = os.Remove(path)
-		}
-	}
-	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 }

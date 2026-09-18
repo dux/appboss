@@ -64,6 +64,7 @@ var keyDocs = map[string]keyDoc{
 	"daemon.resume_running":                  {description: "on start, resume the apps in running.json (every app on a first start)"},
 	"daemon.prune_at":                        {description: "local time of the daily request-log prune"},
 	"daemon.log_level":                       {description: "dboss's own log level: debug, info, warn, error"},
+	"daemon.log_ingest_interval":             {description: "how often process log segments are sealed and ingested into the log store"},
 
 	"procfile":       {description: "process commands by name; names match [a-z][a-z0-9_-]*", example: "{web: bundle exec puma -C config/puma.rb}"},
 	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains", example: "[myapp.com, \"*.myapp.com\"]"},
@@ -84,7 +85,7 @@ var keyDocs = map[string]keyDoc{
 	"log_max_size":     {description: "rotate a process log file above this size"},
 	"log_keep":         {description: "rotated log files kept per process"},
 	"log_tail_lines":   {description: "lines kept in memory for dboss logs"},
-	"log_retention":    {description: "request log retention; 0 disables the request log"},
+	"log_retention":    {description: "how long logs and request rows are kept; 0 disables both"},
 	"log_flush":        {description: "request log batch insert interval"},
 	"shell":            {description: "run commands through sh -c instead of exec"},
 	"env":              {description: "extra environment for every process, lowest priority", example: "{RAILS_ENV: production}"},

@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"deploy-boss/internal/config"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/ports"
-	"deploy-boss/internal/reqlog"
 	"deploy-boss/internal/super"
 )
 
@@ -55,7 +55,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
 	}
-	requestLogs := reqlog.New(cfg.LogDir, 10*time.Millisecond)
+	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "")
 	defer requestLogs.Close()
 	handler, err := New(cfg, manager, requestLogs)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if rates.LastMinute != 3 {
 		t.Fatalf("requests were not logged: %+v", rates)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "requests.sqlite"))
+	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "dboss.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}

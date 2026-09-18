@@ -16,7 +16,9 @@ import (
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
 func featureHandler() *Handler {
-	return &Handler{cfg: config.Default(), maintenance: []byte(defaultMaintenancePage)}
+	handler := &Handler{cfg: config.Default(), maintenance: []byte(defaultMaintenancePage)}
+	handler.initFilters()
+	return handler
 }
 
 func featureSnapshot(t *testing.T, data string) super.Snapshot {

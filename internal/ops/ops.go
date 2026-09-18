@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"deploy-boss/internal/reqlog"
+	"deploy-boss/internal/logstore"
 	"deploy-boss/internal/super"
 )
 
@@ -44,7 +44,13 @@ type Runtime interface {
 
 // Rates reads how many requests an app has answered, for snapshots to carry.
 type Rates interface {
-	Rates(app string) (reqlog.Rates, error)
+	Rates(app string) (logstore.Rates, error)
+}
+
+// LogStore reads the per-app log database for the console and CLI viewers.
+type LogStore interface {
+	SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error)
+	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
 }
 
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
@@ -65,13 +71,33 @@ type RescanResult struct {
 	RestartRequired []string         `json:"restart_required"`
 }
 
-// Service implements every action once. rates may be nil, then snapshots carry no request rates.
+// Service implements every action once. rates and store may be nil, then snapshots carry no
+// request rates and the log viewer is unavailable.
 type Service struct {
 	runtime Runtime
 	rates   Rates
+	store   LogStore
 }
 
-func New(runtime Runtime, rates Rates) *Service { return &Service{runtime: runtime, rates: rates} }
+func New(runtime Runtime, rates Rates, store LogStore) *Service {
+	return &Service{runtime: runtime, rates: rates, store: store}
+}
+
+// SearchLogs and SearchRequests are the read side of the log store, shared by the console and
+// any future `dboss logs --search`.
+func (s *Service) SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error) {
+	if s.store == nil {
+		return nil, errors.New("log store is not enabled")
+	}
+	return s.store.SearchLogs(app, filter)
+}
+
+func (s *Service) SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error) {
+	if s.store == nil {
+		return nil, errors.New("log store is not enabled")
+	}
+	return s.store.SearchRequests(app, filter)
+}
 
 // Do runs one action by name. Both transports call it, so the name-to-method mapping lives here
 // only.

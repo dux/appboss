@@ -15,6 +15,20 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * A new config key needs a description (and an example when it has no default) in `keyDocs` in `./internal/config/keys.go`; the test fails otherwise. Path, type and default are read from the structs and `Default()`. Update `reference.yaml` for the long-form text.
 * State files under `state_dir` (`running.json`, `maintenance.json`, `last_activity.json`) are written by the daemon only.
 
+## Modules and the request pipeline
+
+* `./internal/daemon` is the only place a session is assembled: supervisor, `module.Manager`, proxy, console and control socket. `cli.start` loads the config and calls `daemon.Build`/`Run`. Register a new module there, not in the CLI.
+* A long-running feature implements `module.Module` (`Name`, `Start`, `Close`) in `./internal/module`. `logstore.Store` and `./internal/ingest` are the current modules.
+* The proxy pipeline is an ordered `[]proxy.Filter` built in `proxy.initFilters`. A new request filter is a function of that shape, inserted before the forward stage; the built-ins live in `./internal/proxy/filter.go`.
+* Actions reachable from both the CLI and the console belong on `ops.Service` (`./internal/ops`), not in either transport.
+
+## Log store
+
+* One SQLite database per app at `log_dir/<app>/dboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index. `./internal/logstore` owns the schema, batching, search and prune.
+* The supervisor writes through `super.logWriter`, which owns the file, rotates by size and can `Seal` a segment; `Manager.SealLogs` exposes it. Do not rename a live process log from outside the supervisor.
+* `./internal/ingest` seals on `daemon.log_ingest_interval`, parses sealed segments into rows, then deletes them. Parse changes belong in `ingest.ParseLine`.
+* `log_retention` (default `336h`) applies to both tables; `0` disables the store for the app. The `dboss.sqlite` name is fixed; there is no config key for it.
+
 ## Console frontend (fez)
 
 * Components live in `./internal/console/static/fez/`, one component per file, each loaded from `index.html` with its own `<script fez="/assets/fez/<name>.fez">` tag. Do not switch to a multi-component `<xmp fez>` file.
