@@ -54,23 +54,24 @@ type RequestRates struct {
 }
 
 type Snapshot struct {
-	Name          string            `json:"name"`
-	State         State             `json:"state"`
-	Maintenance   bool              `json:"maintenance"`
-	Dir           string            `json:"dir"`
-	Hosts         []string          `json:"hosts"`
-	CanonicalHost string            `json:"canonical_host,omitempty"`
-	WebProcess    string            `json:"web_process"`
-	Web           config.Web        `json:"web"`
-	Processes     []ProcessSnapshot `json:"processes"`
-	LastActivity  time.Time         `json:"last_activity,omitempty"`
-	Uptime        string            `json:"uptime,omitempty"`
-	Resources     res.Stats         `json:"resources"`
-	RequestRates  RequestRates      `json:"request_rates"`
-	Error         string            `json:"error,omitempty"`
-	ErrorLog      []string          `json:"error_log,omitempty"`
-	LogRetention  time.Duration     `json:"-"`
-	LogFlush      time.Duration     `json:"-"`
+	Name            string            `json:"name"`
+	State           State             `json:"state"`
+	Maintenance     bool              `json:"maintenance"`
+	Dir             string            `json:"dir"`
+	Hosts           []string          `json:"hosts"`
+	CanonicalHost   string            `json:"canonical_host,omitempty"`
+	WebProcess      string            `json:"web_process"`
+	Web             config.Web        `json:"web"`
+	Processes       []ProcessSnapshot `json:"processes"`
+	LastActivity    time.Time         `json:"last_activity,omitempty"`
+	Uptime          string            `json:"uptime,omitempty"`
+	Resources       res.Stats         `json:"resources"`
+	RequestRates    RequestRates      `json:"request_rates"`
+	Error           string            `json:"error,omitempty"`
+	ErrorLog        []string          `json:"error_log,omitempty"`
+	LogRetention    time.Duration     `json:"-"`
+	StdoutRetention time.Duration     `json:"-"`
+	LogFlush        time.Duration     `json:"-"`
 }
 
 const failureLogLines = 1000
@@ -980,7 +981,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {

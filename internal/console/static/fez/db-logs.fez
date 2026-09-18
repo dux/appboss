@@ -1,65 +1,5 @@
 <script>
-  class {
-    init() {
-      this.state.app = ''
-      this.state.process = ''
-      this.state.level = ''
-      this.state.entries = []
-      this.state.apps = []
-      this.state.processes = []
-      this.state.error = ''
-      this.state.loaded = false
-    }
-
-    onMount() {
-      this.setInterval(() => this.load(), 5000)
-      this.load()
-    }
-
-    beforeRender() {
-      this.state.apps = (this.globalState.apps || []).map((app) => app.name)
-      if (!this.state.app && this.state.apps.length) this.state.app = this.state.apps[0]
-      const current = (this.globalState.apps || []).find((app) => app.name === this.state.app)
-      this.state.processes = current ? current.processes.map((process) => process.name) : []
-    }
-
-    pickApp(value) {
-      this.state.app = value
-      this.state.process = ''
-      this.load()
-    }
-
-    pickProcess(value) {
-      this.state.process = value
-      this.load()
-    }
-
-    pickLevel(value) {
-      this.state.level = value
-      this.load()
-    }
-
-    search(event) {
-      if (event.key === 'Enter') this.load()
-    }
-
-    async load() {
-      if (!this.state.app) return
-      const params = new URLSearchParams({ app: this.state.app })
-      if (this.state.process) params.set('process', this.state.process)
-      if (this.state.level) params.set('level', this.state.level)
-      const query = this.state.queryNode ? this.state.queryNode.value.trim() : ''
-      if (query) params.set('q', query)
-      try {
-        const data = await Boss.api(`/api/logs?${params}`)
-        this.state.entries = (data.logs || []).map((entry) => ({ ...entry, timeLabel: new Date(entry.time).toLocaleTimeString() }))
-        this.state.error = ''
-        this.state.loaded = true
-      } catch (error) {
-        this.state.error = error.message
-      }
-    }
-  }
+  class {}
 </script>
 
 <div class="page-header">
@@ -67,58 +7,6 @@
     <p class="page-pretitle">Observability</p>
     <h1 class="page-title">Logs</h1>
   </div>
-  <div class="page-actions">
-    <span class="text-muted">{state.entries.length} rows</span>
-  </div>
 </div>
 
-<div class="card">
-  <div class="log-filters">
-    <select onchange="fez.pickApp(this.value)">
-      {#each state.apps as name}
-        <option value={name} selected={name === state.app}>{name}</option>
-      {/each}
-    </select>
-    <select onchange="fez.pickProcess(this.value)">
-      <option value="">All processes</option>
-      {#each state.processes as name}
-        <option value={name} selected={name === state.process}>{name}</option>
-      {/each}
-    </select>
-    <select onchange="fez.pickLevel(this.value)">
-      <option value="">All levels</option>
-      {#each ['error', 'warn', 'info', 'debug', 'fatal'] as level}
-        <option value={level} selected={level === state.level}>{level}</option>
-      {/each}
-    </select>
-    <input fez:this="queryNode" placeholder="Search message" onkeydown="fez.search(event)">
-    <button class="btn btn-sm" type="button" onclick="fez.load()">Search</button>
-  </div>
-  {#if state.error}
-    <div class="config-message error" role="status">{state.error}</div>
-  {/if}
-  <table class="table log-table">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Level</th>
-        <th>Process</th>
-        <th>Message</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each state.entries as entry}
-        <tr>
-          <td class="log-time">{entry.timeLabel}</td>
-          <td><span class="log-level" data-level={entry.level}>{entry.level || '-'}</span></td>
-          <td>{entry.process}</td>
-          <td>{entry.message}</td>
-        </tr>
-      {:else}
-        <tr>
-          <td colspan="4" class="text-muted">{state.loaded ? 'No matching log rows' : 'Loading...'}</td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
-</div>
+<db-log-view />

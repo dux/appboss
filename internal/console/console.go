@@ -4,15 +4,14 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -126,6 +125,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
 		h.serveAsset(w, r, "index.html")
 	case r.Method == http.MethodGet && r.URL.Path == "/logs":
+		h.serveAsset(w, r, "log.html")
+	case r.Method == http.MethodGet && r.URL.Path == "/logs.txt":
 		h.writeLogs(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/assets/"):
 		h.serveAsset(w, r, strings.TrimPrefix(r.URL.Path, "/assets/"))
@@ -133,10 +134,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
 		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
-	case r.Method == http.MethodGet && r.URL.Path == "/api/logs":
-		h.searchLogs(w, r)
-	case r.Method == http.MethodGet && r.URL.Path == "/api/requests":
-		h.searchRequests(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/log/channels":
+		h.logChannels(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/log/search":
+		h.logSearch(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/action":
 		h.action(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/rescan":
@@ -348,67 +349,118 @@ func (h *Handler) rescan(w http.ResponseWriter, r *http.Request, session authSes
 	writeJSON(w, http.StatusOK, result)
 }
 
+// writeLogs streams the matching rows as plain text, for download and for `curl` against the
+// store. It is the same query the viewer runs, without the pagination.
 func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
 	app := strings.TrimSpace(r.URL.Query().Get("app"))
 	if app == "" {
 		http.Error(w, "app is required", http.StatusBadRequest)
 		return
 	}
-	logs, err := h.service.Logs(app, "", 1000)
+	channel := channelParam(r)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if channel == "request" {
+		entries, err := h.service.SearchRequests(app, requestFilter(r, 5000))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		for _, e := range entries {
+			fmt.Fprintf(w, "%s %s %s %d %s %dms %dB %s\n", e.Time.Format(time.RFC3339), e.Method, e.Host, e.Status, e.Path, e.DurationMS, e.BytesOut, e.IP)
+		}
+		return
+	}
+	entries, err := h.service.SearchLogs(app, logFilter(r, channel, 5000))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	names := slices.Sorted(maps.Keys(logs))
-	var output strings.Builder
-	for _, name := range names {
-		if output.Len() > 0 {
-			output.WriteByte('\n')
+	for _, e := range entries {
+		fmt.Fprintf(w, "%s %-5s %s %s\n", e.Time.Format(time.RFC3339), strings.ToUpper(e.Level), e.Process, e.Message)
+	}
+}
+
+func (h *Handler) logChannels(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	channels, err := h.service.Channels(app)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": channels, "updated_at": time.Now().UTC()})
+}
+
+// logSearch answers one viewer query. The request channel reads the requests table, every other
+// channel reads the log rows, so the UI can treat them as one list.
+func (h *Handler) logSearch(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	if channelParam(r) == "request" {
+		entries, err := h.service.SearchRequests(app, requestFilter(r, 200))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
 		}
-		output.WriteString(strings.Join(logs[name], "\n"))
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, output.String())
-}
-
-func (h *Handler) searchLogs(w http.ResponseWriter, r *http.Request) {
-	app := strings.TrimSpace(r.URL.Query().Get("app"))
-	if app == "" {
-		writeError(w, http.StatusBadRequest, "app is required")
+		writeJSON(w, http.StatusOK, map[string]any{"kind": "request", "rows": entries, "updated_at": time.Now().UTC()})
 		return
 	}
-	entries, err := h.service.SearchLogs(app, logstore.LogFilter{
-		Process: strings.TrimSpace(r.URL.Query().Get("process")),
-		Level:   strings.TrimSpace(r.URL.Query().Get("level")),
-		Query:   strings.TrimSpace(r.URL.Query().Get("q")),
-		Since:   sinceParam(r.URL.Query().Get("since")),
-		Limit:   intParam(r.URL.Query().Get("limit")),
-	})
+	entries, err := h.service.SearchLogs(app, logFilter(r, channelParam(r), 200))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"logs": entries, "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"kind": "log", "rows": entries, "updated_at": time.Now().UTC()})
 }
 
-func (h *Handler) searchRequests(w http.ResponseWriter, r *http.Request) {
-	app := strings.TrimSpace(r.URL.Query().Get("app"))
-	if app == "" {
-		writeError(w, http.StatusBadRequest, "app is required")
-		return
+func channelParam(r *http.Request) string {
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+	if channel == "" {
+		return "stdout"
 	}
-	entries, err := h.service.SearchRequests(app, logstore.RequestFilter{
-		Status: intParam(r.URL.Query().Get("status")),
-		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
-		Since:  sinceParam(r.URL.Query().Get("since")),
-		Limit:  intParam(r.URL.Query().Get("limit")),
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
+	return channel
+}
+
+func logFilter(r *http.Request, channel string, fallback int) logstore.LogFilter {
+	query := r.URL.Query()
+	return logstore.LogFilter{
+		Channel: channel,
+		Process: strings.TrimSpace(query.Get("process")),
+		Level:   strings.TrimSpace(query.Get("level")),
+		Query:   strings.TrimSpace(query.Get("q")),
+		Since:   sinceParam(query.Get("since")),
+		Before:  sinceParam(query.Get("before")),
+		Limit:   limitParam(query.Get("limit"), fallback),
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"requests": entries, "updated_at": time.Now().UTC()})
+}
+
+func requestFilter(r *http.Request, fallback int) logstore.RequestFilter {
+	query := r.URL.Query()
+	status, class := statusParam(query.Get("status"))
+	return logstore.RequestFilter{
+		Method:      strings.TrimSpace(query.Get("method")),
+		Status:      status,
+		StatusClass: class,
+		Query:       strings.TrimSpace(query.Get("q")),
+		Since:       sinceParam(query.Get("since")),
+		Before:      sinceParam(query.Get("before")),
+		Limit:       limitParam(query.Get("limit"), fallback),
+	}
+}
+
+// statusParam reads "404" as an exact code and "4xx" as a class.
+func statusParam(value string) (int, int) {
+	value = strings.TrimSpace(value)
+	if len(value) == 3 && value[1] == 'x' && value[2] == 'x' && value[0] >= '2' && value[0] <= '5' {
+		return 0, int(value[0]-'0') * 100
+	}
+	return intParam(value), 0
 }
 
 func sinceParam(value string) time.Time {
@@ -421,6 +473,17 @@ func sinceParam(value string) time.Time {
 
 func intParam(value string) int {
 	parsed, _ := strconv.Atoi(value)
+	return parsed
+}
+
+func limitParam(value string, fallback int) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	if parsed > 5000 {
+		return 5000
+	}
 	return parsed
 }
 

@@ -55,7 +55,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
 	}
-	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "")
+	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", time.Hour)
 	defer requestLogs.Close()
 	handler, err := New(cfg, manager, requestLogs)
 	if err != nil {

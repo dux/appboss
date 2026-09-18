@@ -316,6 +316,19 @@ func TestParseRootValidatesWithoutDisk(t *testing.T) {
 	}
 }
 
+func TestStdoutRetentionDefaultsAndValidates(t *testing.T) {
+	if got := Default().Defaults.StdoutRetention.Value(); got != 3*time.Hour {
+		t.Fatalf("stdout_retention default = %v, want 3h", got)
+	}
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: 6h\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Defaults.StdoutRetention.Value() != 6*time.Hour {
+		t.Fatalf("stdout_retention override: %v %v", err, cfg.Defaults.StdoutRetention.Value())
+	}
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: -1h\n"), "/srv/dboss.yaml"); err == nil {
+		t.Fatal("negative stdout_retention should fail")
+	}
+}
+
 func TestRestartRequiredListsHostKeys(t *testing.T) {
 	old := Default()
 	old.Apps = "/apps"

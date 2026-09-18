@@ -52,21 +52,46 @@ type Rates struct {
 	LastDay    int64
 }
 
-// LogFilter narrows SearchLogs. Query is full-text over message and raw.
+// HostApp is the reserved app name that backs dboss's own daemon log. It never collides with a
+// discovered app because app process names must match [a-z][a-z0-9_-]*.
+const HostApp = "_dboss"
+
+// Channel is one selectable log type in the console: the request table, process stdout, the
+// dboss daemon log, or one app log file.
+type Channel struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// TailOffset is how far the file tailer has read into one app log file.
+type TailOffset struct {
+	Path   string
+	Inode  uint64
+	Offset int64
+}
+
+// LogFilter narrows SearchLogs. Channel selects one log type: "stdout", "dboss" or "file:<path>".
+// Query is full-text over message and raw.
 type LogFilter struct {
+	Channel string
 	Process string
 	Level   string
 	Query   string
 	Since   time.Time
+	Before  time.Time
 	Limit   int
 }
 
-// RequestFilter narrows SearchRequests. Query matches host, path, ip or user agent.
+// RequestFilter narrows SearchRequests. Query matches host, path, ip or user agent. Status is an
+// exact code; StatusClass (200, 300, 400 or 500) matches a whole class.
 type RequestFilter struct {
-	Status int
-	Query  string
-	Since  time.Time
-	Limit  int
+	Method      string
+	Status      int
+	StatusClass int
+	Query       string
+	Since       time.Time
+	Before      time.Time
+	Limit       int
 }
 
 // Snapshotter is the piece of the supervisor the prune loop needs: the apps and their retention.
@@ -88,20 +113,22 @@ type appWriter struct {
 
 // Store is the per-app database manager and a daemon module.
 type Store struct {
-	dir         string
-	flush       time.Duration
-	snapshotter Snapshotter
-	pruneAt     string
-	mu          sync.Mutex
-	apps        map[string]*appWriter
-	ctx         context.Context
-	cancel      context.CancelFunc
+	dir           string
+	flush         time.Duration
+	snapshotter   Snapshotter
+	pruneAt       string
+	hostRetention time.Duration
+	mu            sync.Mutex
+	apps          map[string]*appWriter
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // New returns a store that writes under dir (one <app>/dboss.sqlite per app). snapshotter and
-// pruneAt drive the daily retention prune; pass nil to disable it.
-func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string) *Store {
-	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, apps: map[string]*appWriter{}}
+// pruneAt drive the daily retention prune; pass nil to disable it. hostRetention bounds the
+// reserved HostApp database that holds dboss's own daemon log.
+func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string, hostRetention time.Duration) *Store {
+	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, hostRetention: hostRetention, apps: map[string]*appWriter{}}
 }
 
 func (s *Store) Name() string { return "logstore" }
@@ -205,6 +232,8 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts)`,
 	`CREATE INDEX IF NOT EXISTS logs_process ON logs(process)`,
 	`CREATE INDEX IF NOT EXISTS logs_level ON logs(level)`,
+	`CREATE INDEX IF NOT EXISTS logs_source ON logs(source)`,
+	`CREATE TABLE IF NOT EXISTS tail_offsets (path TEXT PRIMARY KEY, inode INTEGER NOT NULL, offset INTEGER NOT NULL, updated_ts TEXT NOT NULL)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(message, raw, content='logs', content_rowid='rowid')`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN INSERT INTO logs_fts(rowid, message, raw) VALUES (new.rowid, new.message, new.raw); END`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN INSERT INTO logs_fts(logs_fts, rowid, message, raw) VALUES ('delete', old.rowid, old.message, old.raw); END`,
@@ -308,6 +337,15 @@ func (s *Store) SearchLogs(app string, filter LogFilter) ([]LogEntry, error) {
 	}
 	where := []string{}
 	args := []any{}
+	if filter.Channel != "" {
+		if path, ok := strings.CutPrefix(filter.Channel, "file:"); ok {
+			where = append(where, "logs.source = 'file'", "logs.process = ?")
+			args = append(args, path)
+		} else {
+			where = append(where, "logs.source = ?")
+			args = append(args, filter.Channel)
+		}
+	}
 	if filter.Process != "" {
 		where = append(where, "logs.process = ?")
 		args = append(args, filter.Process)
@@ -319,6 +357,10 @@ func (s *Store) SearchLogs(app string, filter LogFilter) ([]LogEntry, error) {
 	if !filter.Since.IsZero() {
 		where = append(where, "logs.ts >= ?")
 		args = append(args, stamp(filter.Since))
+	}
+	if !filter.Before.IsZero() {
+		where = append(where, "logs.ts < ?")
+		args = append(args, stamp(filter.Before))
 	}
 	from := "logs"
 	if filter.Query != "" {
@@ -362,13 +404,25 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	}
 	where := []string{}
 	args := []any{}
+	if filter.Method != "" {
+		where = append(where, "method = ?")
+		args = append(args, filter.Method)
+	}
 	if filter.Status != 0 {
 		where = append(where, "status = ?")
 		args = append(args, filter.Status)
 	}
+	if filter.StatusClass != 0 {
+		where = append(where, "status >= ? AND status < ?")
+		args = append(args, filter.StatusClass, filter.StatusClass+100)
+	}
 	if !filter.Since.IsZero() {
 		where = append(where, "ts >= ?")
 		args = append(args, stamp(filter.Since))
+	}
+	if !filter.Before.IsZero() {
+		where = append(where, "ts < ?")
+		args = append(args, stamp(filter.Before))
 	}
 	if filter.Query != "" {
 		where = append(where, "(host LIKE ? OR path LIKE ? OR ip LIKE ? OR ua LIKE ?)")
@@ -399,6 +453,81 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	return result, rows.Err()
 }
 
+// Channels lists the log types an app has. The reserved HostApp exposes only the dboss daemon
+// log; every real app exposes the request table, process stdout and one channel per app log file.
+func (s *Store) Channels(app string) ([]Channel, error) {
+	if app == HostApp {
+		return []Channel{{ID: "dboss", Label: "dboss"}}, nil
+	}
+	channels := []Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}}
+	w, err := s.writer(app)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := w.db.Query(`SELECT DISTINCT process FROM logs WHERE source = 'file' ORDER BY process`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		channels = append(channels, Channel{ID: "file:" + path, Label: path})
+	}
+	return channels, rows.Err()
+}
+
+// TailOffsets returns every tracked app log file for app, keyed by absolute path.
+func (s *Store) TailOffsets(app string) (map[string]TailOffset, error) {
+	w, err := s.writer(app)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := w.db.Query(`SELECT path, inode, offset FROM tail_offsets`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]TailOffset{}
+	for rows.Next() {
+		var offset TailOffset
+		if err := rows.Scan(&offset.Path, &offset.Inode, &offset.Offset); err != nil {
+			return nil, err
+		}
+		result[offset.Path] = offset
+	}
+	return result, rows.Err()
+}
+
+// SaveTailOffset records how far the tailer read into one app log file.
+func (s *Store) SaveTailOffset(app, path string, inode uint64, offset int64) error {
+	w, err := s.writer(app)
+	if err != nil {
+		return err
+	}
+	_, err = w.db.Exec(`INSERT INTO tail_offsets (path, inode, offset, updated_ts) VALUES (?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET inode = excluded.inode, offset = excluded.offset, updated_ts = excluded.updated_ts`, path, inode, offset, stamp(time.Now()))
+	return err
+}
+
+// RemoveTailOffsets drops the tracked offsets of files that no longer exist.
+func (s *Store) RemoveTailOffsets(app string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	w, err := s.writer(app)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if _, err := w.db.Exec(`DELETE FROM tail_offsets WHERE path = ?`, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ftsQuery wraps a user phrase so each token is a prefix match and keeps FTS syntax out of the
 // query. Without the quoting a stray " would turn into an FTS error.
 func ftsQuery(query string) string {
@@ -425,8 +554,10 @@ func (s *Store) Rates(app string) (Rates, error) {
 	return rates, nil
 }
 
-// Prune deletes rows older than retention from one app's database.
-func (s *Store) Prune(ctx context.Context, app string, retention time.Duration) error {
+// Prune deletes rows older than their retention from one app's database. Request rows and app
+// log files use retention, process stdout and the dboss daemon log use stdoutRetention. A zero
+// retention disables the whole store, matching Request/RecordLogs.
+func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetention time.Duration) error {
 	if retention <= 0 {
 		return nil
 	}
@@ -436,9 +567,17 @@ func (s *Store) Prune(ctx context.Context, app string, retention time.Duration) 
 	if w == nil {
 		return nil
 	}
-	cutoff := stamp(time.Now().Add(-retention))
-	for _, table := range []string{"requests", "logs"} {
-		if _, err := w.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE ts < ?`, cutoff); err != nil {
+	if _, err := w.db.ExecContext(ctx, `DELETE FROM requests WHERE ts < ?`, stamp(time.Now().Add(-retention))); err != nil {
+		return err
+	}
+	if _, err := w.db.ExecContext(ctx, `DELETE FROM logs WHERE source = 'file' AND ts < ?`, stamp(time.Now().Add(-retention))); err != nil {
+		return err
+	}
+	if stdoutRetention > 0 {
+		cutoff := stamp(time.Now().Add(-stdoutRetention))
+		// Everything that is not an app log file is the short-lived console stream, including
+		// legacy rows written before the channels existed.
+		if _, err := w.db.ExecContext(ctx, `DELETE FROM logs WHERE source <> 'file' AND ts < ?`, cutoff); err != nil {
 			return err
 		}
 	}
@@ -460,9 +599,12 @@ func (s *Store) pruneLoop() {
 			return
 		case <-timer.C:
 			for _, snapshot := range s.snapshotter.Snapshots() {
-				if err := s.Prune(s.ctx, snapshot.Name, snapshot.LogRetention); err != nil {
+				if err := s.Prune(s.ctx, snapshot.Name, snapshot.LogRetention, snapshot.StdoutRetention); err != nil {
 					log.Printf("log prune %s: %v", snapshot.Name, err)
 				}
+			}
+			if err := s.Prune(s.ctx, HostApp, s.hostRetention, s.hostRetention); err != nil {
+				log.Printf("log prune %s: %v", HostApp, err)
 			}
 		}
 	}

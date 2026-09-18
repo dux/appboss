@@ -1113,6 +1113,222 @@ code {
 
 .log-level[data-level="debug"] { color: var(--muted); }
 
+.log-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.log-page > .fez-db-log-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.log-page .log-navbar { flex: 0 0 auto; }
+
+.log-page .fez-db-log-view {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.log-view {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.log-view-page {
+  flex: 1 1 auto;
+  margin: 12px;
+  min-height: 0;
+}
+
+.log-toolbar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.log-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-control {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+}
+
+select.log-control { max-width: 220px; }
+
+.log-channel { font-weight: 600; }
+
+.log-process-input { max-width: 160px; }
+
+.log-search {
+  position: relative;
+  display: flex;
+  flex: 1 1 240px;
+  align-items: center;
+  min-width: 180px;
+}
+
+.log-search .icon {
+  position: absolute;
+  left: 8px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.log-search input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px 0 30px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+}
+
+.log-control:focus,
+.log-search input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.log-spacer { flex: 1 1 auto; }
+
+.log-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.log-view .log-table {
+  display: table;
+  width: 100%;
+  max-height: none;
+  border-collapse: collapse;
+}
+
+.log-view .log-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.log-view .log-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  vertical-align: top;
+}
+
+.log-view .log-table td.num { text-align: right; }
+
+.log-row { cursor: pointer; }
+
+.log-row:hover,
+.log-row-open { background: var(--primary-soft); }
+
+.log-time { white-space: nowrap; color: var(--muted); }
+
+.log-method { font-weight: 600; }
+
+.log-process,
+.log-ip { white-space: nowrap; color: var(--muted); }
+
+.log-path { word-break: break-all; }
+
+.log-message { white-space: pre-wrap; word-break: break-word; }
+
+.log-view mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  color: inherit;
+  background: #fff3bf;
+}
+
+.log-status {
+  display: inline-block;
+  min-width: 34px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.log-status[data-status="s2"] { color: var(--success); background: rgb(47 179 68 / 10%); }
+.log-status[data-status="s3"] { color: var(--primary); background: var(--primary-soft); }
+.log-status[data-status="s4"] { color: var(--warning); background: rgb(245 159 0 / 12%); }
+.log-status[data-status="s5"] { color: var(--danger); background: rgb(214 57 57 / 10%); }
+
+.log-detail-row td { background: var(--surface); }
+
+.log-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.log-detail {
+  max-height: 40vh;
+  margin: 0;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.log-empty { padding: 24px; text-align: center; }
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

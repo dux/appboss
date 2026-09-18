@@ -24,14 +24,16 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 
 ## Log store
 
-* One SQLite database per app at `log_dir/<app>/dboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index. `./internal/logstore` owns the schema, batching, search and prune.
+* One SQLite database per app at `log_dir/<app>/dboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index, plus `tail_offsets` for the file tailer. `./internal/logstore` owns the schema, batching, search and prune.
+* `logs.source` is the channel: `stdout` (process output), `dboss` (dboss's own daemon log, in the reserved `_dboss` database), or `file` with `logs.process` holding the app log path. `log_retention` prunes requests and `file` rows; `stdout_retention` prunes `stdout`/`dboss`.
 * The supervisor writes through `super.logWriter`, which owns the file, rotates by size and can `Seal` a segment; `Manager.SealLogs` exposes it. Do not rename a live process log from outside the supervisor.
-* `./internal/ingest` seals on `daemon.log_ingest_interval`, parses sealed segments into rows, then deletes them. Parse changes belong in `ingest.ParseLine`.
-* `log_retention` (default `336h`) applies to both tables; `0` disables the store for the app. The `dboss.sqlite` name is fixed; there is no config key for it.
+* `./internal/ingest` seals stdout segments and tails every `*.log` under `<app dir>/log` on `daemon.log_ingest_interval`. App log files are app-owned: track offsets, never delete them. Parse changes belong in `ingest.ParseLine`.
+* `log_retention` (default `336h`) covers requests and app log files; `stdout_retention` (default `3h`) covers stdout and the dboss daemon log; `log_retention: 0` disables the whole store for the app. The `dboss.sqlite` name is fixed; there is no config key for it.
 
 ## Console frontend (fez)
 
 * Components live in `./internal/console/static/fez/`, one component per file, each loaded from `index.html` with its own `<script fez="/assets/fez/<name>.fez">` tag. Do not switch to a multi-component `<xmp fez>` file.
+* The full-screen log viewer is a second entry page: `./internal/console/static/log.html` loads `db-toast`, `db-log-view` and `db-log-shell`, and `db-log-shell` exposes the same `Boss` global. `db-log-view` is shared by that page and the in-console `db-logs` tab.
 * Read `~/dev/gems/fez/AGENTS.md` before editing any `.fez` file.
 * Fez replaces a component tag with `<div class="fez fez-<name>">`; style that wrapper, not the custom tag.
 * All CSS lives in `./internal/console/static/app.css`; components have no `<style>` blocks. Keep the light Tabler-style tokens defined on `:root` there.

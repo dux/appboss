@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -65,7 +66,10 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	for _, scanErr := range invalid {
 		log.Printf("skip invalid app: %v", scanErr)
 	}
-	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt)
+	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Defaults.StdoutRetention.Value())
+	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
+		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
+	}
 	ingester := ingest.New(manager, manager, logs, cfg.Daemon.LogIngestInterval.Value())
 	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester), managementPort: managementPort}
 	service := ops.New(manager, logs, logs)

@@ -191,7 +191,12 @@ defaults:
   log_tail_lines: 500       # lines kept in memory for `dboss logs` without -f
 
   # Log store (SQLite written by the proxy and the ingestion module).
-  log_retention: 336h       # 14 days. 0 disables both process logs and request rows for the app.
+  # Every app database holds the REQUEST rows from the proxy and the STDOUT rows from the
+  # process log segments; dboss also tails every *.log file under the app's ./log directory.
+  # Requests and app log files are pruned after log_retention, process stdout after
+  # stdout_retention. 0 disables the matching channels for the app.
+  log_retention: 336h       # 14 days for request rows and app log files
+  stdout_retention: 3h      # process stdout and the dboss daemon log
   log_flush: 1s             # batch insert interval
 
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
@@ -309,6 +314,7 @@ restart: on-failure
 max_restarts: 5
 shell: false
 log_retention: 168h
+stdout_retention: 3h
 memory_max: 512m
 cpu_max: 0
 env:

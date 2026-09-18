@@ -51,6 +51,7 @@ type Rates interface {
 type LogStore interface {
 	SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error)
 	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
+	Channels(app string) ([]logstore.Channel, error)
 }
 
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
@@ -97,6 +98,14 @@ func (s *Service) SearchRequests(app string, filter logstore.RequestFilter) ([]l
 		return nil, errors.New("log store is not enabled")
 	}
 	return s.store.SearchRequests(app, filter)
+}
+
+// Channels lists the log types an app has for the console viewer.
+func (s *Service) Channels(app string) ([]logstore.Channel, error) {
+	if s.store == nil {
+		return nil, errors.New("log store is not enabled")
+	}
+	return s.store.Channels(app)
 }
 
 // Do runs one action by name. Both transports call it, so the name-to-method mapping lives here

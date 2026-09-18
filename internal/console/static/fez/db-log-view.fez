@@ -1,0 +1,442 @@
+<script>
+  class {
+    PROPS = {
+      app: { type: String, default: '' },
+      channel: { type: String, default: '' },
+      page: Boolean,
+    }
+
+    init(props) {
+      this.state.page = Boolean(props.page)
+      this.state.app = props.app || ''
+      this.state.channel = props.channel || 'stdout'
+      this.state.range = '1h'
+      this.state.level = ''
+      this.state.process = ''
+      this.state.method = ''
+      this.state.status = ''
+      this.state.query = ''
+      this.state.live = !this.state.page
+      this.state.apps = []
+      this.state.channels = []
+      this.state.rows = []
+      this.state.kind = 'log'
+      this.state.loaded = false
+      this.state.busy = false
+      this.state.error = ''
+      this.state.updated = ''
+      this.state.before = ''
+      this.state.older = false
+      this.state.expanded = -1
+      this.state.queryNode = null
+      this.state.queryTimer = 0
+      if (this.state.page) {
+        const params = new URLSearchParams(location.search)
+        this.state.app = params.get('app') || this.state.app
+        this.state.channel = params.get('channel') || this.state.channel
+        this.state.range = params.get('range') || this.state.range
+        this.state.level = params.get('level') || ''
+        this.state.query = params.get('q') || ''
+        this.state.live = params.get('live') !== '0'
+      }
+    }
+
+    onMount() {
+      this.on('keydown', (event) => this.shortcut(event))
+      this.ready()
+    }
+
+    onDestroy() {
+      clearTimeout(this.state.queryTimer)
+    }
+
+    async ready() {
+      if (!(this.globalState.apps || []).length) {
+        try {
+          const data = await Boss.api('/api/apps')
+          this.globalState.apps = data.apps || []
+        } catch (error) {
+          this.state.error = error.message
+        }
+      }
+      this.applyApps()
+      await this.reload()
+      this.setInterval(() => this.tick(), 2000)
+    }
+
+    applyApps() {
+      const names = (this.globalState.apps || []).map((app) => app.name)
+      this.state.apps = names
+      if (!this.state.app && names.length) this.state.app = names[0]
+    }
+
+    async reload() {
+      await this.loadChannels()
+      await this.load()
+    }
+
+    async loadChannels() {
+      if (!this.state.app) return
+      try {
+        const data = await Boss.api(`/api/log/channels?app=${encodeURIComponent(this.state.app)}`)
+        this.state.channels = data.channels || []
+        if (!this.state.channels.some((channel) => channel.id === this.state.channel)) {
+          this.state.channel = this.state.channels.length ? this.state.channels[0].id : 'stdout'
+        }
+      } catch (error) {
+        this.state.error = error.message
+      }
+    }
+
+    rangeMs() {
+      const ranges = { '5m': 300000, '15m': 900000, '1h': 3600000, '6h': 21600000, '24h': 86400000, '7d': 604800000 }
+      return ranges[this.state.range] || 0
+    }
+
+    since() {
+      const ms = this.rangeMs()
+      return ms ? new Date(Date.now() - ms).toISOString() : ''
+    }
+
+    async load({ append = false } = {}) {
+      if (!this.state.app) return
+      this.state.busy = true
+      try {
+        const params = new URLSearchParams({ app: this.state.app, channel: this.state.channel, limit: '300' })
+        const since = this.since()
+        if (since) params.set('since', since)
+        if (this.state.query) params.set('q', this.state.query)
+        if (this.state.level) params.set('level', this.state.level)
+        if (this.state.process) params.set('process', this.state.process)
+        if (this.state.method) params.set('method', this.state.method)
+        if (this.state.status) params.set('status', this.state.status)
+        if (append && this.state.before) params.set('before', this.state.before)
+        const data = await Boss.api(`/api/log/search?${params}`)
+        const rows = (data.rows || []).map((row) => this.decorate(row))
+        if (append) {
+          this.state.rows = [...this.state.rows, ...rows]
+        } else {
+          this.state.rows = rows
+          this.state.expanded = -1
+        }
+        this.state.kind = data.kind
+        this.state.loaded = true
+        this.state.error = ''
+        this.state.updated = new Date().toLocaleTimeString()
+        this.syncUrl()
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    decorate(row) {
+      row.timeLabel = new Date(row.time).toLocaleString()
+      row.statusClass = row.status ? `s${Math.floor(row.status / 100)}` : ''
+      row.levelLower = (row.level || '').toLowerCase()
+      return row
+    }
+
+    loadOlder() {
+      if (!this.state.rows.length) return
+      this.state.live = false
+      this.state.before = this.state.rows[this.state.rows.length - 1].time
+      this.load({ append: true })
+    }
+
+    tick() {
+      if (this.state.live && !document.hidden) this.load()
+    }
+
+    toggleLive() {
+      this.state.live = !this.state.live
+      if (this.state.live) this.load()
+    }
+
+    async pickApp(value) {
+      this.state.app = value
+      this.state.process = ''
+      this.state.expanded = -1
+      await this.reload()
+    }
+
+    pickChannel(value) {
+      this.state.channel = value
+      this.state.process = ''
+      this.state.level = ''
+      this.state.method = ''
+      this.state.status = ''
+      this.load()
+    }
+
+    pickRange(value) {
+      this.state.range = value
+      this.load()
+    }
+
+    pickLevel(value) {
+      this.state.level = value
+      this.load()
+    }
+
+    pickProcess(value) {
+      this.state.process = value.trim()
+      this.load()
+    }
+
+    pickProcessKey(event) {
+      if (event.key === 'Enter') this.pickProcess(event.target.value)
+    }
+
+    pickMethod(value) {
+      this.state.method = value
+      this.load()
+    }
+
+    pickStatus(value) {
+      this.state.status = value
+      this.load()
+    }
+
+    queueSearch() {
+      clearTimeout(this.state.queryTimer)
+      this.state.queryTimer = setTimeout(() => {
+        this.state.query = this.state.queryNode ? this.state.queryNode.value.trim() : ''
+        this.load()
+      }, 250)
+    }
+
+    searchKey(event) {
+      if (event.key !== 'Enter') return
+      clearTimeout(this.state.queryTimer)
+      this.state.query = this.state.queryNode ? this.state.queryNode.value.trim() : ''
+      this.load()
+    }
+
+    clearFilters() {
+      this.state.level = ''
+      this.state.process = ''
+      this.state.method = ''
+      this.state.status = ''
+      this.state.query = ''
+      if (this.state.queryNode) this.state.queryNode.value = ''
+      this.load()
+    }
+
+    expand(index) {
+      this.state.expanded = this.state.expanded === index ? -1 : index
+    }
+
+    copyRow(index) {
+      const row = this.state.rows[index]
+      if (!row) return
+      navigator.clipboard?.writeText(row.raw || row.message || JSON.stringify(row)).then(
+        () => Toast.show('Row copied'),
+        () => Toast.show('Clipboard unavailable', true),
+      )
+    }
+
+    detail(row) {
+      return JSON.stringify(row, null, 2)
+    }
+
+    highlight(text) {
+      const escaped = this.escapeHtml(text == null ? '' : String(text))
+      const tokens = (this.state.query || '').split(/\s+/).filter(Boolean)
+      if (!tokens.length) return escaped
+      const pattern = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+      return escaped.replace(new RegExp(`(${pattern})`, 'gi'), '<mark>$1</mark>')
+    }
+
+    escapeHtml(text) {
+      return text.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+    }
+
+    downloadUrl() {
+      const params = new URLSearchParams({ app: this.state.app, channel: this.state.channel })
+      const since = this.since()
+      if (since) params.set('since', since)
+      if (this.state.query) params.set('q', this.state.query)
+      if (this.state.level) params.set('level', this.state.level)
+      if (this.state.process) params.set('process', this.state.process)
+      if (this.state.method) params.set('method', this.state.method)
+      if (this.state.status) params.set('status', this.state.status)
+      return `/logs.txt?${params}`
+    }
+
+    syncUrl() {
+      if (!this.state.page) return
+      const params = new URLSearchParams({ app: this.state.app, channel: this.state.channel, range: this.state.range })
+      if (this.state.query) params.set('q', this.state.query)
+      if (this.state.level) params.set('level', this.state.level)
+      if (!this.state.live) params.set('live', '0')
+      history.replaceState(null, '', `${location.pathname}?${params}`)
+    }
+
+    shortcut(event) {
+      const tag = event.target.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+        if (event.key === 'Escape') event.target.blur()
+        return
+      }
+      if (event.key === '/') {
+        event.preventDefault()
+        this.state.queryNode?.focus()
+      } else if (event.key === 'l') {
+        this.toggleLive()
+      } else if (event.key === 'r') {
+        this.load()
+      } else if (event.key === 'Escape') {
+        this.state.expanded = -1
+      }
+    }
+  }
+</script>
+
+<section class="log-view" class:log-view-page={state.page}>
+  <div class="log-toolbar">
+    <div class="log-toolbar-row">
+      <select class="log-control" aria-label="App" onchange="fez.pickApp(this.value)">
+        {#each state.apps as name}
+          <option value={name} selected={name === state.app}>{name}</option>
+        {/each}
+        <option value="_dboss" selected={state.app === '_dboss'}>Host (dboss)</option>
+      </select>
+      <select class="log-control log-channel" aria-label="Log type" onchange="fez.pickChannel(this.value)">
+        {#each state.channels as channel}
+          <option value={channel.id} selected={channel.id === state.channel}>{channel.label}</option>
+        {/each}
+      </select>
+      <select class="log-control" aria-label="Time range" onchange="fez.pickRange(this.value)">
+        {#each [['5m', 'Last 5 min'], ['15m', 'Last 15 min'], ['1h', 'Last hour'], ['6h', 'Last 6 hours'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['all', 'All time']] as option}
+          <option value={option[0]} selected={option[0] === state.range}>{option[1]}</option>
+        {/each}
+      </select>
+      {#if state.channel === 'request'}
+        <select class="log-control" aria-label="Method" onchange="fez.pickMethod(this.value)">
+          <option value="">Any method</option>
+          {#each ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as method}
+            <option value={method} selected={method === state.method}>{method}</option>
+          {/each}
+        </select>
+        <select class="log-control" aria-label="Status" onchange="fez.pickStatus(this.value)">
+          <option value="">Any status</option>
+          {#each ['2xx', '3xx', '4xx', '5xx'] as status}
+            <option value={status} selected={status === state.status}>{status}</option>
+          {/each}
+        </select>
+      {:else}
+        <select class="log-control" aria-label="Level" onchange="fez.pickLevel(this.value)">
+          <option value="">All levels</option>
+          {#each ['fatal', 'error', 'warn', 'info', 'debug'] as level}
+            <option value={level} selected={level === state.level}>{level}</option>
+          {/each}
+        </select>
+      {/if}
+    </div>
+    <div class="log-toolbar-row">
+      <label class="log-search">
+        <svg class="icon"><use href="#i-search"></use></svg>
+        <input fez:this="queryNode" placeholder="Search (prefix match)" oninput="fez.queueSearch()" onkeydown="fez.searchKey(event)">
+      </label>
+      {#if state.channel === 'stdout'}
+        <input class="log-control log-process-input" placeholder="Process" onchange="fez.pickProcess(this.value)" onkeydown="fez.pickProcessKey(event)">
+      {/if}
+      <button class="btn btn-sm" type="button" onclick="fez.clearFilters()">Clear</button>
+      <span class="log-spacer"></span>
+      <button class="btn btn-sm" class:btn-primary={state.live} type="button" onclick="fez.toggleLive()" title="Toggle live tail (l)">
+        {#if state.live}
+          <svg class="icon"><use href="#i-pause"></use></svg>
+          Live
+        {:else}
+          <svg class="icon"><use href="#i-play"></use></svg>
+          Paused
+        {/if}
+      </button>
+      <button class="btn btn-sm" type="button" onclick="fez.load()" title="Refresh (r)">
+        <svg class="icon"><use href="#i-refresh"></use></svg>
+        Refresh
+      </button>
+      <a class="btn btn-sm" href={downloadUrl()} target="_blank" rel="noreferrer" title="Download as text">
+        <svg class="icon"><use href="#i-download"></use></svg>
+        Export
+      </a>
+    </div>
+  </div>
+
+  {#if state.error}
+    <div class="config-message error" role="status">{state.error}</div>
+  {/if}
+
+  <div class="log-scroll">
+    <table class="log-table">
+      <thead>
+        {#if state.kind === 'request'}
+          <tr>
+            <th>Time</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Path</th>
+            <th class="num">ms</th>
+            <th class="num">Bytes</th>
+            <th>IP</th>
+          </tr>
+        {:else}
+          <tr>
+            <th>Time</th>
+            <th>Level</th>
+            <th>Process</th>
+            <th>Message</th>
+          </tr>
+        {/if}
+      </thead>
+      <tbody>
+        {#each state.rows as row, index}
+          <tr class="log-row" class:log-row-open={state.expanded === index} onclick="fez.expand({index})">
+            {#if state.kind === 'request'}
+              <td class="log-time">{row.timeLabel}</td>
+              <td class="log-method">{row.method}</td>
+              <td><span class="log-status" data-status={row.statusClass}>{row.status}</span></td>
+              <td class="log-path">{row.path}</td>
+              <td class="num">{row.duration_ms}</td>
+              <td class="num">{row.bytes_out}</td>
+              <td class="log-ip">{row.ip}</td>
+            {:else}
+              <td class="log-time">{row.timeLabel}</td>
+              <td><span class="log-level" data-level={row.levelLower}>{row.level || '-'}</span></td>
+              <td class="log-process">{row.process}</td>
+              <td class="log-message">{@html highlight(row.message)}</td>
+            {/if}
+          </tr>
+          {#if state.expanded === index}
+            <tr class="log-detail-row">
+              <td colspan="7">
+                <div class="log-detail-head">
+                  <strong>{row.process || row.method || 'row'}</strong>
+                  <button class="btn btn-sm" type="button" onclick="fez.copyRow({index})">Copy</button>
+                </div>
+                <pre class="log-detail">{detail(row)}</pre>
+              </td>
+            </tr>
+          {/if}
+        {:else}
+          <tr>
+            <td colspan="7" class="text-muted log-empty">{state.loaded ? 'No matching rows' : 'Loading...'}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="log-footer">
+    <button class="btn btn-sm" type="button" onclick="fez.loadOlder()" disabled={!state.rows.length || state.busy}>Load older</button>
+    <span class="text-muted">{state.rows.length} rows</span>
+    {#if state.updated}
+      <span class="text-muted">Updated {state.updated}</span>
+    {/if}
+    {#if state.busy}
+      <span class="spinner" aria-hidden="true"></span>
+    {/if}
+  </div>
+</section>

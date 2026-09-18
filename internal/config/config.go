@@ -204,26 +204,27 @@ type Defaults struct {
 }
 
 type Process struct {
-	IdleStop       Duration          `yaml:"idle_stop" json:"idle_stop"`
-	Health         string            `yaml:"health" json:"health"`
-	HealthInterval Duration          `yaml:"health_interval" json:"health_interval"`
-	HealthTimeout  Duration          `yaml:"health_timeout" json:"health_timeout"`
-	StopTimeout    Duration          `yaml:"stop_timeout" json:"stop_timeout"`
-	StopSignal     string            `yaml:"stop_signal" json:"stop_signal"`
-	Restart        string            `yaml:"restart" json:"restart"`
-	MaxRestarts    int               `yaml:"max_restarts" json:"max_restarts"`
-	RestartReset   Duration          `yaml:"restart_reset" json:"restart_reset"`
-	RestartBackoff []any             `yaml:"restart_backoff" json:"restart_backoff"`
-	LogMaxSize     Size              `yaml:"log_max_size" json:"log_max_size"`
-	LogKeep        int               `yaml:"log_keep" json:"log_keep"`
-	LogTailLines   int               `yaml:"log_tail_lines" json:"log_tail_lines"`
-	LogRetention   Duration          `yaml:"log_retention" json:"log_retention"`
-	LogFlush       Duration          `yaml:"log_flush" json:"log_flush"`
-	Shell          bool              `yaml:"shell" json:"shell"`
-	Env            map[string]string `yaml:"env" json:"env"`
-	Resources      string            `yaml:"resources" json:"resources"`
-	MemoryMax      Size              `yaml:"memory_max" json:"memory_max"`
-	CPUMax         int               `yaml:"cpu_max" json:"cpu_max"`
+	IdleStop        Duration          `yaml:"idle_stop" json:"idle_stop"`
+	Health          string            `yaml:"health" json:"health"`
+	HealthInterval  Duration          `yaml:"health_interval" json:"health_interval"`
+	HealthTimeout   Duration          `yaml:"health_timeout" json:"health_timeout"`
+	StopTimeout     Duration          `yaml:"stop_timeout" json:"stop_timeout"`
+	StopSignal      string            `yaml:"stop_signal" json:"stop_signal"`
+	Restart         string            `yaml:"restart" json:"restart"`
+	MaxRestarts     int               `yaml:"max_restarts" json:"max_restarts"`
+	RestartReset    Duration          `yaml:"restart_reset" json:"restart_reset"`
+	RestartBackoff  []any             `yaml:"restart_backoff" json:"restart_backoff"`
+	LogMaxSize      Size              `yaml:"log_max_size" json:"log_max_size"`
+	LogKeep         int               `yaml:"log_keep" json:"log_keep"`
+	LogTailLines    int               `yaml:"log_tail_lines" json:"log_tail_lines"`
+	LogRetention    Duration          `yaml:"log_retention" json:"log_retention"`
+	StdoutRetention Duration          `yaml:"stdout_retention" json:"stdout_retention"`
+	LogFlush        Duration          `yaml:"log_flush" json:"log_flush"`
+	Shell           bool              `yaml:"shell" json:"shell"`
+	Env             map[string]string `yaml:"env" json:"env"`
+	Resources       string            `yaml:"resources" json:"resources"`
+	MemoryMax       Size              `yaml:"memory_max" json:"memory_max"`
+	CPUMax          int               `yaml:"cpu_max" json:"cpu_max"`
 }
 
 // Web drives the proxy in front of the app. BasicAuth never leaves the process as JSON so the
@@ -256,7 +257,7 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second)},
 	}
 }
@@ -535,7 +536,7 @@ func validateProcess(d Process) error {
 			return keyErr(key, "must be positive")
 		}
 	}
-	for key, value := range map[string]Duration{"stop_timeout": d.StopTimeout, "idle_stop": d.IdleStop, "log_retention": d.LogRetention} {
+	for key, value := range map[string]Duration{"stop_timeout": d.StopTimeout, "idle_stop": d.IdleStop, "log_retention": d.LogRetention, "stdout_retention": d.StdoutRetention} {
 		if value < 0 {
 			return keyErr(key, "cannot be negative")
 		}

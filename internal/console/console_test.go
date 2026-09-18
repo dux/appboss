@@ -172,6 +172,10 @@ func (fakeLogs) SearchRequests(string, logstore.RequestFilter) ([]logstore.Reque
 	return []logstore.RequestEntry{{Time: time.Now(), Method: "GET", Path: "/hello", Status: 200}}, nil
 }
 
+func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
+	return []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}}, nil
+}
+
 func TestConsoleBootstrapAndActions(t *testing.T) {
 	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "sinatra", State: super.Running, Hosts: []string{"sinatra.lvh.me"}}}}
 	handler := newTestHandler(t, manager, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}})
@@ -204,16 +208,23 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	}
 }
 
-func TestConsoleServesAppLogsWithoutRefresh(t *testing.T) {
-	manager := &fakeManager{logs: map[string][]string{"web": {"hello", "world"}}}
-	handler := newTestHandler(t, manager, nil)
+func TestConsoleServesLogViewerPageAndTextExport(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs?app=sinatra", nil)
-	request.AddCookie(cookie)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" || response.Body.String() != "hello\nworld" {
-		t.Fatalf("unexpected logs response: %d %s", response.Code, response.Body.String())
+	page := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs?app=sinatra", nil)
+	page.AddCookie(cookie)
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, page)
+	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "db-log-view") {
+		t.Fatalf("unexpected viewer page: %d %s", pageResponse.Code, pageResponse.Body.String())
+	}
+
+	text := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs.txt?app=sinatra&channel=stdout", nil)
+	text.AddCookie(cookie)
+	textResponse := httptest.NewRecorder()
+	handler.ServeHTTP(textResponse, text)
+	if textResponse.Code != http.StatusOK || textResponse.Header().Get("Content-Type") != "text/plain; charset=utf-8" || !strings.Contains(textResponse.Body.String(), "boom") {
+		t.Fatalf("unexpected logs response: %d %s", textResponse.Code, textResponse.Body.String())
 	}
 }
 
@@ -266,15 +277,19 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, session := sessionCookie(t, handler)
 
-	logs := call(t, handler, cookie, session, http.MethodGet, "/api/logs?app=sinatra&level=error", "")
-	if logs.Code != http.StatusOK || !strings.Contains(logs.Body.String(), `"message":"boom"`) {
+	logs := call(t, handler, cookie, session, http.MethodGet, "/api/log/search?app=sinatra&channel=stdout&level=error", "")
+	if logs.Code != http.StatusOK || !strings.Contains(logs.Body.String(), `"kind":"log"`) || !strings.Contains(logs.Body.String(), `"message":"boom"`) {
 		t.Fatalf("unexpected logs: %d %s", logs.Code, logs.Body.String())
 	}
-	requests := call(t, handler, cookie, session, http.MethodGet, "/api/requests?app=sinatra", "")
-	if requests.Code != http.StatusOK || !strings.Contains(requests.Body.String(), `"path":"/hello"`) {
+	requests := call(t, handler, cookie, session, http.MethodGet, "/api/log/search?app=sinatra&channel=request", "")
+	if requests.Code != http.StatusOK || !strings.Contains(requests.Body.String(), `"kind":"request"`) || !strings.Contains(requests.Body.String(), `"path":"/hello"`) {
 		t.Fatalf("unexpected requests: %d %s", requests.Code, requests.Body.String())
 	}
-	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/logs", "")
+	channels := call(t, handler, cookie, session, http.MethodGet, "/api/log/channels?app=sinatra", "")
+	if channels.Code != http.StatusOK || !strings.Contains(channels.Body.String(), `"id":"file:production.log"`) {
+		t.Fatalf("unexpected channels: %d %s", channels.Code, channels.Body.String())
+	}
+	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/log/search", "")
 	if missingApp.Code != http.StatusBadRequest {
 		t.Fatalf("missing app should be a 400: %d", missingApp.Code)
 	}

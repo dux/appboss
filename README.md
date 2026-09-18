@@ -131,14 +131,35 @@ A stopped app is also started by the first proxied request, which gets a "starti
 
 ## Logs
 
-Every app has one SQLite database at `log_dir/<app>/dboss.sqlite` with two tables:
-`requests` (one row per proxied request, written by the proxy) and `logs` (one row per process output line, written by the ingestion module).
-`logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`, and an FTS5 index over `message` and `raw` backs the text search.
-Rows older than `log_retention` (default `336h`, two weeks) are deleted by the daily prune; `0` disables the store for the app.
+Every app has one SQLite database at `log_dir/<app>/dboss.sqlite` with three tables:
+`requests` (one row per proxied request, written by the proxy), `logs` (one row per log line,
+written by the ingestion module) and `tail_offsets` (how far the file tailer has read).
+`logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`,
+and an FTS5 index over `message` and `raw` backs the text search.
 
-The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the ingestion module parses the sealed segment, batches it into the database and deletes the file.
-A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a keyword guess for the level.
-`dboss logs -f` still tails the live file; the console's **Logs** tab searches the store by app, process, level and free text.
+Each row belongs to a channel and the console's **Logs** viewer selects one:
+
+* `REQUEST` - the proxy's request rows.
+* `STDOUT` - the stdout/stderr of each app process, sealed and parsed by the ingestion module.
+* `dboss` - dboss's own daemon log, mirrored into the reserved `log_dir/_dboss` database and
+  offered as **Host (dboss)** in the app picker.
+* one channel per `*.log` file the app writes under `<app dir>/log`, tailed by byte offset and
+  never rotated or deleted.
+
+`REQUEST` rows and app log files are kept for `log_retention` (default `336h`, two weeks);
+`STDOUT` and the dboss daemon log for `stdout_retention` (default `3h`). Both are deleted by the
+daily prune; `log_retention: 0` disables the store for the app.
+The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it
+seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
+ingestion module parses the sealed segment, batches it into the database and deletes the file.
+A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
+keyword guess for the level.
+`dboss logs -f` still tails the live file.
+
+The full-screen viewer at `/logs` (the **Logs** button on an app card, opened in a new window)
+filters by channel, time range, level or HTTP method/status and free text, follows live output,
+highlights matches, expands a row to its raw fields and exports the current query as text.
+It is a second fez page (`log.html`), independent of the console shell.
 
 ## Management console
 
@@ -178,10 +199,13 @@ The console is a [fez](https://github.com/dux/fez) application.
 Everything lives under `./internal/console/static/` and is embedded in the binary:
 
 * `index.html` - the SVG icon sprite and a single `<db-shell>` tag, plus one `<script fez="...">` tag per component.
+* `log.html` - the standalone full-screen log viewer page, a second `<db-log-shell>` entry point.
 * `fez.min.js` - the fez runtime, copied from https://dux.github.io/fez/dist/fez.min.js.
 * `fez/db-shell.fez` - navbar, section tabs, hash-routed views, API calls, the 5 second poll; exposed as `Boss`.
 * `fez/db-overview.fez` - stat cards and the service list.
-* `fez/db-logs.fez` - log viewer: app, process and level pickers, text search, live refresh.
+* `fez/db-log-view.fez` - the log viewer: channel, time range, level/process or method/status filters, text search, live tail, row detail and export; shared by the tab and the full-screen page.
+* `fez/db-logs.fez` - the in-console Logs tab, a thin wrapper around `db-log-view`.
+* `fez/db-log-shell.fez` - the full-screen page shell; exposes `Boss` for `log.html`.
 * `fez/db-app-card.fez` - one service: status badge, datagrid, process table, actions.
 * `fez/db-config.fez` - config file list and editor.
 * `fez/db-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
@@ -203,8 +227,8 @@ internal/apps/        app discovery and the config file store the console edits
 internal/super/       process supervisor, health checks, idle stop, state files, log writer/seal
 internal/ports/       fixed port allocation inside ports.range
 internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
-internal/logstore/    per-app SQLite log store: requests, process logs, FTS search, prune
-internal/ingest/      seals process logs on a timer, parses and writes them to the store
+internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
+internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console
