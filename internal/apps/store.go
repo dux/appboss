@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"app-boss/internal/config"
 	"gopkg.in/yaml.v3"
@@ -15,6 +19,19 @@ import (
 // ErrConflict is returned by Write when the file on disk no longer matches the revision the
 // caller edited. The returned ConfigFile then carries the current contents.
 var ErrConflict = errors.New("file changed on disk")
+
+// historyKeep is how many past revisions of one file are kept under state_dir/config-history.
+const historyKeep = 50
+
+// ConfigRevision is one saved revision of a config file.
+type ConfigRevision struct {
+	ID       string    `json:"id"`
+	App      string    `json:"app,omitempty"`
+	Revision string    `json:"revision"`
+	Time     time.Time `json:"time"`
+	Source   string    `json:"source"`
+	name     string
+}
 
 // ConfigFile is one file appboss reads. IDs are "host" or "app:<name>" and map to paths only on
 // the server, so a client never names a path.
@@ -30,9 +47,14 @@ type ConfigFile struct {
 
 // Store edits the real config files. The root config is the one the session started with:
 // its apps directory and source path are host keys that only change with a restart.
-type Store struct{ root config.Config }
+type Store struct {
+	root    config.Config
+	history string
+}
 
-func NewStore(root config.Config) *Store { return &Store{root: root} }
+func NewStore(root config.Config) *Store {
+	return &Store{root: root, history: filepath.Join(root.StateDir, "config-history")}
+}
 
 // Files lists the host file and, in host mode, the active file of every app folder.
 func (s *Store) Files() ([]ConfigFile, error) {
@@ -143,11 +165,105 @@ func (s *Store) Write(id, contents, revision string) (ConfigFile, error) {
 	if err := s.Validate(id, contents); err != nil {
 		return ConfigFile{}, err
 	}
+	if err := s.snapshot(id, current); err != nil {
+		return ConfigFile{}, err
+	}
 	if err := replaceFile(current.Path, []byte(contents)); err != nil {
 		return ConfigFile{}, err
 	}
 	return s.Read(id)
 }
+
+// History lists the saved revisions of one config file, newest first.
+func (s *Store) History(id string) ([]ConfigRevision, error) {
+	file, err := s.lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.history)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	prefix := safeID(id) + "__"
+	var result []ConfigRevision
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".yaml") {
+			continue
+		}
+		parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".yaml"), "__")
+		if len(parts) != 2 {
+			continue
+		}
+		nanos, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		result = append(result, ConfigRevision{ID: id, App: file.App, Revision: parts[1], Time: time.Unix(0, nanos), Source: file.Source, name: name})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Time.After(result[j].Time) })
+	return result, nil
+}
+
+// HistoryContents returns a saved revision as written.
+func (s *Store) HistoryContents(id, revision string) (string, error) {
+	revisions, err := s.History(id)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range revisions {
+		if entry.Revision == revision {
+			data, err := os.ReadFile(filepath.Join(s.history, entry.name))
+			return string(data), err
+		}
+	}
+	return "", fmt.Errorf("unknown revision %q for %s", revision, id)
+}
+
+// Restore writes a saved revision back as the current file. It is revision-checked against the
+// live file, so a concurrent edit is a conflict rather than a silent overwrite.
+func (s *Store) Restore(id, revision string) (ConfigFile, error) {
+	contents, err := s.HistoryContents(id, revision)
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	current, err := s.Read(id)
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	return s.Write(id, contents, current.Revision)
+}
+
+// snapshot keeps the current file contents before a write replaces them.
+func (s *Store) snapshot(id string, file ConfigFile) error {
+	if s.history == "" || file.Contents == "" {
+		return nil
+	}
+	if err := os.MkdirAll(s.history, 0o750); err != nil {
+		return err
+	}
+	name := filepath.Join(s.history, fmt.Sprintf("%s__%d__%s.yaml", safeID(id), time.Now().UnixNano(), file.Revision))
+	if err := os.WriteFile(name, []byte(file.Contents), 0o640); err != nil {
+		return err
+	}
+	return s.pruneHistory(id)
+}
+
+func (s *Store) pruneHistory(id string) error {
+	revisions, err := s.History(id)
+	if err != nil {
+		return err
+	}
+	for _, old := range revisions[min(len(revisions), historyKeep):] {
+		_ = os.Remove(filepath.Join(s.history, old.name))
+	}
+	return nil
+}
+
+func safeID(id string) string { return strings.ReplaceAll(id, ":", "-") }
 
 // CreateLocal copies an app's appboss.yaml to appboss.local.yaml so edits made on the server live
 // in the file the next deploy does not overwrite.

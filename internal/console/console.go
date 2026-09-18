@@ -42,6 +42,9 @@ type ConfigStore interface {
 	Write(id, contents, revision string) (apps.ConfigFile, error)
 	CreateLocal(app string) (apps.ConfigFile, error)
 	Effective(app string) (string, error)
+	History(id string) ([]apps.ConfigRevision, error)
+	HistoryContents(id, revision string) (string, error)
+	Restore(id, revision string) (apps.ConfigFile, error)
 }
 
 type Handler struct {
@@ -192,6 +195,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.configEffective(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/reference":
 		writeText(w, config.Reference)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/history":
+		h.configHistory(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/history/file":
+		h.configHistoryFile(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/config/restore":
+		h.configRestore(w, r, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/keys":
 		writeJSON(w, http.StatusOK, config.Keys())
 	case r.Method == http.MethodGet && r.URL.Path == "/api/hooks":
@@ -200,6 +209,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.hookRun(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/hooks/rotate":
 		h.hookRotate(w, r, session)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/audit":
+		h.audit(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -290,18 +301,22 @@ func (h *Handler) configWrite(w http.ResponseWriter, r *http.Request, session au
 	}
 	file, err := h.store.Write(edit.ID, edit.Contents, edit.Revision)
 	if errors.Is(err, apps.ErrConflict) {
+		h.service.Audit(session.Email, "", "config-write", edit.ID, err)
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "file": file})
 		return
 	}
 	if err != nil {
+		h.service.Audit(session.Email, "", "config-write", edit.ID, err)
 		writeJSON(w, http.StatusUnprocessableEntity, validateResponse{Error: err.Error(), Line: yamlLine(err)})
 		return
 	}
 	result, err := h.service.Rescan()
 	if err != nil {
+		h.service.Audit(session.Email, file.App, "config-write", file.ID, err)
 		writeError(w, http.StatusConflict, "saved, but rescan failed: "+err.Error())
 		return
 	}
+	h.service.Audit(session.Email, file.App, "config-write", file.ID, nil)
 	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
@@ -318,9 +333,11 @@ func (h *Handler) configLocal(w http.ResponseWriter, r *http.Request, session au
 	}
 	file, err := h.store.CreateLocal(strings.TrimSpace(request.App))
 	if err != nil {
+		h.service.Audit(session.Email, request.App, "config-local", request.App, err)
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	h.service.Audit(session.Email, file.App, "config-local", file.ID, nil)
 	writeJSON(w, http.StatusOK, file)
 }
 
@@ -331,6 +348,56 @@ func (h *Handler) configEffective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeText(w, contents)
+}
+
+func (h *Handler) configHistory(w http.ResponseWriter, r *http.Request) {
+	revisions, err := h.store.History(strings.TrimSpace(r.URL.Query().Get("id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revisions": revisions})
+}
+
+func (h *Handler) configHistoryFile(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	contents, err := h.store.HistoryContents(strings.TrimSpace(query.Get("id")), strings.TrimSpace(query.Get("revision")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeText(w, contents)
+}
+
+// configRestore writes a saved revision back and rescans, like a normal save.
+func (h *Handler) configRestore(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var edit configEdit
+	if err := decodeJSON(w, r, &edit); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, err := h.store.Restore(edit.ID, edit.Revision)
+	if errors.Is(err, apps.ErrConflict) {
+		h.service.Audit(session.Email, "", "config-restore", edit.ID, err)
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "file": file})
+		return
+	}
+	if err != nil {
+		h.service.Audit(session.Email, "", "config-restore", edit.ID, err)
+		writeJSON(w, http.StatusUnprocessableEntity, validateResponse{Error: err.Error(), Line: yamlLine(err)})
+		return
+	}
+	result, err := h.service.Rescan()
+	if err != nil {
+		h.service.Audit(session.Email, file.App, "config-restore", file.ID, err)
+		writeError(w, http.StatusConflict, "restored, but rescan failed: "+err.Error())
+		return
+	}
+	h.service.Audit(session.Email, file.App, "config-restore", file.ID, nil)
+	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
 // healthz is a liveness probe: 200 while the HTTP server answers.
@@ -410,7 +477,7 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "event": "ping", "app": app, "hook": hookName})
 		return
 	}
-	if err := h.service.RunHook(app, hookName); err != nil {
+	if _, err := h.service.Do(ops.Request{Method: ops.ActionHookRun, App: app, Hook: hookName, Actor: "hook:" + app + "/" + hookName}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -460,7 +527,7 @@ func (h *Handler) hookRun(w http.ResponseWriter, r *http.Request, session authSe
 	if !ok {
 		return
 	}
-	if err := h.service.RunHook(request.App, request.Hook); err != nil {
+	if _, err := h.service.Do(ops.Request{Method: ops.ActionHookRun, App: request.App, Hook: request.Hook, Actor: session.Email}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -475,12 +542,12 @@ func (h *Handler) hookRotate(w http.ResponseWriter, r *http.Request, session aut
 	if !ok {
 		return
 	}
-	info, err := h.service.RotateHook(request.App, request.Hook)
+	result, err := h.service.Do(ops.Request{Method: ops.ActionHookRotate, App: request.App, Hook: request.Hook, Actor: session.Email})
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hook": info})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hook": result})
 }
 
 type hookAction struct {
@@ -500,6 +567,22 @@ func (h *Handler) decodeHookAction(w http.ResponseWriter, r *http.Request) (hook
 		return request, false
 	}
 	return request, true
+}
+
+// audit answers the console Audit tab and the CLI with the newest operator actions.
+func (h *Handler) audit(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	rows, err := h.service.SearchAudit(logstore.AuditFilter{
+		App:    strings.TrimSpace(query.Get("app")),
+		Actor:  strings.TrimSpace(query.Get("actor")),
+		Action: strings.TrimSpace(query.Get("action")),
+		Limit:  limitParam(query.Get("limit"), 200),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
 }
 
 var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
@@ -537,7 +620,7 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on, Job: strings.TrimSpace(request.Job)}); err != nil {
+	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on, Job: strings.TrimSpace(request.Job), Actor: session.Email}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

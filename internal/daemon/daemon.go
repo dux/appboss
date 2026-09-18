@@ -70,7 +70,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	for _, scanErr := range invalid {
 		log.Printf("skip invalid app: %v", scanErr)
 	}
-	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Defaults.StdoutRetention.Value())
+	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}

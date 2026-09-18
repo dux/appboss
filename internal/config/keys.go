@@ -67,6 +67,7 @@ var keyDocs = map[string]keyDoc{
 	"daemon.prune_at":                        {description: "local time of the daily request-log prune"},
 	"daemon.log_level":                       {description: "appboss's own log level: debug, info, warn, error"},
 	"daemon.log_ingest_interval":             {description: "how often process log segments are sealed and ingested into the log store"},
+	"daemon.audit_retention":                 {description: "how long operator audit rows are kept; 0 keeps them forever"},
 	"notify.url":                             {description: "webhook that receives crash and failure events; empty disables notifications", example: "$ALERT_WEBHOOK_URL"},
 	"notify.format":                          {description: "webhook payload shape: generic, slack, discord or ntfy"},
 	"notify.events":                          {description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed"},

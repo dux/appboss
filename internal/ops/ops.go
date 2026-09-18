@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"app-boss/internal/logstore"
@@ -34,7 +35,14 @@ const (
 	ActionHookRun     = "hook-run"
 	ActionHookRotate  = "hook-rotate"
 	ActionExec        = "exec"
+	ActionAudit       = "audit"
 )
+
+// auditActions are the methods that write an audit row when they run.
+var auditActions = map[string]bool{
+	ActionStart: true, ActionStop: true, ActionRestart: true, ActionMaintenance: true,
+	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
+}
 
 // Runtime is the supervisor surface the service drives.
 type Runtime interface {
@@ -69,6 +77,13 @@ type LogStore interface {
 	Tree(names []string) ([]logstore.AppTree, error)
 }
 
+// Auditor records and reads operator actions. logstore.Store implements it; a store that does not
+// simply disables auditing.
+type Auditor interface {
+	RecordAudit(logstore.AuditEntry) error
+	SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error)
+}
+
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
 // the console builds it from the HTTP body.
 type Request struct {
@@ -81,6 +96,8 @@ type Request struct {
 	Timeout time.Duration `json:"timeout,omitempty"`
 	Lines   int           `json:"lines,omitempty"`
 	On      bool          `json:"on,omitempty"`
+	Actor   string        `json:"actor,omitempty"`
+	Action  string        `json:"action,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -92,15 +109,21 @@ type RescanResult struct {
 }
 
 // Service implements every action once. rates and store may be nil, then snapshots carry no
-// request rates and the log viewer is unavailable.
+// request rates and the log viewer is unavailable. When store also implements Auditor, every
+// mutating action is audited.
 type Service struct {
 	runtime Runtime
 	rates   Rates
 	store   LogStore
+	auditor Auditor
 }
 
 func New(runtime Runtime, rates Rates, store LogStore) *Service {
-	return &Service{runtime: runtime, rates: rates, store: store}
+	service := &Service{runtime: runtime, rates: rates, store: store}
+	if auditor, ok := store.(Auditor); ok {
+		service.auditor = auditor
+	}
+	return service
 }
 
 // SearchLogs and SearchRequests are the read side of the log store, shared by the console and
@@ -141,9 +164,15 @@ func (s *Service) LogTree() ([]logstore.AppTree, error) {
 	return s.store.Tree(names)
 }
 
-// Do runs one action by name. Both transports call it, so the name-to-method mapping lives here
-// only.
+// Do runs one action by name. Both transports call it, so the name-to-method mapping and the
+// audit row live here only.
 func (s *Service) Do(request Request) (any, error) {
+	result, err := s.dispatch(request)
+	s.auditRequest(request, err)
+	return result, err
+}
+
+func (s *Service) dispatch(request Request) (any, error) {
 	switch request.Method {
 	case ActionList:
 		return s.Apps(), nil
@@ -175,9 +204,64 @@ func (s *Service) Do(request Request) (any, error) {
 		return s.RotateHook(request.App, request.Hook)
 	case ActionExec:
 		return s.Exec(request.App, request.Argv, request.Timeout)
+	case ActionAudit:
+		return s.SearchAudit(auditFilter(request))
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
+}
+
+// SearchAudit returns audit rows for the console and CLI.
+func (s *Service) SearchAudit(filter logstore.AuditFilter) ([]logstore.AuditEntry, error) {
+	if s.auditor == nil {
+		return nil, errors.New("audit is not enabled")
+	}
+	return s.auditor.SearchAudit(filter)
+}
+
+// Audit records one operator action that does not go through Do, such as a config file write.
+func (s *Service) Audit(actor, app, action, detail string, err error) {
+	if s.auditor == nil {
+		return
+	}
+	if actor == "" {
+		actor = "cli"
+	}
+	result, message := "ok", ""
+	if err != nil {
+		result, message = "error", err.Error()
+	}
+	_ = s.auditor.RecordAudit(logstore.AuditEntry{Time: time.Now(), Actor: actor, App: app, Action: action, Detail: detail, Result: result, Error: message})
+}
+
+func (s *Service) auditRequest(request Request, err error) {
+	if !auditActions[request.Method] {
+		return
+	}
+	s.Audit(request.Actor, request.App, request.Method, auditDetail(request), err)
+}
+
+func auditDetail(request Request) string {
+	switch request.Method {
+	case ActionMaintenance:
+		if request.On {
+			return "on"
+		}
+		return "off"
+	case ActionCronRun, ActionHookRun, ActionHookRotate:
+		if request.Job != "" {
+			return request.Job
+		}
+		return request.Hook
+	case ActionExec:
+		return strings.Join(request.Argv, " ")
+	default:
+		return ""
+	}
+}
+
+func auditFilter(request Request) logstore.AuditFilter {
+	return logstore.AuditFilter{App: request.App, Actor: request.Actor, Action: request.Action, Limit: request.Lines}
 }
 
 // Apps returns every app snapshot with its request rates filled in.

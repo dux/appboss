@@ -47,6 +47,12 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler.
 * `./internal/version.Version` is the release version; the release workflow does not inject it yet, so `String()` falls back to the module version or the short VCS revision.
 
+## Audit and config history
+
+* `ops.Service.Do` writes one `audit` row per mutating action through the `Auditor` the log store implements (a type assertion in `ops.New`; a store without it disables auditing). Transports set `Request.Actor`: console = session email, hook ping = `hook:<app>/<hook>`, control socket = `cli`. Actions that bypass `Do` (config writes) call `Service.Audit` directly.
+* Audit rows live in the reserved `_appboss` database (`audit` table), pruned by `daemon.audit_retention` in `logstore.Prune`.
+* `apps.Store.Write` snapshots the current file to `state_dir/config-history` first, keeping 50 per file; `History`/`HistoryContents`/`Restore` back the console History panel and `appboss config history|restore`. Restore is a normal revision-checked `Write`.
+
 ## Notifications
 
 * `notify:` in the host config points at one operator webhook. `./internal/notify` debounces per app and event, queues with a bounded buffer and posts best-effort, so it can never block the supervisor.

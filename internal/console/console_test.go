@@ -113,15 +113,17 @@ func (m *fakeManager) RestartRequired() []string { return nil }
 // fakeStore keeps the files in memory but follows the real store's contract: revisions are
 // hashes of the contents and a stale revision is a conflict.
 type fakeStore struct {
-	files   map[string]*apps.ConfigFile
-	invalid map[string]string
+	files           map[string]*apps.ConfigFile
+	invalid         map[string]string
+	history         map[string][]apps.ConfigRevision
+	historyContents map[string]string
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{files: map[string]*apps.ConfigFile{
 		"host":        {ID: "host", Path: "/srv/appboss.yaml", Source: "appboss.yaml", Contents: "apps: ./apps\n"},
 		"app:sinatra": {ID: "app:sinatra", App: "sinatra", Path: "/srv/apps/sinatra/appboss.yaml", Source: "appboss.yaml", Contents: "procfile:\n  web: ./server\n"},
-	}, invalid: map[string]string{}}
+	}, invalid: map[string]string{}, history: map[string][]apps.ConfigRevision{}, historyContents: map[string]string{}}
 }
 
 func (s *fakeStore) revision(contents string) string {
@@ -187,6 +189,33 @@ func (s *fakeStore) Effective(app string) (string, error) {
 	return "procfile:\n  web: ./server\nidle_stop: 6h0m0s\n", nil
 }
 
+func (s *fakeStore) History(id string) ([]apps.ConfigRevision, error) {
+	if _, ok := s.files[id]; !ok {
+		return nil, errors.New("unknown config file")
+	}
+	return s.history[id], nil
+}
+
+func (s *fakeStore) HistoryContents(id, revision string) (string, error) {
+	contents, ok := s.historyContents[id+"/"+revision]
+	if !ok {
+		return "", errors.New("unknown revision")
+	}
+	return contents, nil
+}
+
+func (s *fakeStore) Restore(id, revision string) (apps.ConfigFile, error) {
+	contents, err := s.HistoryContents(id, revision)
+	if err != nil {
+		return apps.ConfigFile{}, err
+	}
+	current, err := s.Read(id)
+	if err != nil {
+		return apps.ConfigFile{}, err
+	}
+	return s.Write(id, contents, current.Revision)
+}
+
 type fakeRates map[string]logstore.Rates
 
 func (rates fakeRates) Rates(app string) (logstore.Rates, error) {
@@ -220,6 +249,12 @@ func (fakeLogs) Tree([]string) ([]logstore.AppTree, error) {
 		Bytes:    1024,
 		Channels: []logstore.Channel{{ID: "appboss", Label: "appboss"}},
 	}}, nil
+}
+
+func (fakeLogs) RecordAudit(logstore.AuditEntry) error { return nil }
+
+func (fakeLogs) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error) {
+	return []logstore.AuditEntry{{Time: time.Now(), Actor: "admin@example.com", App: "sinatra", Action: "restart", Result: "ok"}}, nil
 }
 
 func TestConsoleBootstrapAndActions(t *testing.T) {

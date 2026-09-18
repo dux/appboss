@@ -94,6 +94,10 @@ func (s *Server) dispatch(request Request) Response {
 	if request.Method == loginMethod {
 		return s.loginResponse()
 	}
+	// The control socket has no user, so audited actions are attributed to the CLI.
+	if request.Actor == "" {
+		request.Actor = "cli"
+	}
 	data, err := s.service.Do(request)
 	if err != nil {
 		return Response{Error: err.Error()}

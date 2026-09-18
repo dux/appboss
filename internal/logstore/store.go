@@ -105,6 +105,28 @@ type RequestFilter struct {
 	Limit       int
 }
 
+// AuditEntry is one operator action: who did what to which app, and how it turned out. Audit rows
+// live in the reserved host database.
+type AuditEntry struct {
+	Time   time.Time `json:"time"`
+	Actor  string    `json:"actor"`
+	App    string    `json:"app"`
+	Action string    `json:"action"`
+	Detail string    `json:"detail"`
+	Result string    `json:"result"`
+	Error  string    `json:"error,omitempty"`
+}
+
+// AuditFilter narrows SearchAudit.
+type AuditFilter struct {
+	App    string
+	Actor  string
+	Action string
+	Since  time.Time
+	Before time.Time
+	Limit  int
+}
+
 // Snapshotter is the piece of the supervisor the prune loop needs: the apps and their retention.
 type Snapshotter interface {
 	Snapshots() []super.Snapshot
@@ -124,22 +146,24 @@ type appWriter struct {
 
 // Store is the per-app database manager and a daemon module.
 type Store struct {
-	dir           string
-	flush         time.Duration
-	snapshotter   Snapshotter
-	pruneAt       string
-	hostRetention time.Duration
-	mu            sync.Mutex
-	apps          map[string]*appWriter
-	ctx           context.Context
-	cancel        context.CancelFunc
+	dir            string
+	flush          time.Duration
+	snapshotter    Snapshotter
+	pruneAt        string
+	hostRetention  time.Duration
+	auditRetention time.Duration
+	mu             sync.Mutex
+	apps           map[string]*appWriter
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // New returns a store that writes under dir (one <app>/appboss.sqlite per app). snapshotter and
 // pruneAt drive the daily retention prune; pass nil to disable it. hostRetention bounds the
-// reserved HostApp database that holds appboss's own daemon log.
-func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string, hostRetention time.Duration) *Store {
-	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, hostRetention: hostRetention, apps: map[string]*appWriter{}}
+// reserved HostApp database that holds appboss's own daemon log; auditRetention bounds the audit
+// table (0 keeps audit rows forever).
+func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string, hostRetention, auditRetention time.Duration) *Store {
+	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
 }
 
 func (s *Store) Name() string { return "logstore" }
@@ -249,6 +273,8 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS logs_level ON logs(level)`,
 	`CREATE INDEX IF NOT EXISTS logs_source ON logs(source)`,
 	`CREATE TABLE IF NOT EXISTS tail_offsets (path TEXT PRIMARY KEY, inode INTEGER NOT NULL, offset INTEGER NOT NULL, updated_ts TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS audit (ts TEXT NOT NULL, actor TEXT NOT NULL, app TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, result TEXT NOT NULL, error TEXT NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(message, raw, content='logs', content_rowid='rowid')`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN INSERT INTO logs_fts(rowid, message, raw) VALUES (new.rowid, new.message, new.raw); END`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN INSERT INTO logs_fts(logs_fts, rowid, message, raw) VALUES ('delete', old.rowid, old.message, old.raw); END`,
@@ -485,6 +511,68 @@ func (s *Store) Channels(app string) ([]Channel, error) {
 	return s.channelsFor(app)
 }
 
+// RecordAudit writes one operator action to the reserved host database. Audit rows are not
+// batched: the volume is tiny and the console reads them right after the action.
+func (s *Store) RecordAudit(e AuditEntry) error {
+	w, err := s.writer(HostApp)
+	if err != nil {
+		return err
+	}
+	_, err = w.db.Exec(`INSERT INTO audit (ts, actor, app, action, detail, result, error) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		stamp(e.Time), e.Actor, e.App, e.Action, e.Detail, e.Result, e.Error)
+	return err
+}
+
+// SearchAudit returns the newest matching audit rows, newest first.
+func (s *Store) SearchAudit(filter AuditFilter) ([]AuditEntry, error) {
+	w, err := s.writer(HostApp)
+	if err != nil {
+		return nil, err
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	where := []string{}
+	args := []any{}
+	for column, value := range map[string]string{"app": filter.App, "actor": filter.Actor, "action": filter.Action} {
+		if value != "" {
+			where = append(where, column+" = ?")
+			args = append(args, value)
+		}
+	}
+	if !filter.Since.IsZero() {
+		where = append(where, "ts >= ?")
+		args = append(args, stamp(filter.Since))
+	}
+	if !filter.Before.IsZero() {
+		where = append(where, "ts < ?")
+		args = append(args, stamp(filter.Before))
+	}
+	query := `SELECT ts, actor, app, action, detail, result, error FROM audit`
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY ts DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := w.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		var ts string
+		if err := rows.Scan(&ts, &e.Actor, &e.App, &e.Action, &e.Detail, &e.Result, &e.Error); err != nil {
+			return nil, err
+		}
+		e.Time, _ = time.Parse(time.RFC3339Nano, ts)
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
 // Tree returns name, on-disk sqlite size and channels for each app. Missing databases stay
 // missing: this does not create them.
 func (s *Store) Tree(names []string) ([]AppTree, error) {
@@ -660,12 +748,19 @@ func (s *Store) Rates(app string) (Rates, error) {
 // log files use retention, process stdout and the appboss daemon log use stdoutRetention. A zero
 // retention disables the whole store, matching Request/RecordLogs.
 func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetention time.Duration) error {
-	if retention <= 0 {
-		return nil
-	}
 	s.mu.Lock()
 	w := s.apps[app]
 	s.mu.Unlock()
+	// Audit rows live in the host database and use their own retention, independent of the log
+	// retention that may be disabled for the app.
+	if app == HostApp && w != nil && s.auditRetention > 0 {
+		if _, err := w.db.ExecContext(ctx, `DELETE FROM audit WHERE ts < ?`, stamp(time.Now().Add(-s.auditRetention))); err != nil {
+			return err
+		}
+	}
+	if retention <= 0 {
+		return nil
+	}
 	if w == nil {
 		return nil
 	}

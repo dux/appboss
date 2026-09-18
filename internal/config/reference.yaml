@@ -286,6 +286,9 @@ daemon:
   # How often each running process's log segment is sealed and ingested into the per-app
   # log store. A sealed segment stays on disk until its rows are committed.
   log_ingest_interval: 5s
+  # How long operator actions in the audit table are kept. 0 keeps them forever. The daily
+  # prune drops older rows.
+  audit_retention: 8760h
 
 # --- Notifications -----------------------------------------------------------
 # Post runtime events to one operator webhook. Best-effort: a slow endpoint never blocks the

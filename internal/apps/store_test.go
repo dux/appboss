@@ -26,6 +26,42 @@ func storeFixture(t *testing.T) (*Store, string) {
 	return NewStore(cfg), root
 }
 
+func TestStoreKeepsHistoryAndRestores(t *testing.T) {
+	store, root := storeFixture(t)
+	file, err := store.Read("app:sinatra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := file.Revision
+	if _, err := store.Write("app:sinatra", "procfile:\n  web: ./server\nhosts: [sinatra.test, www.sinatra.test]\n", first); err != nil {
+		t.Fatal(err)
+	}
+	revisions, err := store.History("app:sinatra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 1 || revisions[0].Revision != first || revisions[0].App != "sinatra" {
+		t.Fatalf("history = %+v", revisions)
+	}
+	contents, err := store.HistoryContents("app:sinatra", first)
+	if err != nil || !strings.Contains(contents, "hosts: [sinatra.test]") {
+		t.Fatalf("contents = %q, %v", contents, err)
+	}
+	restored, err := store.Restore("app:sinatra", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(restored.Contents, "www.sinatra.test") {
+		t.Fatalf("restore did not roll back: %q", restored.Contents)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".appboss", "state", "config-history")); err != nil {
+		t.Fatalf("history dir missing: %v", err)
+	}
+	if _, err := store.HistoryContents("app:sinatra", "deadbeef"); err == nil {
+		t.Fatal("unknown revision was accepted")
+	}
+}
+
 func TestStoreListsReadsAndWritesRealFiles(t *testing.T) {
 	store, root := storeFixture(t)
 	files, err := store.Files()

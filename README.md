@@ -253,6 +253,23 @@ On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and 
 
 An app's processes start with the `web_process` first, then the rest in name order, so a web process that expects other services to be up still gets that.
 
+## Audit log
+
+Every mutating action records who did what to which app and how it turned out: start, stop, restart, maintenance, rescan, cron runs, hook runs and rotations, `exec`, and config file writes and restores. Console actions carry the signed-in email, a hook ping carries `hook:<app>/<hook>`, and control-socket actions are attributed to `cli`.
+
+Rows live in an `audit` table in the reserved `_appboss` database, are kept for `daemon.audit_retention` (default `8760h`, `0` keeps them forever), and are pruned with the daily log prune. The console has an **Audit** tab with app, actor and action filters; `appboss audit [--app name] [--actor who] [--action name] [-n rows]` prints the same rows.
+
+## Config history
+
+Every config save first copies the current file to `state_dir/config-history`, keeping the last 50 revisions per file. In the console's Configuration view the **History** button lists them; **View** shows a revision and **Restore** writes it back (revision-checked, then rescanned, and recorded in the audit log). From the CLI:
+
+```
+appboss config history [app]
+appboss config restore [app] <revision>
+```
+
+Both work on the host file (no app) or one app's file. A CLI restore writes the file on disk; the running host applies it on the next `appboss rescan`.
+
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.
@@ -299,8 +316,9 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 * `fez/ab-logs.fez` - the in-console Logs tab, a thin wrapper around `ab-log-view`.
 * `fez/ab-log-shell.fez` - the full-screen page shell; exposes `Boss` for `log.html`.
 * `fez/ab-app-card.fez` - one service: status badge, stats datagrid, actions.
-* `fez/ab-config.fez` - config file list and editor.
+* `fez/ab-config.fez` - config file list, editor and revision history.
 * `fez/ab-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
+* `fez/ab-audit.fez` - the Audit tab: operator actions with app, actor and action filters.
 * `fez/ab-help.fez` - the Help tab: a topic list with the operator guide and the live key reference.
 * `fez/ab-toast.fez` and `fez/ab-drawer.fez` - self-mounting singletons exposed as `Toast` and `Drawer`.
 * `app.css` - the whole stylesheet, a light Tabler-style theme; components carry no `<style>` blocks.

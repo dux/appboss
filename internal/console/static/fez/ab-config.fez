@@ -8,6 +8,7 @@
       this.state.revisions = {}
       this.state.dirty = {}
       this.state.conflict = null
+      this.state.history = null
       this.state.busy = false
       this.state.message = ''
       this.state.messageError = false
@@ -137,6 +138,7 @@
       this.state.current = id
       this.state.message = ''
       this.state.conflict = null
+      this.state.history = null
       this.syncEditor()
     }
 
@@ -253,6 +255,84 @@
       }
     }
 
+    // --- history ---
+
+    stamp(value) {
+      const date = new Date(value)
+      return isNaN(date.getTime()) ? '-' : date.toLocaleString()
+    }
+
+    closeHistory() {
+      this.state.history = null
+    }
+
+    async showHistory() {
+      const file = this.currentFile()
+      if (!file || this.state.busy) return
+      try {
+        const data = await Boss.api(`/api/config/history?id=${encodeURIComponent(file.id)}`)
+        this.state.history = { id: file.id, revisions: data.revisions || [], revision: '', contents: '' }
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async previewRevision(revision) {
+      const file = this.currentFile()
+      if (!file) return
+      try {
+        const contents = await Boss.apiText(`/api/config/history/file?id=${encodeURIComponent(file.id)}&revision=${encodeURIComponent(revision)}`)
+        this.state.history = { ...this.state.history, revision, contents }
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async restoreRevision(revision) {
+      const file = this.currentFile()
+      if (!file || this.state.busy) return
+      if (!window.confirm(`Restore revision ${revision.slice(0, 8)}? The current file is saved to history first.`)) return
+      try {
+        this.state.busy = true
+        const response = await fetch('/api/config/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': Boss.state.csrf },
+          body: JSON.stringify({ id: file.id, revision }),
+        })
+        if (response.status === 401) {
+          window.location.reload()
+          return
+        }
+        const data = await response.json()
+        if (response.status === 409) {
+          this.state.conflict = data.file
+          this.showMessage('Restore conflicted: the file changed on disk.', true)
+          return
+        }
+        if (!response.ok) {
+          this.showMessage(data.error || `Restore failed with status ${response.status}`, true, data.line)
+          return
+        }
+        Object.assign(file, data.file, { saved: data.file.contents })
+        this.state.buffers[file.id] = data.file.contents
+        this.state.revisions[file.id] = data.file.revision
+        const dirty = { ...this.state.dirty }
+        delete dirty[file.id]
+        this.state.dirty = dirty
+        Boss.globalState.restartRequired = data.restart_required || []
+        this.showMessage(`Restored revision ${revision.slice(0, 8)} and rescanned.`)
+        Toast.show(`Restored ${file.source}.`)
+        this.state.history = null
+        this.syncEditor()
+        await this.loadFiles()
+        Boss.reload({ quiet: true })
+      } catch (error) {
+        this.showMessage(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
   }
 </script>
 
@@ -305,6 +385,10 @@
           <svg class="icon"><use href="#i-file"></use></svg>
           Effective config
         </button>
+        <button class="btn btn-sm" type="button" onclick="fez.showHistory()" disabled={!state.current || state.busy}>
+          <svg class="icon"><use href="#i-refresh"></use></svg>
+          History
+        </button>
         <button class="btn btn-sm" type="button" onclick="Drawer.openKeys()">
           <svg class="icon"><use href="#i-help"></use></svg>
           Help
@@ -336,6 +420,33 @@
           <button class="btn btn-sm" type="button" onclick="fez.useDisk()">Use disk version</button>
         </div>
         <pre>{state.conflict.contents}</pre>
+      </div>
+    {/if}
+    {#if state.history}
+      <div class="history">
+        <div class="history-head">
+          <strong>Saved revisions</strong>
+          <button class="btn btn-sm" type="button" onclick="fez.closeHistory()">Close</button>
+        </div>
+        {#if state.history.revisions.length}
+          <div class="history-list">
+            {#each state.history.revisions as revision}
+              <div class="history-row" class:active={revision.revision === state.history.revision}>
+                <code>{revision.revision.slice(0, 8)}</code>
+                <span class="text-muted">{stamp(revision.time)}</span>
+                <div class="btn-list">
+                  <button class="btn btn-sm" type="button" onclick="fez.previewRevision('{revision.revision}')">View</button>
+                  <button class="btn btn-sm" type="button" onclick="fez.restoreRevision('{revision.revision}')">Restore</button>
+                </div>
+              </div>
+            {/each}
+          </div>
+          {#if state.history.contents}
+            <pre class="history-preview">{state.history.contents}</pre>
+          {/if}
+        {:else}
+          <p class="text-muted history-empty">No saved revisions yet.</p>
+        {/if}
       </div>
     {/if}
   </div>

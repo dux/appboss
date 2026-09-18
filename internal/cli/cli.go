@@ -22,6 +22,7 @@ import (
 	"app-boss/internal/config"
 	"app-boss/internal/ctl"
 	"app-boss/internal/daemon"
+	"app-boss/internal/logstore"
 	"app-boss/internal/ops"
 	"app-boss/internal/super"
 	"golang.org/x/crypto/bcrypt"
@@ -212,6 +213,15 @@ func (c CLI) local(command string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if command == "config" {
+		positionals := set.Args()
+		if len(positionals) > 0 && positionals[0] == "history" {
+			return c.configHistory(cfg, positionals[1:], *jsonOutput)
+		}
+		if len(positionals) > 0 && positionals[0] == "restore" {
+			return c.configRestore(cfg, positionals[1:], *jsonOutput)
+		}
+	}
 	if command == "kill" {
 		if set.NArg() != 0 {
 			return errors.New("usage: appboss kill [-c path]")
@@ -257,6 +267,76 @@ func (c CLI) local(command string, args []string) error {
 		return err
 	}
 	return c.dumpFile(appPath, *jsonOutput)
+}
+
+// configHistory lists the saved revisions of a config file: the host file, or one app's file.
+func (c CLI) configHistory(cfg config.Config, args []string, jsonOutput bool) error {
+	id, err := configID(cfg, args)
+	if err != nil {
+		return err
+	}
+	revisions, err := apps.NewStore(cfg).History(id)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(revisions, "", "  ")
+		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	if len(revisions) == 0 {
+		fmt.Fprintln(c.Out, "no saved revisions")
+		return nil
+	}
+	writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "REVISION\tSAVED\tSOURCE")
+	for _, revision := range revisions {
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", revision.Revision, revision.Time.Format("2006-01-02 15:04:05"), revision.Source)
+	}
+	return writer.Flush()
+}
+
+// configRestore writes a saved revision back as the current file. The running host picks it up on
+// the next rescan.
+func (c CLI) configRestore(cfg config.Config, args []string, jsonOutput bool) error {
+	if len(args) == 0 {
+		return errors.New("usage: appboss config restore [app] <revision>")
+	}
+	revision := args[len(args)-1]
+	id, err := configID(cfg, args[:len(args)-1])
+	if err != nil {
+		return err
+	}
+	file, err := apps.NewStore(cfg).Restore(id, revision)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(file, "", "  ")
+		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(c.Out, "restored %s to revision %s; run `appboss rescan` to apply it\n", file.ID, revision)
+	return nil
+}
+
+// configID resolves the history/cache id for the optional app argument: the app's file, or the
+// host file inside a host folder.
+func configID(cfg config.Config, args []string) (string, error) {
+	if len(args) == 0 {
+		if cfg.App != nil {
+			return "app:" + filepath.Base(cfg.Dir), nil
+		}
+		return "host", nil
+	}
+	if len(args) != 1 {
+		return "", errors.New("usage: appboss config history|restore [app]")
+	}
+	app, err := apps.Lookup(cfg, args[0])
+	if err != nil {
+		return "", err
+	}
+	return "app:" + app.Name, nil
 }
 
 // dumpFile prints a config file as written, comments included; it has already been validated.
@@ -425,6 +505,18 @@ func (c CLI) remote(command string, args []string) error {
 				return fmt.Errorf("usage: appboss hooks <app> (%w)", err)
 			}
 		}
+	case "audit":
+		request.Method = ops.ActionAudit
+		set := flag.NewFlagSet("audit", flag.ContinueOnError)
+		set.SetOutput(c.Err)
+		app := set.String("app", "", "filter by app")
+		actor := set.String("actor", "", "filter by actor")
+		action := set.String("action", "", "filter by action")
+		lines := set.Int("n", 200, "maximum rows")
+		if err := set.Parse(opts.rest); err != nil {
+			return err
+		}
+		request.App, request.Actor, request.Action, request.Lines = *app, *actor, *action, *lines
 	}
 	jsonOutput := opts.json
 	var data any
@@ -471,6 +563,12 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = result
+	case "audit":
+		var rows []logstore.AuditEntry
+		if err := client.Call(request, &rows); err != nil {
+			return err
+		}
+		data = rows
 	case "rescan":
 		var result map[string]any
 		if err := client.Call(request, &result); err != nil {
@@ -764,6 +862,22 @@ func (c CLI) printHuman(method string, data any) error {
 		info := data.(map[string]any)["hook"].(map[string]any)
 		fmt.Fprintln(c.Out, "rotated; new ping URL:")
 		fmt.Fprintln(c.Out, info["url"])
+	case "audit":
+		rows := data.([]logstore.AuditEntry)
+		if len(rows) == 0 {
+			fmt.Fprintln(c.Out, "no audit rows")
+			return nil
+		}
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "TIME\tACTOR\tACTION\tAPP\tDETAIL\tRESULT")
+		for _, row := range rows {
+			result := row.Result
+			if row.Error != "" {
+				result += ": " + row.Error
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Time.Format("2006-01-02 15:04:05"), row.Actor, row.Action, row.App, row.Detail, result)
+		}
+		return writer.Flush()
 	case "rescan":
 		result := data.(map[string]any)
 		invalid, _ := result["invalid"].([]any)

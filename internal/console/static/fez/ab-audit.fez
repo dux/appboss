@@ -1,0 +1,95 @@
+<script>
+  class {
+    init() {
+      this.state.rows = []
+      this.state.app = ''
+      this.state.actor = ''
+      this.state.action = ''
+      this.state.loading = false
+      this.state.error = ''
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    beforeRender() {
+      this.state.apps = this.globalState.apps || []
+    }
+
+    async load() {
+      this.state.loading = true
+      try {
+        const params = new URLSearchParams()
+        if (this.state.app) params.set('app', this.state.app)
+        if (this.state.actor) params.set('actor', this.state.actor)
+        if (this.state.action) params.set('action', this.state.action)
+        const data = await Boss.api(`/api/audit?${params.toString()}`)
+        this.state.rows = data.rows || []
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    setFilter(key, value) {
+      this.state[key] = value
+    }
+
+    stamp(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return '-'
+      return date.toLocaleString()
+    }
+  }
+</script>
+
+<section class="card">
+  <div class="card-header">
+    <h3 class="section-title">Operator audit</h3>
+    <div class="card-actions audit-filters">
+      <select onchange="fez.setFilter('app', this.value)">
+        <option value="">All apps</option>
+        {#each state.apps as app}
+          <option value={app.name} selected={state.app === app.name}>{app.name}</option>
+        {/each}
+      </select>
+      <input type="text" placeholder="Actor" value={state.actor} oninput="fez.setFilter('actor', this.value)" />
+      <input type="text" placeholder="Action" value={state.action} oninput="fez.setFilter('action', this.value)" />
+      <button class="btn btn-sm" type="button" onclick="fez.load()" disabled={state.loading}>
+        <svg class="icon"><use href="#i-refresh"></use></svg>
+        {state.loading ? 'Loading' : 'Refresh'}
+      </button>
+    </div>
+  </div>
+
+  {#if state.error}
+    <div class="alert alert-danger">{state.error}</div>
+  {/if}
+
+  <div class="audit-list">
+    <div class="audit-row audit-head">
+      <span class="subheader">Time</span>
+      <span class="subheader">Actor</span>
+      <span class="subheader">Action</span>
+      <span class="subheader">App</span>
+      <span class="subheader">Detail</span>
+      <span class="subheader">Result</span>
+    </div>
+    {#each state.rows as row}
+      <div class="audit-row" data-result={row.result}>
+        <span class="service-value">{stamp(row.time)}</span>
+        <span class="service-name">{row.actor}</span>
+        <span>{row.action}</span>
+        <span class="service-value">{row.app || '-'}</span>
+        <span class="audit-detail">{row.detail || '-'}</span>
+        <span class="badge" class:badge-danger={row.result !== 'ok'}>{row.result}{#if row.error}: {row.error}{/if}</span>
+      </div>
+    {:else}
+      <div class="audit-row audit-empty text-muted">No audit rows match.</div>
+    {/each}
+  </div>
+</section>
