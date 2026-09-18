@@ -152,45 +152,47 @@ func (c CLI) daemon(args []string) error {
 		return err
 	}
 	defer control.Close()
-	servers := make([]*http.Server, 0, 2)
-	defer func() {
-		for _, server := range servers {
-			_ = server.Close()
-		}
-	}()
+	var server *http.Server
 	if cfg.Proxy.Listen != "" {
-		handler, err := proxy.New(cfg, manager, requestLogs)
+		handler, err := edgeHandler(cfg, manager, requestLogs)
 		if err != nil {
 			return err
 		}
-		server, err := startHTTPServer("proxy", cfg.Proxy.Listen, handler)
+		server, err = startHTTPServer("proxy", cfg.Proxy.Listen, handler)
 		if err != nil {
 			return err
 		}
-		servers = append(servers, server)
-	}
-	if cfg.Management.Listen != "" {
-		handler, err := console.New(cfg, manager, requestLogs)
-		if err != nil {
-			return fmt.Errorf("management console: %w", err)
-		}
-		server, err := startHTTPServer("management console", cfg.Management.Listen, handler)
-		if err != nil {
-			return err
-		}
-		servers = append(servers, server)
+		defer server.Close()
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("dboss daemon ready: socket=%s proxy=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Listen)
+	log.Printf("dboss daemon ready: socket=%s listen=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host)
 	<-ctx.Done()
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, server := range servers {
+	if server != nil {
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}
 	return nil
+}
+
+// edgeHandler is the single public listener: Cloudflare hands it the full request and the
+// host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
+func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, error) {
+	apps, err := proxy.New(cfg, manager, requestLogs)
+	if err != nil {
+		return nil, err
+	}
+	var handler http.Handler = apps
+	if cfg.Management.Enabled() {
+		management, err := console.New(cfg, manager, requestLogs)
+		if err != nil {
+			return nil, fmt.Errorf("management console: %w", err)
+		}
+		handler = proxy.HostSwitch(cfg.Management.Host, management, apps)
+	}
+	return proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
 }
 
 func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {

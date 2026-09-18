@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,8 +85,43 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if rates.LastMinute != 1 {
 		t.Fatalf("request was not logged: %+v", rates)
 	}
+	assertUpgradePassthrough(t, handler)
 	if err := manager.Stop("demo"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// assertUpgradePassthrough drives a raw websocket-style upgrade through a real listener so the
+// hijack path of the response recorder and the reverse proxy is exercised end to end.
+func assertUpgradePassthrough(t *testing.T, handler http.Handler) {
+	t.Helper()
+	edge := httptest.NewServer(handler)
+	defer edge.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(edge.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	fmt.Fprint(conn, "GET /ws HTTP/1.1\r\nHost: demo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+	reader := bufio.NewReader(conn)
+	status, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(status, "HTTP/1.1 101") {
+		t.Fatalf("upgrade status = %q, %v", status, err)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	fmt.Fprint(conn, "ping\n")
+	echo, err := reader.ReadString('\n')
+	if err != nil || echo != "echo ping\n" {
+		t.Fatalf("echo = %q, %v", echo, err)
 	}
 }
 
@@ -93,6 +130,25 @@ func TestProxyHelperProcess(t *testing.T) {
 		return
 	}
 	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "hello from demo") })
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "upgrade required", http.StatusBadRequest)
+			return
+		}
+		conn, buffered, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_ = buffered.Flush()
+		line, err := buffered.ReadString('\n')
+		if err != nil {
+			return
+		}
+		_, _ = buffered.WriteString("echo " + line)
+		_ = buffered.Flush()
+	})
 	if err := http.ListenAndServe("127.0.0.1:"+os.Getenv("PORT"), nil); err != nil {
 		os.Exit(2)
 	}

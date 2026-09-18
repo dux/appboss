@@ -49,10 +49,9 @@ func TestLoadAppRequiresProcfile(t *testing.T) {
 	}
 }
 
-func TestManagementRequiresAuthAndSeparateListener(t *testing.T) {
+func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	cfg := Default()
 	cfg.Apps = []string{"/apps/demo"}
-	cfg.Management.Listen = "127.0.0.1:8081"
 	cfg.Management.Host = "boss.example.com"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing admin email error")
@@ -61,9 +60,22 @@ func TestManagementRequiresAuthAndSeparateListener(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Management.Listen = cfg.Proxy.Listen
+	cfg.Proxy.Listen = ""
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected shared listener error")
+		t.Fatal("expected missing proxy listener error")
+	}
+}
+
+func TestTrustedCIDRsMustParse(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = []string{"/apps/demo"}
+	cfg.Proxy.TrustedCIDRs = []string{"173.245.48.0/20", "2400:cb00::/32"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Proxy.TrustedCIDRs = []string{"173.245.48.0"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid cidr error")
 	}
 }
 

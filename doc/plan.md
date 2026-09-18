@@ -3,7 +3,7 @@
 Bare-metal app host for one Linux box.
 Loads an explicit list of app folders, runs the processes in each app's `deploy-boss.yaml`, allocates ports, proxies HTTP to them, stops idle apps and wakes them on the next request, and keeps structured request logs per app.
 
-Sits under nginx (or Cloudflare directly).
+Sits directly behind the Cloudflare proxy as the origin; nothing else runs in front of it.
 Replaces Caddy, lux-deploy's port allocator and unit renderer, and the Caddy-log-to-SQLite importer.
 lux-deploy keeps rsync, releases, hooks and rollback and calls `dboss` at the end of a deploy.
 
@@ -28,7 +28,7 @@ Single static binary, one process, subcommands for daemon and CLI.
 * No multi-host.
   One box, one daemon.
 * No TLS, no HTTP/3, no rate limiting.
-  Cloudflare and/or nginx own the edge.
+  Cloudflare owns the edge and talks plain HTTP to the box (Flexible mode).
 * No deploy logic.
   Rsync, releases, hooks, rollback stay in lux-deploy.
 * No DB provisioning (may come later as a separate command).
@@ -36,12 +36,14 @@ Single static binary, one process, subcommands for daemon and CLI.
 ## Chain
 
 ```
-Cloudflare -> nginx :80 -> boss proxy :8080 -> app :3100
+Cloudflare -> boss :80 -> app :3100
 ```
 
-nginx keeps one static `location /` to the proxy plus the crude blocklist, body limits, and `proxy_set_header Host/X-Forwarded-*`.
-It never learns about individual apps.
-If the box sits behind Cloudflare Tunnel, nginx is optional.
+Cloudflare passes the full request with the original `Host`, `CF-Connecting-IP` and `X-Forwarded-Proto`.
+The daemon listens on port 80 (`CAP_NET_BIND_SERVICE` in the unit) and picks the app, or the management console, from the host header.
+Blocking and body limits live in the Cloudflare WAF.
+`proxy.trusted_cidrs` optionally rejects connections that do not come from Cloudflare, so the origin IP cannot be used to bypass it or spoof client IPs.
+Websocket and other `Upgrade` connections are passed through as is.
 
 ## App folder contract
 
@@ -90,9 +92,8 @@ state_dir: /var/lib/boss
 log_dir: /var/log/boss
 socket: /run/boss/boss.sock
 proxy:
-  listen: 127.0.0.1:8080
+  listen: ":80"
 management:
-  listen: 127.0.0.1:8081
   host: boss.example.com
   auth:
     realm: auth.authcog.com
@@ -230,9 +231,8 @@ The daemon completes the AuthCog callback server-side, checks the authenticated 
 Mutation endpoints require a per-session CSRF token and same-origin request.
 Proxied application traffic remains public and never enters the console authentication flow.
 
-nginx routes the management hostname to `management.listen` and all app hostnames to `proxy.listen`.
-The two listeners must use different ports and neither may overlap the application port range.
-The demo console is available directly at `http://boss.lvh.me:8081`; its app proxy remains at port 8080.
+The console is served by the same listener as the apps: requests whose host is `management.host` go to the console, everything else to the app proxy.
+The demo console is at `http://boss.lvh.me:8080`, next to the demo apps.
 
 ## lux-deploy integration
 
@@ -257,7 +257,6 @@ internal/ctl/             unix socket server + client
 internal/cli/             command implementations
 web/                      starting.html, crashed.html, 404.html
 deploy/boss.service       systemd unit for the daemon
-deploy/nginx.conf         reference nginx snippet
 ```
 
 ## Milestones
@@ -266,7 +265,7 @@ deploy/nginx.conf         reference nginx snippet
    Runs on macOS.
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
 3. **Logs.** SQLite request log, prune, `dboss status` shows request rates.
-4. **Ops.** systemd unit, nginx snippet, management console, lux-deploy calls `dboss restart`.
+4. **Ops.** systemd unit, management console, lux-deploy calls `dboss restart`.
 5. **Later.** cgroup backend and per-app memory limits.
 
 ## Open questions

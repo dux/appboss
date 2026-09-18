@@ -10,7 +10,6 @@ proxy:
   listen: 127.0.0.1:8080
 
 management:
-  listen: 127.0.0.1:8081
   host: boss.lvh.me
   auth:
     realm: auth.authcog.com

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/mail"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,16 +103,19 @@ type Config struct {
 
 type Proxy struct {
 	Listen          string   `yaml:"listen" json:"listen"`
+	TrustedCIDRs    []string `yaml:"trusted_cidrs" json:"trusted_cidrs"`
 	ClientIPHeaders []string `yaml:"client_ip_headers" json:"client_ip_headers"`
 	Wake            Wake     `yaml:"wake" json:"wake"`
 	Upstream        Upstream `yaml:"upstream" json:"upstream"`
 }
 
+// Management is served by the proxy listener; the host header selects the console.
 type Management struct {
-	Listen string         `yaml:"listen" json:"listen"`
-	Host   string         `yaml:"host" json:"host"`
-	Auth   ManagementAuth `yaml:"auth" json:"auth"`
+	Host string         `yaml:"host" json:"host"`
+	Auth ManagementAuth `yaml:"auth" json:"auth"`
 }
+
+func (m Management) Enabled() bool { return m.Host != "" }
 
 type ManagementAuth struct {
 	Realm       string   `yaml:"realm" json:"realm"`
@@ -230,8 +234,13 @@ func (c Config) Validate() error {
 	if c.StateDir == "" || c.LogDir == "" || c.Socket == "" {
 		return errors.New("state_dir, log_dir, and socket are required")
 	}
-	if err := validateManagement(c.Management, c.Proxy.Listen, c.Ports.Range); err != nil {
+	if err := validateManagement(c.Management, c.Proxy.Listen); err != nil {
 		return fmt.Errorf("management: %w", err)
+	}
+	for _, cidr := range c.Proxy.TrustedCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("proxy.trusted_cidrs: invalid entry %q", cidr)
+		}
 	}
 	if c.Ports.Range[0] < 1 || c.Ports.Range[1] > 65535 || c.Ports.Range[0] > c.Ports.Range[1] {
 		return fmt.Errorf("invalid ports.range %v", c.Ports.Range)
@@ -273,26 +282,15 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func validateManagement(management Management, proxyListen string, portRange [2]int) error {
-	if management.Listen == "" {
-		if management.Host != "" || len(management.Auth.AdminEmails) > 0 {
-			return errors.New("listen is required when management is configured")
+func validateManagement(management Management, proxyListen string) error {
+	if !management.Enabled() {
+		if len(management.Auth.AdminEmails) > 0 {
+			return errors.New("host is required when management is configured")
 		}
 		return nil
 	}
-	_, portValue, err := net.SplitHostPort(management.Listen)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	port, err := strconv.Atoi(portValue)
-	if err != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("listen has invalid port %q", portValue)
-	}
-	if management.Listen == proxyListen {
-		return errors.New("listen must differ from proxy.listen")
-	}
-	if port >= portRange[0] && port <= portRange[1] {
-		return errors.New("listen overlaps ports.range")
+	if proxyListen == "" {
+		return errors.New("proxy.listen is required because the console is served by the proxy listener")
 	}
 	if !validHostname(management.Host) {
 		return fmt.Errorf("invalid host %q", management.Host)

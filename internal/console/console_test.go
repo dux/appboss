@@ -156,7 +156,6 @@ func newTestHandler(t *testing.T, manager AppManager, rates RateReader) *Handler
 	cfg := config.Default()
 	cfg.Apps = []string{"/apps/demo"}
 	cfg.StateDir = t.TempDir()
-	cfg.Management.Listen = "127.0.0.1:8081"
 	cfg.Management.Host = "boss.lvh.me"
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	handler, err := New(cfg, manager, rates)
