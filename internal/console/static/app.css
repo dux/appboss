@@ -1266,6 +1266,16 @@ code {
   text-transform: uppercase;
 }
 
+.help-body h3 a.help-jump {
+  color: inherit;
+  cursor: pointer;
+}
+
+.help-body h3 a.help-jump:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .help-body p {
   max-width: 74ch;
   margin: 0 0 12px;

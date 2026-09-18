@@ -1,5 +1,6 @@
 <script>
   const TOPICS = [
+    { id: 'features', title: 'Features overview' },
     { id: 'how', title: 'How it works' },
     { id: 'config', title: 'Config files' },
     { id: 'processes', title: 'Processes' },
@@ -15,7 +16,7 @@
 
   class {
     init() {
-      this.state.topic = 'how'
+      this.state.topic = 'features'
       this.state.topics = TOPICS
     }
 
@@ -49,6 +50,86 @@
   </nav>
 
   <div class="help-body" fez:this="pane">
+    {#if state.topic === 'features'}
+      <section class="help-features">
+        <h2>Features overview</h2>
+        <p>What appboss gives you, by area. Each heading jumps to the full guidance.</p>
+
+        <h3><a class="help-jump" onclick="fez.select('processes')">Supervision</a></h3>
+        <ul>
+          <li>Process groups from a <code>procfile</code>; the <code>web_process</code> starts first, then the rest by name.</li>
+          <li>One fixed <code>PORT</code> per app and process type, injected with <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>APPBOSS_SOCKET</code>.</li>
+          <li><code>autostart</code> and <code>running.json</code> resume exactly the apps that should be up across host restarts.</li>
+          <li><code>idle_stop</code> stops an idle app; the next request wakes it with a starting page and <code>Retry-After</code>.</li>
+          <li><code>health</code> readiness checks (<code>tcp</code> or <code>http:&lt;path&gt;</code>) with <code>health_interval</code> and <code>health_timeout</code>.</li>
+          <li>Restart policy (<code>restart</code>, <code>max_restarts</code>, <code>restart_backoff</code>) and a <code>crashed</code> state that alerts.</li>
+          <li>Graceful drain on stop and restart: new requests get <code>503</code> while in-flight ones finish within <code>stop_timeout</code>.</li>
+          <li>Optional cgroup limits (<code>resources</code>, <code>memory_max</code>, <code>cpu_max</code>).</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('routing')">Routing &amp; proxy</a></h3>
+        <ul>
+          <li>Host routing from <code>hosts</code>, including <code>*.</code> subdomains and <code>.example.com</code> for the apex plus every subdomain.</li>
+          <li><code>canonical_host</code> 301s every other host; <code>maintenance</code> serves a page while the app keeps running.</li>
+          <li>Access control with <code>basic_auth</code> (bcrypt via <code>appboss password</code>) and <code>allow_ips</code> CIDRs.</li>
+          <li>Static files from <code>static</code>, with immutable caching for chosen prefixes (<code>static_immutable</code>).</li>
+          <li>Response <code>headers</code> and a request body limit (<code>max_body</code>).</li>
+          <li>Cloudflare-first: <code>trusted_cidrs</code> and <code>client_ip_headers</code>; forwarded headers are added only when missing.</li>
+          <li>Tunable upstream timeouts and keep-alive pooling.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('logs')">Logs &amp; search</a></h3>
+        <ul>
+          <li>One SQLite store per app with <code>REQUEST</code>, <code>STDOUT</code>, <code>appboss</code> and one channel per <code>*.log</code> file.</li>
+          <li>Full-text search over messages and raw lines, with level and request filters.</li>
+          <li>Full-screen viewer at <code>/logs</code> with shareable URLs and export; <code>appboss logs</code> tails or queries the same store.</li>
+          <li>Rotation and ingestion of process logs, <code>log_retention</code> and <code>stdout_retention</code>, a daily prune and SQLite <code>VACUUM</code>.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('cron')">Scheduled jobs</a></h3>
+        <ul>
+          <li><code>cron:</code> one-shot commands on <code>every &lt;n&gt;&lt;s|m|h|d&gt;</code> or a five-field expression, even while the app is stopped.</li>
+          <li>Per-job <code>timeout</code> and <code>overlap</code>; each run logs to its own <code>cron-&lt;job&gt;</code> channel.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('hooks')">Deploy hooks</a></h3>
+        <ul>
+          <li><code>hooks:</code> one-shot commands triggered by a signed ping to <code>/hooks/&lt;app&gt;/&lt;hook&gt;</code>.</li>
+          <li>Auth by a generated or configured secret: query token, bearer, GitLab token or GitHub HMAC.</li>
+          <li><code>restart: true</code> rolls the app after a clean run; <code>appboss exec</code> runs one-off commands in the same environment.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('audit')">Audit &amp; history</a></h3>
+        <ul>
+          <li>Every mutation is audited with its actor: console email, <code>hook:&lt;app&gt;/&lt;hook&gt;</code> or <code>cli</code>.</li>
+          <li>Config history keeps the last 50 revisions per file and restores one, revision-checked.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('health')">Health &amp; alerts</a></h3>
+        <ul>
+          <li><code>/healthz</code>, <code>/readyz</code> and Prometheus <code>/metrics</code> on the management host, optionally token-gated.</li>
+          <li>A public per-app <code>health_endpoint</code> that never wakes a stopped app.</li>
+          <li>A debounced operator webhook (<code>notify</code>) for crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy and config-changed.</li>
+          <li><code>appboss doctor</code> preflights tools, directories, the config and the port range.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('cli')">Console &amp; CLI</a></h3>
+        <ul>
+          <li>Management console with live state, start, stop, restart and maintenance controls, a validated config editor, logs, audit and help.</li>
+          <li>AuthCog sign-in for admins, plus one-time <code>appboss login</code> links over the control socket for local work.</li>
+          <li>Full CLI over the control socket, with <code>--json</code> on every command.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('config')">Config</a></h3>
+        <ul>
+          <li>One <code>appboss.yaml</code>, two roles: a host with <code>apps:</code>, an app with <code>procfile:</code>; <code>appboss.local.yaml</code> wins for server-only values.</li>
+          <li><code>defaults:</code> applies to every app and is overridden key by key, once more per process under <code>processes.&lt;name&gt;</code>.</li>
+          <li><code>$NAME</code> expands from the daemon environment; <code>procfile</code> and cron commands are never expanded.</li>
+          <li>Validate with <code>appboss check</code>, inspect with <code>appboss config [app] -d</code>, browse every key in the live reference.</li>
+        </ul>
+      </section>
+    {/if}
+
     {#if state.topic === 'how'}
       <section>
         <h2>How it works</h2>
