@@ -3,5 +3,9 @@ procfile:
 
 hosts:
   - sinatra.lvh.me
+  - www.sinatra.lvh.me
+
+canonical_host: sinatra.lvh.me
+static: ./public
 
 health: http:/up

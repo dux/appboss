@@ -28,7 +28,7 @@ check: vet test ## Run static checks and tests
 
 demo: build ## Run the local demo daemon
 	@printf '%s\n' \
-		'Management console: http://boss.lvh.me:8080' \
+		'Management console: http://boss.lvh.me:8080 (also :3100)' \
 		'Apps:' \
 		'  http://sinatra.lvh.me:8080' \
 		'  http://bun.lvh.me:8080'

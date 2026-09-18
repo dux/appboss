@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"deploy-boss/internal/config"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestLogOverlapTracksRollingTail(t *testing.T) {
@@ -140,5 +142,80 @@ func writeFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPasswordPrintsBcryptHash(t *testing.T) {
+	var out, errOut strings.Builder
+	cli := CLI{In: strings.NewReader("secret\n"), Out: &out, Err: &errOut}
+	if code := cli.Run([]string{"password"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(strings.TrimSpace(out.String())), []byte("secret")); err != nil {
+		t.Fatalf("output is not a hash of the password: %q", out.String())
+	}
+	if code := (CLI{In: strings.NewReader("\n"), Out: &out, Err: &errOut}).Run([]string{"password"}); code == 0 {
+		t.Fatal("empty password must fail")
+	}
+}
+
+func TestConfigReferenceIsEmbedded(t *testing.T) {
+	var out strings.Builder
+	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "--reference"}); code != 0 || !strings.Contains(out.String(), "PART 1: <host>/dboss.yaml") {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+func TestHelpOutput(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := (CLI{Out: &out, Err: &errOut}).Run(nil); code != 0 || !strings.Contains(out.String(), "maintenance") || !strings.Contains(out.String(), "Host session") {
+		t.Fatalf("bare dboss: exit %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"help", "logs"}); code != 0 || !strings.Contains(out.String(), "--process <name>") {
+		t.Fatalf("help logs: exit %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"logs", "--help"}); code != 0 || !strings.Contains(out.String(), "dboss logs [app]") {
+		t.Fatalf("logs --help: exit %d %s", code, out.String())
+	}
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"nope"}); code != 2 || !strings.Contains(errOut.String(), `unknown command "nope"`) {
+		t.Fatalf("unknown command: exit %d %s", code, errOut.String())
+	}
+	for _, name := range []string{"start", "systemd", "config", "check", "kill", "run", "stop", "restart", "status", "logs", "ls", "ports", "rescan", "maintenance", "password"} {
+		if findCommand(name) == nil {
+			t.Errorf("%s has no help entry", name)
+		}
+	}
+}
+
+func TestManagementTakesFirstPort(t *testing.T) {
+	cfg := config.Default()
+	cfg.Ports.Range = [2]int{3100, 3199}
+	allocator, port := newAllocator(cfg)
+	if port != 3100 || allocator.Entries()["dboss/management"] != 3100 {
+		t.Fatalf("management port = %d, entries = %v", port, allocator.Entries())
+	}
+	if next, _ := allocator.Allocate("alpha", "web"); next != 3101 {
+		t.Fatalf("first app port = %d, want 3101", next)
+	}
+}
+
+func TestConfigPrintsGivenFileOrDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.FileName)
+	writeFile(t, path, "# host\napps: ./apps\ndefaults:\n  idle_stop: 2h # never mind\n")
+	var out strings.Builder
+	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "-c", path}); code != 0 || out.String() != "# host\napps: ./apps\ndefaults:\n  idle_stop: 2h # never mind\n" {
+		t.Fatalf("given: exit %d %q", code, out.String())
+	}
+	out.Reset()
+	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "-c", path, "--defaults"}); code != 0 || !strings.Contains(out.String(), "\n  idle_stop: 2h0m0s\n") || !strings.Contains(out.String(), "\nports:\n  range:\n") {
+		t.Fatalf("defaults: exit %d %s", code, out.String())
+	}
+	var errOut strings.Builder
+	writeFile(t, path, "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n")
+	if code := (CLI{Out: io.Discard, Err: &errOut}).Run([]string{"config", "-c", path}); code != 1 || !strings.Contains(errOut.String(), "dboss.yaml:3: defaults.idle_stpo: unknown key\n  did you mean \"idle_stop\"?") {
+		t.Fatalf("typo: exit %d %s", code, errOut.String())
 	}
 }

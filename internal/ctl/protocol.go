@@ -7,6 +7,7 @@ type Request struct {
 	App     string          `json:"app,omitempty"`
 	Process string          `json:"process,omitempty"`
 	Lines   int             `json:"lines,omitempty"`
+	On      bool            `json:"on,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 

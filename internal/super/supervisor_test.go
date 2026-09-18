@@ -315,3 +315,61 @@ func TestSupervisorHelperProcess(t *testing.T) {
 		_ = connection.Close()
 	}
 }
+
+func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "apps", "one")
+	if err := os.MkdirAll(appDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte("procfile:\n  web: /usr/bin/true\nhosts: [one.test]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, config.FileName)
+	if err := os.WriteFile(configPath, []byte("apps: ./apps\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := os.WriteFile(configPath, []byte("apps: ./apps\nproxy:\n  listen: 127.0.0.1:9999\ndefaults:\n  static: ./public\n  headers:\n    X-Robots-Tag: none\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Rescan(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := manager.Snapshot("one")
+	if snapshot.Web.Static != "./public" || snapshot.Web.Headers["X-Robots-Tag"] != "none" || snapshot.Dir != appDir {
+		t.Fatalf("defaults did not reach the app: %+v", snapshot)
+	}
+	if keys := manager.RestartRequired(); len(keys) != 1 || keys[0] != "proxy" {
+		t.Fatalf("restart required = %v", keys)
+	}
+	if err := manager.SetMaintenance("one", true); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, _ = manager.Snapshot("one"); !snapshot.Maintenance {
+		t.Fatal("maintenance flag not set")
+	}
+	manager.Close()
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if snapshot, _ = second.Snapshot("one"); !snapshot.Maintenance {
+		t.Fatal("maintenance flag did not survive a restart")
+	}
+	if err := second.SetMaintenance("one", false); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, _ = second.Snapshot("one"); snapshot.Maintenance {
+		t.Fatal("maintenance flag not cleared")
+	}
+}

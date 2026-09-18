@@ -52,36 +52,42 @@ type RequestRates struct {
 }
 
 type Snapshot struct {
-	Name         string            `json:"name"`
-	State        State             `json:"state"`
-	Hosts        []string          `json:"hosts"`
-	WebProcess   string            `json:"web_process"`
-	Processes    []ProcessSnapshot `json:"processes"`
-	LastActivity time.Time         `json:"last_activity,omitempty"`
-	Uptime       string            `json:"uptime,omitempty"`
-	Resources    res.Stats         `json:"resources"`
-	RequestRates RequestRates      `json:"request_rates"`
-	Error        string            `json:"error,omitempty"`
-	ErrorLog     []string          `json:"error_log,omitempty"`
-	LogRetention time.Duration     `json:"-"`
-	LogFlush     time.Duration     `json:"-"`
+	Name          string            `json:"name"`
+	State         State             `json:"state"`
+	Maintenance   bool              `json:"maintenance"`
+	Dir           string            `json:"dir"`
+	Hosts         []string          `json:"hosts"`
+	CanonicalHost string            `json:"canonical_host,omitempty"`
+	WebProcess    string            `json:"web_process"`
+	Web           config.Web        `json:"web"`
+	Processes     []ProcessSnapshot `json:"processes"`
+	LastActivity  time.Time         `json:"last_activity,omitempty"`
+	Uptime        string            `json:"uptime,omitempty"`
+	Resources     res.Stats         `json:"resources"`
+	RequestRates  RequestRates      `json:"request_rates"`
+	Error         string            `json:"error,omitempty"`
+	ErrorLog      []string          `json:"error_log,omitempty"`
+	LogRetention  time.Duration     `json:"-"`
+	LogFlush      time.Duration     `json:"-"`
 }
 
 const failureLogLines = 1000
 
 type Manager struct {
-	cfg        config.Config
-	ports      *ports.Allocator
-	backend    res.Backend
-	echo       *Echo
-	closeOnce  sync.Once
-	mu         sync.RWMutex
-	apps       map[string]*appRuntime
-	desiredMu  sync.Mutex
-	desired    map[string]bool
-	activities map[string]time.Time
-	ctx        context.Context
-	cancel     context.CancelFunc
+	cfg             config.Config
+	ports           *ports.Allocator
+	backend         res.Backend
+	echo            *Echo
+	closeOnce       sync.Once
+	mu              sync.RWMutex
+	apps            map[string]*appRuntime
+	restartRequired []string
+	desiredMu       sync.Mutex
+	desired         map[string]bool
+	maintenance     map[string]bool
+	activities      map[string]time.Time
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // New discovers the apps and starts the ones that were running before. A non-nil echo mirrors
@@ -91,7 +97,11 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 	if err != nil {
 		return nil, invalid, err
 	}
-	desired, err := loadDesired(cfg.StateDir)
+	desired, err := loadNames(filepath.Join(cfg.StateDir, "running.json"))
+	if err != nil {
+		return nil, invalid, err
+	}
+	maintenance, err := loadNames(filepath.Join(cfg.StateDir, "maintenance.json"))
 	if err != nil {
 		return nil, invalid, err
 	}
@@ -100,7 +110,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, [
 		return nil, invalid, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, apps: map[string]*appRuntime{}, desired: desired, activities: activities, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -161,6 +171,7 @@ func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}}
 	runtime.lastActivity = m.activities[spec.Name]
+	runtime.maintenance = m.maintenance[spec.Name]
 	m.apps[spec.Name] = runtime
 	go runtime.loop()
 }
@@ -212,6 +223,33 @@ func (m *Manager) Restart(name string) error {
 		return err
 	}
 	return m.setDesired(name, true)
+}
+
+// SetMaintenance flips the proxy into or out of maintenance answers for name. The app itself
+// keeps running; the flag survives a host restart through state_dir/maintenance.json.
+func (m *Manager) SetMaintenance(name string, on bool) error {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	if err := runtime.call(request{kind: requestMaintenance, on: on}); err != nil {
+		return err
+	}
+	m.desiredMu.Lock()
+	defer m.desiredMu.Unlock()
+	if on {
+		m.maintenance[name] = true
+	} else {
+		delete(m.maintenance, name)
+	}
+	return saveNames(filepath.Join(m.cfg.StateDir, "maintenance.json"), m.maintenance)
+}
+
+// RestartRequired lists the host keys whose value on disk differs from the running session.
+func (m *Manager) RestartRequired() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.restartRequired...)
 }
 
 func (m *Manager) Snapshots() []Snapshot {
@@ -274,21 +312,29 @@ func (m *Manager) ResolveHost(host string) (Snapshot, bool) {
 
 func (m *Manager) Ports() map[string]int { return m.ports.Entries() }
 
+// Rescan re-reads the root file and every app folder. App-level keys, including host defaults,
+// apply live; host keys are left as started and reported through RestartRequired.
 func (m *Manager) Rescan() ([]error, error) {
 	scanConfig := m.cfg
+	var restartRequired []string
 	if m.cfg.SourcePath != "" {
 		loaded, err := config.Load(m.cfg.SourcePath)
 		if err != nil {
 			return nil, err
 		}
-		scanConfig.Apps, scanConfig.App = loaded.Apps, loaded.App
+		scanConfig.App, scanConfig.Defaults = loaded.App, loaded.Defaults
+		restartRequired = config.RestartRequired(m.cfg, loaded)
 	}
 	discovered, invalid, err := apps.Discover(scanConfig)
 	if err != nil {
 		return invalid, err
 	}
 	m.mu.Lock()
-	m.cfg.Apps, m.cfg.App = scanConfig.Apps, scanConfig.App
+	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults
+	if len(restartRequired) > 0 && strings.Join(restartRequired, ",") != strings.Join(m.restartRequired, ",") {
+		log.Printf("rescan: %s changed in %s, restart dboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
+	}
+	m.restartRequired = restartRequired
 	seen := map[string]bool{}
 	for _, spec := range discovered {
 		seen[spec.Name] = true
@@ -319,14 +365,21 @@ func (m *Manager) setDesired(name string, running bool) error {
 	} else {
 		delete(m.desired, name)
 	}
-	names := make([]string, 0, len(m.desired))
-	for app := range m.desired {
-		names = append(names, app)
+	return saveNames(filepath.Join(m.cfg.StateDir, "running.json"), m.desired)
+}
+
+// saveNames writes the sorted keys of set to path as a JSON list, atomically.
+func saveNames(path string, set map[string]bool) error {
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	data, _ := json.MarshalIndent(names, "", "  ")
 	data = append(data, '\n')
-	path := filepath.Join(m.cfg.StateDir, "running.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
 	newPath := path + ".new"
 	if err := os.WriteFile(newPath, data, 0o640); err != nil {
 		return err
@@ -359,9 +412,9 @@ func (m *Manager) idleLoop(ctx context.Context) {
 	}
 }
 
-func loadDesired(stateDir string) (map[string]bool, error) {
+func loadNames(path string) (map[string]bool, error) {
 	result := map[string]bool{}
-	data, err := os.ReadFile(filepath.Join(stateDir, "running.json"))
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return result, nil
 	}
@@ -442,6 +495,7 @@ const (
 	requestTouch
 	requestIdle
 	requestUpdate
+	requestMaintenance
 )
 
 type request struct {
@@ -451,6 +505,7 @@ type request struct {
 	lines       int
 	now         time.Time
 	spec        *apps.App
+	on          bool
 }
 type response struct {
 	snapshot    Snapshot
@@ -496,6 +551,7 @@ type appRuntime struct {
 	lastActivity     time.Time
 	lastError        string
 	lastErrorProcess string
+	maintenance      bool
 }
 
 func (a *appRuntime) call(req request) error { return a.query(req).err }
@@ -560,6 +616,8 @@ func (a *appRuntime) handle(req request) response {
 		}
 	case requestUpdate:
 		a.spec = req.spec
+	case requestMaintenance:
+		a.maintenance = req.on
 	}
 	return response{}
 }
@@ -892,7 +950,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Hosts: a.spec.Config.Hosts, WebProcess: a.spec.Config.WebProcess, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Web: a.spec.Config.Web, LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {
@@ -919,7 +977,7 @@ func (a *appRuntime) snapshot() Snapshot {
 
 func (a *appRuntime) logs(processName string, lines int) (map[string][]string, error) {
 	if lines <= 0 {
-		lines = a.cfg.Defaults.LogTailLines
+		lines = a.spec.Config.LogTailLines
 	}
 	result := map[string][]string{}
 	for name := range a.spec.Commands {

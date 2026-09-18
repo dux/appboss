@@ -17,6 +17,10 @@
 #   - Every key shown has the default value shown. Omit a key to get the default.
 #   - Unknown keys are an error at load time, not a warning. Typos must not pass silently.
 #   - Per-app values in an app's dboss.yaml override global defaults.* one key at a time.
+#     Process keys can be overridden once more under processes.<name>; web keys cannot.
+#   - App-level changes (defaults.* and app files) apply on rescan without a restart. Changing
+#     apps, state_dir, log_dir, socket, proxy, management, ports or daemon needs a restart;
+#     rescan and the console report which keys are waiting.
 #   - Env vars in values are NOT expanded. Config is literal.
 #
 # Load order at `dboss start`:
@@ -113,7 +117,8 @@ proxy:
 
 # Omit this block to disable the management console.
 # It is served by proxy.listen; only requests for this exact hostname reach it,
-# so authentication never touches application traffic.
+# so authentication never touches application traffic. It also listens on
+# 127.0.0.1:<first port of ports.range>, still requiring this hostname in Host.
 management:
   # Exact hostname accepted by the console and registered with AuthCog.
   # Point it at the box in Cloudflare like any app hostname.
@@ -133,9 +138,10 @@ ports:
   # Inclusive range boss hands out. This range belongs exclusively to boss:
   # daemon startup and `dboss kill` terminate every listener in it before apps
   # start, and every spawn kills whatever still holds its port. This requires
-  # `lsof`. One fixed port is assigned per (app, proctype) at daemon start, in
-  # apps order, and never changes while the daemon runs. The range must not
-  # overlap an HTTP listener.
+  # `lsof`. The first port belongs to the management console, reserved whether
+  # or not the console is enabled. After it one fixed port is assigned per
+  # (app, proctype) at daemon start, in apps order, and never changes while
+  # the daemon runs. The range must not overlap an HTTP listener.
   range: [3100, 3990]
 
 # --- Per-app defaults --------------------------------------------------------
@@ -197,6 +203,46 @@ defaults:
   memory_max: 0             # 0 = unlimited. e.g. 512m
   cpu_max: 0                # 0 = unlimited. percent of one core, e.g. 150
 
+  # --- Web keys: what nginx or Caddy did in front of the app. App-level only. -------------
+  # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
+  # Order per request: canonical redirect -> allow_ips -> basic_auth -> maintenance -> static
+  # -> max_body -> wake or forward -> headers.
+
+  # Directory served straight from disk for GET and HEAD, relative to the app folder.
+  # A missing directory disables static serving for that app, so "./public" is safe globally.
+  # Regular files only; directories and missing files fall through to the app. No index lookup.
+  # Served with Last-Modified, If-Modified-Since and range support, without waking the app.
+  static: ""
+  # Path prefixes under static that get "public, max-age=31536000, immutable".
+  # Everything else under static gets "public, max-age=3600".
+  static_immutable: [/assets/]
+
+  # Request body limit. 0 = none. A Content-Length above it answers 413 before anything is
+  # read; chunked bodies are capped and answer 413 when they overflow.
+  max_body: 0
+
+  # HTTP basic auth: user -> bcrypt hash, generated with `dboss password`. Empty = open.
+  # Set globally on a staging box to protect every app with one line. Applies to static files too.
+  basic_auth: {}
+  #   alice: "$2a$10$..."
+
+  # CIDRs allowed to reach the app; empty = everyone. The client IP comes from
+  # proxy.client_ip_headers (CF-Connecting-IP), not the Cloudflare edge address.
+  allow_ips: []
+  #   - 10.0.0.0/8
+
+  # Response headers added to every app and static response. An empty value removes the
+  # header, which is how an app drops X-Powered-By. Redirects, auth challenges and error
+  # pages are not touched.
+  headers: {}
+  #   X-Frame-Options: DENY
+  #   X-Powered-By: ""
+
+  # File served while the app is in maintenance mode (`dboss maintenance <app> on`), relative
+  # to the app folder. Default: <static>/503.html when it exists, then the built-in page.
+  # HTML GETs get the page with 503 and Retry-After: 30; everything else an empty 503.
+  maintenance_page: ""
+
 # --- Daemon ------------------------------------------------------------------
 
 daemon:
@@ -236,6 +282,11 @@ hosts:
 # Which proctype receives proxied traffic. Only one. Default: web.
 web_process: web
 
+# Optional. Must be one of hosts. Requests for any other host of this app answer 301 to
+# <scheme>://<canonical_host><path?query>; the scheme follows X-Forwarded-Proto, default https.
+# Runs before auth and static files, so www never serves content.
+canonical_host: myapp.com
+
 # Per-app overrides of defaults.* (all optional, same semantics as above).
 idle_stop: 0                # this app never sleeps
 health: http:/up
@@ -250,6 +301,11 @@ memory_max: 512m
 cpu_max: 0
 env:
   MALLOC_ARENA_MAX: "2"
+static: ./public
+static_immutable: [/assets/, /packs/]
+max_body: 50m
+headers:
+  X-Powered-By: ""
 
 # Ports are NOT configurable per app. boss allocates one per (app, proctype)
 # from ports.range and injects it as PORT into that process's environment,
@@ -257,8 +313,9 @@ env:
 # An app that ignores PORT and binds its own port will not be reachable
 # through the proxy. Read the allocation with `dboss ports`.
 
-# Per-proctype overrides. Same keys as above except hosts/web_process.
-# Useful for a worker that needs a longer stop_timeout than the web process.
+# Per-proctype overrides. Process keys only (health, stop, restart, logs, shell, env,
+# resources); a web key here is an error. Useful for a worker that needs a longer
+# stop_timeout than the web process.
 processes:
   worker:
     stop_timeout: 120s
@@ -299,6 +356,9 @@ running.json:
   - myapp
   - myapp-staging
 
+# state_dir/maintenance.json
+# Apps currently in maintenance mode. Updated by `dboss maintenance`; survives a restart.
+#
 # state_dir/<app>/<proctype>.pid
 # One line: the pid of the running child. Removed when the process exits.
 #
@@ -322,8 +382,17 @@ running.json:
 #   dboss start [-c path]                      foreground host session
 #   dboss systemd [-c path] [--user u] [--bin p] [--install]
 #   dboss kill [-c path]                       stop every app and clear ports.range
+#   dboss maintenance [app] on|off             answer with the maintenance page, app keeps running
+#   dboss password                             print a bcrypt hash for basic_auth
 #   DBOSS_SOCKET is injected into app processes, so a process can always find its host.
 #
-# `dboss config` prints the fully resolved config (defaults merged) as YAML.
-# `dboss config <app>` prints the resolved per-app config after defaults merge.
+# `dboss config` validates the host file and prints it as written, comments included.
+# `dboss config <app>` does the same for that app's file.
+# `dboss config -d` / `--defaults` prints the resolved config with every default filled in.
+# `dboss config --reference` prints this document.
+# Errors name the file, line and key: an unknown key suggests the closest valid one.
 # `dboss check` validates the config and every app without starting anything.
+#
+# The management console edits these same files: the host file and, per app, the file dboss
+# reads for that folder (dboss.local.yaml when it exists). "Create server override" copies
+# dboss.yaml to dboss.local.yaml so edits made on the box survive the next deploy.

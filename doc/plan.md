@@ -93,8 +93,9 @@ The app name is the folder name.
 
 * Env is `.env` overlaid by `.env.local`.
 * deploy-boss injects `PORT`, `APP_NAME`, `PROC_TYPE`, `DBOSS_SOCKET`, and the app's `PATH` resolved once via `mise env` when a `mise.toml` exists.
-* Rescan is explicit (`dboss rescan`, or implicit on `dboss run <app>`).
-* Rescan re-reads the apps directory and every app's config, or the root file itself in single mode.
+* Rescan is explicit (`dboss rescan`, a save in the console, or implicit on `dboss run <app>`).
+* Rescan re-reads the apps directory and every app's config, or the root file itself in single mode, and the host `defaults`.
+  App-level keys apply live; a changed host key (`proxy`, `ports`, `apps`, `state_dir`, `log_dir`, `socket`, `management`, `daemon`) is reported as restart required and takes effect on the next `dboss start`.
 
 ### dboss.yaml (required, per app)
 
@@ -104,6 +105,8 @@ procfile:
   worker: bundle exec lux jobs:work
 
 hosts: [myapp.com, www.myapp.com]   # required for proxy routing
+canonical_host: myapp.com           # every other host answers 301 here
+static: ./public                    # served straight from disk, no wake
 idle_stop: 6h                       # 0 = never sleep
 health: http:/up                    # default: TCP connect on PORT
 stop_timeout: 20s
@@ -114,6 +117,8 @@ max_restarts: 5                     # in a row before marking crashed
 `procfile` is required and maps each process name to its command.
 Only `hosts` is additionally needed for a web app.
 Everything else falls back to global defaults.
+Every key under `defaults:` in the host file can be repeated at the top level of an app file, and the app value wins key by key.
+Process keys (health, restart, logs, env, resources) can be overridden once more under `processes.<name>`; web keys (`static`, `basic_auth`, `allow_ips`, `max_body`, `headers`, `maintenance_page`) are app-level only.
 
 ## Host config `/srv/dboss/dboss.yaml`
 
@@ -140,8 +145,8 @@ defaults:
 
 Relative paths resolve from the directory containing the config.
 `state_dir`, `log_dir` and `socket` default to `.dboss/` next to it.
-Every key, its default and meaning, the full per-app format, env-file formats, and state files are documented in `plan-config.yaml` next to this file.
-That file is the authoritative config reference.
+Every key, its default and meaning, the full per-app format, env-file formats, and state files are documented in `internal/config/reference.yaml`.
+That file is embedded in the binary, printed by `dboss config --reference` and shown in the console, so it never drifts from the release.
 
 ## Process model
 
@@ -200,16 +205,32 @@ Nothing outside the app goroutine knows which backend is active.
 ## Proxy
 
 `httputil.ReverseProxy` listens on the configured proxy address.
+Cloudflare owns TLS, HTTP/2 and 3, compression, caching, WAF and rate limiting; everything nginx or Caddy did in front of the app lives here.
 Per request:
 
 1. Look up the host in the app table built from every app's `dboss.yaml` hosts.
    Serve the boss 404 page for an unknown host.
-2. For an app that is `running`, forward to its `web` port, stamp last activity, and log the request.
-3. App `stopped` or `crashed`: send a start message (idempotent), then:
+   Every request that resolves to an app is logged, whatever step answers it.
+2. `canonical_host`: a request for any other host of the app answers `301` to `<scheme>://<canonical><path?query>`, scheme from `X-Forwarded-Proto`, default `https`.
+3. `allow_ips`: the client IP (`CF-Connecting-IP`, then the remote address) must fall in one of the CIDRs, else `403`.
+4. `basic_auth`: `401` with `WWW-Authenticate: Basic realm="<app>"` unless the request carries a user from the map with a password matching its bcrypt hash.
+   `dboss password` prints the hash.
+5. Maintenance mode (`dboss maintenance <app> on`): `503` with `Retry-After: 30` and the maintenance page for HTML `GET`s, an empty `503` otherwise.
+   The page is `maintenance_page`, then `<static>/503.html`, then the built-in one.
+   The app keeps running; the flag is persisted in `state_dir/maintenance.json`.
+6. `static`: `GET` and `HEAD` for a regular file under the directory are served from disk with `Last-Modified`, conditional and range support, without waking or touching the app.
+   Paths under `static_immutable` get `Cache-Control: public, max-age=31536000, immutable`, everything else `public, max-age=3600`.
+   The directory is opened through `os.OpenRoot` on every request, so `..` and symlinks cannot escape and a release symlink swap is picked up at once.
+7. `max_body`: a `Content-Length` above the limit answers `413` before anything is read; chunked bodies are capped and the resulting upstream error also answers `413`.
+8. For an app that is `running`, forward to its `web` port, stamp last activity, and apply `headers` to the response (an empty value removes the header).
+9. App `stopped` or `crashed`: send a start message (idempotent), then:
    * A `GET` with `Accept: text/html` receives `503` with `Retry-After: 5` and a static starting page with the app name and a refresh timer.
      Crashed apps receive a different page and no auto-start loop.
    * Anything else receives `503`, `Retry-After: 5`, and an empty body.
-4. App `starting`: same as 3 without sending another start.
+10. App `starting`: same as 9 without sending another start.
+
+`X-Request-ID` is set to `CF-Ray` when present, else 16 random bytes in hex, and forwarded to the app.
+Path-based routing between apps stays out: it would double the host table and no app needs it.
 
 Readiness uses a background poll after spawn.
 It connects to `PORT` over TCP by default, or requests the configured HTTP health path until it returns 200 for apps that bind early.
@@ -227,7 +248,8 @@ Apps that must never sleep set `idle_stop: 0`.
 ## Request log
 
 Each app has a WAL-mode SQLite database at `log_dir/<app>/requests.sqlite`.
-Columns are ts, method, host, path, status, duration_ms, bytes_out, ip (`CF-Connecting-IP`, then `X-Forwarded-For`, then remote addr), and ua.
+Columns are ts, method, host, path, status, duration_ms, bytes_out, ip (`CF-Connecting-IP`, then `X-Forwarded-For`, then remote addr), ua, and request_id.
+Missing columns are added with `ALTER TABLE` when the database is opened.
 Inserts are batched every second and rows older than `log_retention` are pruned daily.
 
 ## Control socket and CLI
@@ -243,14 +265,20 @@ dboss ls [--json]                  apps, state, ports, uptime, last activity, me
 dboss run|stop|restart [app]       app defaults to the current folder's app
 dboss status [app] [--json]        full detail incl. process list and restarts
 dboss logs [app] [-f] [-n 200]     tail process logs
+dboss maintenance [app] on|off     answer with the maintenance page while the app keeps running
 dboss ports                        live port table
 dboss rescan                       re-read the apps directory and every dboss.yaml
 dboss kill                         stop all apps and clear every listener in ports.range
-dboss config [app] | check         print resolved config, validate without starting
+dboss config [app] [-d]            validate and print a config file as written, or with -d the resolved config
+dboss config --reference           print the annotated configuration reference
+dboss check                        validate the config and every app without starting
+dboss password                     print a bcrypt hash for basic_auth
+dboss help [command]               grouped overview, or synopsis, details and options of one command
 ```
 
 Every command accepts `--json`.
 Exit codes are meaningful for scripts.
+Config errors name the file, line and key, and carry a hint: an unknown key suggests the closest valid one, a bad duration or size shows the accepted forms.
 Remote commands find the socket via `--socket`, `DBOSS_SOCKET`, the socket of the config in reach when it exists, then `/run/dboss/dboss.sock`.
 
 When stdout is a terminal, `dboss start` echoes every process's output with a colored `app/proc | ` prefix, foreman style.
@@ -265,8 +293,14 @@ There is no static unit file in the repo because the paths differ per box.
 ## Management console
 
 The daemon serves an embedded management console from a dedicated listener and hostname.
-It shows live app state, resource use, request rates, process details, and start, stop, restart, and rescan controls.
+It shows live app state, resource use, request rates, process details, and start, stop, restart, maintenance, and rescan controls.
 The page refreshes app state every five seconds.
+
+Below the fleet, a configuration editor edits the real YAML files on disk: the host file and, per app, the file `dboss start` actually reads (`dboss.local.yaml` when it exists, else `dboss.yaml`).
+There is no database copy of the config.
+The editor validates through the real loaders, saves atomically with a revision check (a stale save shows the disk version side by side), rescans right away, and reports invalid apps and host keys that need a restart.
+**Create server override** copies `dboss.yaml` to `dboss.local.yaml` so edits made on the box survive the next deploy.
+**Effective config** shows the resolved app config and **Reference** the embedded annotated reference.
 
 AuthCog protects only the management console.
 The daemon completes the AuthCog callback server-side, checks the authenticated email against `management.auth.admin_emails`, and issues a signed host-only session cookie.
@@ -274,7 +308,8 @@ Mutation endpoints require a per-session CSRF token and same-origin request.
 Proxied application traffic remains public and never enters the console authentication flow.
 
 The console is served by the same listener as the apps: requests whose host is `management.host` go to the console, everything else to the app proxy.
-The demo console is at `http://boss.lvh.me:8080`, next to the demo apps.
+It also owns the first port of `ports.range` on `127.0.0.1`, reserved before any app is discovered so app ports never shift, and answers there for the same hostname.
+The demo console is at `http://boss.lvh.me:8080`, next to the demo apps, and at `http://boss.lvh.me:3100`.
 
 ## lux-deploy integration
 
@@ -287,17 +322,17 @@ The Caddy log importer is retired.
 
 ```
 cmd/dboss/main.go         subcommand dispatch
-internal/config/          dboss.yaml loading (host and app roles), defaults
-internal/apps/            apps directory walk, env merge, procfile validation
+internal/config/          dboss.yaml loading (host and app roles), defaults, overrides, embedded reference
+internal/apps/            apps directory walk, env merge, procfile validation, config file store
 internal/super/           app goroutine, state machine, spawn, port clearing, terminal echo
 internal/res/             procgroup and cgroup backends
 internal/ports/           in-memory port table
-internal/proxy/           reverse proxy, starting page, host table
+internal/proxy/           reverse proxy, canonical redirect, allow list, basic auth, maintenance, static files, body limit
 internal/console/         AuthCog-protected management API and embedded UI
 internal/reqlog/          sqlite writer + prune
 internal/ctl/             unix socket server + client
 internal/cli/             command implementations, systemd unit generator
-web/                      starting.html, crashed.html, 404.html
+web/                      starting.html, crashed.html, 404.html, maintenance.html
 ```
 
 ## Milestones
@@ -307,7 +342,8 @@ web/                      starting.html, crashed.html, 404.html
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
 3. **Logs.** SQLite request log, prune, `dboss status` shows request rates.
 4. **Ops.** `dboss systemd`, management console, lux-deploy calls `dboss restart`.
-5. **Later.** cgroup backend and per-app memory limits.
+5. **Proxy features.** Canonical host, allow list, basic auth, maintenance mode, static files, body limit, response headers, request id; global-or-per-app config; console config editor.
+6. **Later.** cgroup backend and per-app memory limits.
 
 ## Open questions
 

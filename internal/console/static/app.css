@@ -20,6 +20,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -325,6 +329,7 @@ h2 {
 .app-card[data-state="stopping"] { --state-color: var(--amber); }
 .app-card[data-state="crashed"] { --state-color: var(--red); }
 .app-card[data-state="stopped"] { --state-color: #64727d; }
+.app-card[data-maintenance="true"] { --state-color: var(--amber); }
 
 .app-head {
   display: flex;
@@ -389,6 +394,10 @@ h2 {
   border-radius: 50%;
   background: currentColor;
   content: "";
+}
+
+.state-badge.maintenance {
+  --state-color: var(--amber);
 }
 
 .error-line {
@@ -522,6 +531,12 @@ h2 {
 	background: rgb(255 111 125 / 7%);
 }
 
+.action-button.active {
+  border-color: rgb(249 196 91 / 45%);
+  color: var(--amber);
+  background: rgb(249 196 91 / 8%);
+}
+
 .log-link {
 	display: inline-flex;
 	align-items: center;
@@ -581,6 +596,280 @@ h2 {
   background: #28171b;
 }
 
+.configuration {
+  padding-top: 50px;
+}
+
+.restart-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  border: 1px solid rgb(249 196 91 / 40%);
+  border-radius: 10px;
+  color: #ffd98a;
+  background: rgb(249 196 91 / 8%);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.restart-banner strong {
+  color: var(--amber);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.restart-banner code,
+.config-message code {
+  padding: 2px 6px;
+  border: 1px solid rgb(249 196 91 / 30%);
+  border-radius: 5px;
+  background: rgb(0 0 0 / 25%);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.config-editor {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgb(21 29 36 / 96%), rgb(15 21 26 / 96%));
+  box-shadow: 0 12px 36px rgb(0 0 0 / 18%);
+}
+
+.config-files {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  border-right: 1px solid var(--line-soft);
+}
+
+.config-file {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.config-file strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.config-file span {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.config-file:hover {
+  background: var(--panel-raised);
+}
+
+.config-file.selected {
+  border-color: rgb(94 231 247 / 35%);
+  background: rgb(94 231 247 / 7%);
+}
+
+.dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 10px rgb(249 196 91 / 70%);
+}
+
+.config-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.config-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.config-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.config-buttons .primary-button,
+.config-buttons .secondary-button {
+  min-height: 34px;
+  padding: 0 14px;
+}
+
+.editor {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  height: 460px;
+  background: #0b1014;
+}
+
+.gutter,
+.editor textarea {
+  margin: 0;
+  padding: 14px 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 20px;
+  tab-size: 2;
+}
+
+.gutter {
+  min-width: 48px;
+  padding-right: 12px;
+  padding-left: 14px;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  color: #4d5c68;
+  text-align: right;
+  user-select: none;
+}
+
+.gutter .error {
+  display: inline-block;
+  min-width: 100%;
+  border-radius: 4px;
+  color: #111;
+  background: var(--red);
+  font-weight: 700;
+}
+
+.editor textarea {
+  width: 100%;
+  height: 100%;
+  padding-right: 18px;
+  padding-left: 14px;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  overflow: auto;
+}
+
+.editor textarea:disabled {
+  color: var(--muted);
+}
+
+.config-message {
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--lime);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.config-message.error {
+  color: #ff9da6;
+  background: rgb(255 111 125 / 6%);
+}
+
+.conflict {
+  border-top: 1px solid rgb(249 196 91 / 35%);
+  background: rgb(249 196 91 / 5%);
+}
+
+.conflict-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  font-size: 14px;
+}
+
+.conflict-head strong,
+.conflict-head span {
+  display: block;
+}
+
+.conflict-head strong {
+  color: var(--amber);
+}
+
+.conflict-head span {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.conflict pre {
+  max-height: 300px;
+  margin: 0;
+  padding: 14px 18px;
+  overflow: auto;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100vw);
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: -24px 0 60px rgb(0 0 0 / 45%);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer pre {
+  flex: 1;
+  margin: 0;
+  padding: 18px 24px;
+  overflow: auto;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 20px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -595,6 +884,8 @@ h2 {
   .summary-card:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .app-grid { grid-template-columns: 1fr; }
   .app-controls { width: 100%; justify-content: space-between; }
+  .config-editor { grid-template-columns: 1fr; }
+  .config-files { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line-soft); }
 }
 
 @media (max-width: 560px) {

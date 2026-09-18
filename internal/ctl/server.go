@@ -108,6 +108,8 @@ func (s *Server) dispatch(request Request) Response {
 		err = s.manager.Stop(request.App)
 	case "restart":
 		err = s.manager.Restart(request.App)
+	case "maintenance":
+		err = s.manager.SetMaintenance(request.App, request.On)
 	case "rescan":
 		var invalid []error
 		invalid, err = s.manager.Rescan()
@@ -115,7 +117,7 @@ func (s *Server) dispatch(request Request) Response {
 		for i, scanErr := range invalid {
 			messages[i] = scanErr.Error()
 		}
-		data = map[string]any{"invalid": messages}
+		data = map[string]any{"invalid": messages, "restart_required": s.manager.RestartRequired()}
 	case "logs":
 		data, err = s.manager.Logs(request.App, request.Process, request.Lines)
 	case "ports":

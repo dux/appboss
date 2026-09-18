@@ -116,3 +116,17 @@ func cookieNamed(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie
 	t.Fatalf("missing cookie %s", name)
 	return nil
 }
+
+// The AuthCog callback lands inside a cross-site navigation; a Strict session cookie would be
+// withheld on the redirect that follows and every login would loop back to the login page.
+func TestSessionCookieIsLaxForCrossSiteCallback(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	response := httptest.NewRecorder()
+	if err := handler.auth.setSessionCookie(response, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/authcog", nil), "admin@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	cookie := cookieNamed(t, response.Result().Cookies(), authSessionCookie)
+	if cookie.SameSite != http.SameSiteLaxMode || !cookie.HttpOnly {
+		t.Fatalf("session cookie = %+v", cookie)
+	}
+}

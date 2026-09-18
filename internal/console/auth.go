@@ -223,7 +223,11 @@ func (a *authenticator) setSessionCookie(w http.ResponseWriter, r *http.Request,
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	signature := a.sign(encoded)
-	http.SetCookie(w, &http.Cookie{Name: authSessionCookie, Value: encoded + "." + signature, Path: "/", Expires: expires, MaxAge: int(a.cfg.SessionTTL.Value().Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode})
+	// Lax, not Strict: the callback redirects to the console inside a navigation that AuthCog
+	// started cross-site, and browsers withhold Strict cookies on that whole redirect chain, so
+	// Strict would bounce every fresh login straight back to the login page. Mutations are still
+	// protected by the CSRF token and the Origin check.
+	http.SetCookie(w, &http.Cookie{Name: authSessionCookie, Value: encoded + "." + signature, Path: "/", Expires: expires, MaxAge: int(a.cfg.SessionTTL.Value().Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
 	return nil
 }
 
@@ -272,7 +276,7 @@ func (a *authenticator) clearSessionCookie(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *authenticator) clearCookie(w http.ResponseWriter, r *http.Request, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
 }
 
 func (a *authenticator) sign(value string) string {

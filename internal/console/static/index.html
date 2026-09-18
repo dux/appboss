@@ -78,8 +78,62 @@
           </div>
         </div>
       </section>
+
+      <section class="configuration" aria-labelledby="config-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h2 id="config-title">Config files</h2>
+          </div>
+          <span class="section-count" id="config-count">0 files</span>
+        </div>
+        <div class="restart-banner" id="restart-banner" role="status" hidden>
+          <strong>Restart required</strong>
+          <span id="restart-keys"></span>
+          <code>systemctl restart dboss</code>
+          <span>or Ctrl-C the terminal session and run <code>dboss start</code> again.</span>
+        </div>
+        <div class="config-editor">
+          <nav class="config-files" id="config-files" aria-label="Config files"></nav>
+          <div class="config-main">
+            <div class="config-toolbar">
+              <span class="config-path" id="config-path">Select a file</span>
+              <div class="config-buttons">
+                <button class="action-button" id="config-local" type="button" hidden>Create server override</button>
+                <button class="action-button" id="config-effective" type="button" disabled>Effective config</button>
+                <button class="action-button" id="config-reference" type="button">Reference</button>
+                <button class="secondary-button" id="config-validate" type="button" disabled>Validate</button>
+                <button class="primary-button" id="config-save" type="button" disabled>Save</button>
+              </div>
+            </div>
+            <div class="editor">
+              <pre class="gutter" id="gutter" aria-hidden="true"></pre>
+              <textarea id="config-text" spellcheck="false" wrap="off" aria-label="File contents" disabled></textarea>
+            </div>
+            <div class="config-message" id="config-message" role="status" hidden></div>
+            <div class="conflict" id="conflict" hidden>
+              <div class="conflict-head">
+                <div>
+                  <strong>The file changed on disk while you edited it.</strong>
+                  <span>Copy your change into the version below, or keep editing and save again.</span>
+                </div>
+                <button class="action-button" id="conflict-use" type="button">Use disk version</button>
+              </div>
+              <pre id="conflict-text"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
+
+  <aside class="drawer" id="drawer" aria-labelledby="drawer-title" hidden>
+    <div class="drawer-head">
+      <strong id="drawer-title"></strong>
+      <button class="quiet-button" id="drawer-close" type="button">Close</button>
+    </div>
+    <pre id="drawer-text"></pre>
+  </aside>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>

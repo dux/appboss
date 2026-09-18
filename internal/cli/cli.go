@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -27,49 +29,66 @@ import (
 	"deploy-boss/internal/proxy"
 	"deploy-boss/internal/reqlog"
 	"deploy-boss/internal/super"
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
 type CLI struct {
+	In  io.Reader
 	Out io.Writer
 	Err io.Writer
 }
 
 func (c CLI) Run(args []string) int {
+	if c.In == nil {
+		c.In = os.Stdin
+	}
 	if c.Out == nil {
 		c.Out = os.Stdout
 	}
 	if c.Err == nil {
 		c.Err = os.Stderr
 	}
-	if len(args) == 0 {
-		c.usage()
-		return 2
+	if len(args) == 0 || args[0] == "help" && len(args) == 1 || wantsHelp(args[:1]) {
+		c.usage(c.Out)
+		return 0
 	}
 	command := args[0]
+	if command == "help" {
+		if err := c.help(c.Out, args[1]); err != nil {
+			fmt.Fprintln(c.Err, "dboss:", err)
+			return 2
+		}
+		return 0
+	}
+	if findCommand(command) == nil {
+		fmt.Fprintf(c.Err, "dboss: unknown command %q\n\n", command)
+		c.usage(c.Err)
+		return 2
+	}
+	if wantsHelp(args[1:]) {
+		_ = c.help(c.Out, command)
+		return 0
+	}
 	var err error
 	switch command {
 	case "start":
 		err = c.start(args[1:])
 	case "systemd":
 		err = c.systemd(args[1:])
+	case "password":
+		err = c.password(args[1:])
 	case "config", "check", "kill":
 		err = c.local(command, args[1:])
-	case "run", "stop", "restart", "status", "logs", "ls", "ports", "rescan":
-		err = c.remote(command, args[1:])
 	default:
-		c.usage()
-		return 2
+		err = c.remote(command, args[1:])
 	}
 	if err != nil {
 		fmt.Fprintln(c.Err, "dboss:", err)
 		return 1
 	}
 	return 0
-}
-
-func (c CLI) usage() {
-	fmt.Fprintln(c.Err, "usage: dboss start|systemd|ls|run|stop|restart|status|logs|ports|rescan|kill|config|check [options]")
 }
 
 // configFlag registers -c and --config on set; both write to the same variable.
@@ -116,7 +135,8 @@ func (c CLI) start(args []string) error {
 	if len(cleared) > 0 {
 		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), echo)
+	allocator, managementPort := newAllocator(cfg)
+	manager, invalid, err := super.New(cfg, allocator, echo)
 	if err != nil {
 		return err
 	}
@@ -131,47 +151,69 @@ func (c CLI) start(args []string) error {
 		return err
 	}
 	defer control.Close()
-	var server *http.Server
+	var servers []*http.Server
 	if cfg.Proxy.Listen != "" {
-		handler, err := edgeHandler(cfg, manager, requestLogs)
+		edge, management, err := edgeHandler(cfg, manager, requestLogs)
 		if err != nil {
 			return err
 		}
-		server, err = startHTTPServer("proxy", cfg.Proxy.Listen, handler)
+		server, err := startHTTPServer("proxy", cfg.Proxy.Listen, edge)
 		if err != nil {
 			return err
 		}
 		defer server.Close()
+		servers = append(servers, server)
+		if management != nil {
+			server, err = startHTTPServer("management", managementAddress(managementPort), management)
+			if err != nil {
+				return err
+			}
+			defer server.Close()
+			servers = append(servers, server)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s", cfg.SourcePath, cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host)
+	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", cfg.SourcePath, cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host, managementPort)
 	<-ctx.Done()
-	if server != nil {
+	for _, server := range servers {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		_ = server.Shutdown(shutdown)
+		cancel()
 	}
 	return nil
 }
 
+// newAllocator reserves the first port of the range for the management console before any app
+// is discovered, so app ports never shift when the console is turned on or off.
+func newAllocator(cfg config.Config) (*ports.Allocator, int) {
+	allocator := ports.New(cfg.Ports.Range)
+	port, _ := allocator.Allocate("dboss", "management")
+	return allocator, port
+}
+
+func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
+
 // edgeHandler is the single public listener: Cloudflare hands it the full request and the
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
-func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, error) {
-	apps, err := proxy.New(cfg, manager, requestLogs)
+// The console handler is returned as well so it can be served on its own port.
+func edgeHandler(cfg config.Config, manager *super.Manager, requestLogs *reqlog.Manager) (http.Handler, http.Handler, error) {
+	appProxy, err := proxy.New(cfg, manager, requestLogs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var handler http.Handler = apps
+	var handler, management http.Handler = appProxy, nil
 	if cfg.Management.Enabled() {
-		management, err := console.New(cfg, manager, requestLogs)
+		consoleHandler, err := console.New(cfg, manager, requestLogs, apps.NewStore(cfg))
 		if err != nil {
-			return nil, fmt.Errorf("management console: %w", err)
+			return nil, nil, fmt.Errorf("management console: %w", err)
 		}
-		handler = proxy.HostSwitch(cfg.Management.Host, management, apps)
+		management = consoleHandler
+		handler = proxy.HostSwitch(cfg.Management.Host, consoleHandler, appProxy)
 	}
-	return proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
+	edge, err := proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
+	return edge, management, err
 }
 
 func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {
@@ -211,12 +253,63 @@ func pruneLoop(ctx context.Context, logs *reqlog.Manager, manager *super.Manager
 	}
 }
 
+// password prints a bcrypt hash for basic_auth. The prompt hides input on a terminal; piped
+// input is read as one line so the hash can be scripted.
+func (c CLI) password(args []string) error {
+	if len(args) != 0 {
+		return errors.New("usage: dboss password")
+	}
+	password, err := c.readPassword("Password: ")
+	if err != nil {
+		return err
+	}
+	if len(password) == 0 {
+		return errors.New("password is empty")
+	}
+	if file, ok := c.In.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		confirm, err := c.readPassword("Confirm: ")
+		if err != nil {
+			return err
+		}
+		if string(confirm) != string(password) {
+			return errors.New("passwords do not match")
+		}
+	}
+	hash, err := bcrypt.GenerateFromPassword(password, bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(c.Out, string(hash))
+	return nil
+}
+
+func (c CLI) readPassword(prompt string) ([]byte, error) {
+	if file, ok := c.In.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		fmt.Fprint(c.Err, prompt)
+		defer fmt.Fprintln(c.Err)
+		return term.ReadPassword(int(file.Fd()))
+	}
+	line, err := bufio.NewReader(c.In).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(line, "\r\n")), nil
+}
+
 func (c CLI) local(command string, args []string) error {
 	set := flag.NewFlagSet(command, flag.ContinueOnError)
 	set.SetOutput(c.Err)
 	pathFlag := configFlag(set)
 	jsonOutput := set.Bool("json", false, "JSON output")
+	reference := set.Bool("reference", false, "print the annotated configuration reference")
+	var withDefaults bool
+	set.BoolVar(&withDefaults, "d", false, "include defaults: print the resolved config")
+	set.BoolVar(&withDefaults, "defaults", false, "include defaults: print the resolved config")
 	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if command == "config" && *reference {
+		_, err := io.WriteString(c.Out, config.Reference)
 		return err
 	}
 	path, err := findConfig(*pathFlag)
@@ -251,43 +344,62 @@ func (c CLI) local(command string, args []string) error {
 		}
 		return nil
 	}
+	if set.NArg() > 1 {
+		return errors.New("usage: dboss config [app] [-d|--defaults]")
+	}
 	if set.NArg() == 0 {
-		var data []byte
-		if *jsonOutput {
-			data, _ = json.MarshalIndent(cfg, "", "  ")
-			data = append(data, '\n')
-		} else {
-			data, _ = yaml.Marshal(cfg)
+		if withDefaults {
+			return c.dump(cfg, *jsonOutput)
 		}
-		_, err = c.Out.Write(data)
-		return err
+		return c.dumpFile(cfg.SourcePath, *jsonOutput)
 	}
-	if set.NArg() != 1 {
-		return errors.New("usage: dboss config [app]")
-	}
-	found, invalid, err := apps.Discover(cfg)
+	app, err := apps.Lookup(cfg, set.Arg(0))
 	if err != nil {
 		return err
 	}
-	for _, appErr := range invalid {
-		if strings.HasPrefix(appErr.Error(), set.Arg(0)+":") {
-			return appErr
-		}
+	if withDefaults {
+		return c.dump(app.Config, *jsonOutput)
 	}
-	for _, app := range found {
-		if app.Name == set.Arg(0) {
-			var data []byte
-			if *jsonOutput {
-				data, _ = json.MarshalIndent(app.Config, "", "  ")
-				data = append(data, '\n')
-			} else {
-				data, _ = yaml.Marshal(app.Config)
-			}
-			_, err = c.Out.Write(data)
+	appPath, err := config.FindInDir(app.Dir)
+	if err != nil {
+		return err
+	}
+	return c.dumpFile(appPath, *jsonOutput)
+}
+
+// dumpFile prints a config file as written, comments included; it has already been validated.
+func (c CLI) dumpFile(path string, jsonOutput bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !jsonOutput {
+		_, err = c.Out.Write(data)
+		return err
+	}
+	var given map[string]any
+	if err := yaml.Unmarshal(data, &given); err != nil {
+		return err
+	}
+	return c.dump(given, true)
+}
+
+// dump prints a resolved value as 2-space YAML or indented JSON.
+func (c CLI) dump(value any, jsonOutput bool) error {
+	if jsonOutput {
+		data, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
 			return err
 		}
+		_, err = c.Out.Write(append(data, '\n'))
+		return err
 	}
-	return fmt.Errorf("unknown app %q", set.Arg(0))
+	encoder := yaml.NewEncoder(c.Out)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(value); err != nil {
+		return err
+	}
+	return encoder.Close()
 }
 
 func (c CLI) kill(cfg config.Config, jsonOutput bool) error {
@@ -344,6 +456,14 @@ func (c CLI) remote(command string, args []string) error {
 		}
 		if request.App, err = appArgument(opts.rest, opts.config); err != nil {
 			return fmt.Errorf("usage: dboss %s <app> (%w)", command, err)
+		}
+	case "maintenance":
+		if len(opts.rest) == 0 || len(opts.rest) > 2 || (opts.rest[len(opts.rest)-1] != "on" && opts.rest[len(opts.rest)-1] != "off") {
+			return errors.New("usage: dboss maintenance [app] on|off")
+		}
+		request.On = opts.rest[len(opts.rest)-1] == "on"
+		if request.App, err = appArgument(opts.rest[:len(opts.rest)-1], opts.config); err != nil {
+			return fmt.Errorf("usage: dboss maintenance <app> on|off (%w)", err)
 		}
 	case "logs":
 		var appArgs []string
@@ -433,7 +553,11 @@ func (c CLI) printHuman(method string, data any) error {
 			if !snapshot.LastActivity.IsZero() {
 				last = snapshot.LastActivity.Format(time.RFC3339)
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%d\n", snapshot.Name, snapshot.State, strings.Join(values, ","), snapshot.Uptime, last, snapshot.Resources.MemoryBytes)
+			state := string(snapshot.State)
+			if snapshot.Maintenance {
+				state += " maintenance"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%d\n", snapshot.Name, state, strings.Join(values, ","), snapshot.Uptime, last, snapshot.Resources.MemoryBytes)
 		}
 		return writer.Flush()
 	case "status":
@@ -465,10 +589,24 @@ func (c CLI) printHuman(method string, data any) error {
 		result := data.(map[string]any)
 		invalid, _ := result["invalid"].([]any)
 		fmt.Fprintf(c.Out, "rescan complete (%d invalid)\n", len(invalid))
+		for _, message := range invalid {
+			fmt.Fprintf(c.Out, "  %v\n", message)
+		}
+		if keys, _ := result["restart_required"].([]any); len(keys) > 0 {
+			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart dboss, or Ctrl-C and dboss start)\n", joinAny(keys))
+		}
 	default:
 		fmt.Fprintln(c.Out, "ok")
 	}
 	return nil
+}
+
+func joinAny(values []any) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = fmt.Sprint(value)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (c CLI) follow(client ctl.Client, request ctl.Request) error {

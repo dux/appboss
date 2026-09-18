@@ -7,10 +7,13 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"deploy-boss/internal/apps"
 	"deploy-boss/internal/config"
 	"deploy-boss/internal/reqlog"
 	"deploy-boss/internal/super"
@@ -27,25 +30,57 @@ type AppManager interface {
 	Start(string) error
 	Stop(string) error
 	Restart(string) error
+	SetMaintenance(string, bool) error
 	Rescan() ([]error, error)
+	RestartRequired() []string
 }
 
 type RateReader interface {
 	Rates(string) (reqlog.Rates, error)
 }
 
+// ConfigStore edits the config files dboss reads; apps.Store is the real one.
+type ConfigStore interface {
+	Files() ([]apps.ConfigFile, error)
+	Read(id string) (apps.ConfigFile, error)
+	Validate(id, contents string) error
+	Write(id, contents, revision string) (apps.ConfigFile, error)
+	CreateLocal(app string) (apps.ConfigFile, error)
+	Effective(app string) (string, error)
+}
+
 type Handler struct {
 	manager AppManager
 	rates   RateReader
+	store   ConfigStore
 	auth    *authenticator
 	static  fs.FS
 }
 
 type dashboard struct {
-	Viewer    string           `json:"viewer"`
-	CSRF      string           `json:"csrf"`
-	Apps      []super.Snapshot `json:"apps"`
-	UpdatedAt time.Time        `json:"updated_at"`
+	Viewer          string           `json:"viewer"`
+	CSRF            string           `json:"csrf"`
+	Apps            []super.Snapshot `json:"apps"`
+	RestartRequired []string         `json:"restart_required"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+type configEdit struct {
+	ID       string `json:"id"`
+	Contents string `json:"contents"`
+	Revision string `json:"revision,omitempty"`
+}
+
+type validateResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	Line  int    `json:"line,omitempty"`
+}
+
+type writeResponse struct {
+	File            apps.ConfigFile `json:"file"`
+	Invalid         []string        `json:"invalid"`
+	RestartRequired []string        `json:"restart_required"`
 }
 
 type actionRequest struct {
@@ -54,11 +89,12 @@ type actionRequest struct {
 }
 
 type rescanResponse struct {
-	Apps     []super.Snapshot `json:"apps"`
-	Warnings []string         `json:"warnings"`
+	Apps            []super.Snapshot `json:"apps"`
+	Warnings        []string         `json:"warnings"`
+	RestartRequired []string         `json:"restart_required"`
 }
 
-func New(cfg config.Config, manager AppManager, rates RateReader) (*Handler, error) {
+func New(cfg config.Config, manager AppManager, rates RateReader, store ConfigStore) (*Handler, error) {
 	auth, err := newAuthenticator(cfg)
 	if err != nil {
 		return nil, err
@@ -67,7 +103,7 @@ func New(cfg config.Config, manager AppManager, rates RateReader) (*Handler, err
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{manager: manager, rates: rates, auth: auth, static: static}, nil
+	return &Handler{manager: manager, rates: rates, store: store, auth: auth, static: static}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +136,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.rescan(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/logout":
 		h.logout(w, r, session)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config":
+		h.configFiles(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/file":
+		h.configFile(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/config/validate":
+		h.configValidate(w, r, session)
+	case r.Method == http.MethodPut && r.URL.Path == "/api/config/file":
+		h.configWrite(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/config/local":
+		h.configLocal(w, r, session)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/effective":
+		h.configEffective(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/reference":
+		writeText(w, config.Reference)
 	default:
 		http.NotFound(w, r)
 	}
@@ -117,7 +167,117 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, path, conte
 }
 
 func (h *Handler) writeDashboard(w http.ResponseWriter, session authSession) {
-	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.snapshots(), UpdatedAt: time.Now().UTC()})
+	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.snapshots(), RestartRequired: h.manager.RestartRequired(), UpdatedAt: time.Now().UTC()})
+}
+
+func (h *Handler) configFiles(w http.ResponseWriter) {
+	files, err := h.store.Files()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+}
+
+func (h *Handler) configFile(w http.ResponseWriter, r *http.Request) {
+	file, err := h.store.Read(r.URL.Query().Get("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, file)
+}
+
+func (h *Handler) configValidate(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var edit configEdit
+	if err := decodeJSON(w, r, &edit); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.store.Validate(edit.ID, edit.Contents); err != nil {
+		writeJSON(w, http.StatusOK, validateResponse{Error: err.Error(), Line: yamlLine(err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, validateResponse{OK: true})
+}
+
+// configWrite saves the file and rescans right away, so the response carries what the change
+// did: apps that became invalid and host keys that now wait for a restart.
+func (h *Handler) configWrite(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var edit configEdit
+	if err := decodeJSON(w, r, &edit); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, err := h.store.Write(edit.ID, edit.Contents, edit.Revision)
+	if errors.Is(err, apps.ErrConflict) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "file": file})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, validateResponse{Error: err.Error(), Line: yamlLine(err)})
+		return
+	}
+	invalid, err := h.manager.Rescan()
+	if err != nil {
+		writeError(w, http.StatusConflict, "saved, but rescan failed: "+err.Error())
+		return
+	}
+	messages := make([]string, 0, len(invalid))
+	for _, invalidApp := range invalid {
+		messages = append(messages, invalidApp.Error())
+	}
+	writeJSON(w, http.StatusOK, writeResponse{File: file, Invalid: messages, RestartRequired: h.manager.RestartRequired()})
+}
+
+func (h *Handler) configLocal(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		App string `json:"app"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, err := h.store.CreateLocal(strings.TrimSpace(request.App))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, file)
+}
+
+func (h *Handler) configEffective(w http.ResponseWriter, r *http.Request) {
+	contents, err := h.store.Effective(strings.TrimSpace(r.URL.Query().Get("app")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeText(w, contents)
+}
+
+var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
+
+// yamlLine finds the line an error points at so the editor can highlight it.
+func yamlLine(err error) int {
+	var cfgErr *config.Error
+	if errors.As(err, &cfgErr) && cfgErr.Line > 0 {
+		return cfgErr.Line
+	}
+	match := yamlLinePattern.FindStringSubmatch(err.Error())
+	if match == nil {
+		return 0
+	}
+	line, _ := strconv.Atoi(match[1])
+	return line
 }
 
 func (h *Handler) snapshots() []super.Snapshot {
@@ -157,8 +317,12 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 		err = h.manager.Stop(request.App)
 	case "restart":
 		err = h.manager.Restart(request.App)
+	case "maintenance-on":
+		err = h.manager.SetMaintenance(request.App, true)
+	case "maintenance-off":
+		err = h.manager.SetMaintenance(request.App, false)
 	default:
-		writeError(w, http.StatusBadRequest, "action must be start, stop, or restart")
+		writeError(w, http.StatusBadRequest, "action must be start, stop, restart, maintenance-on, or maintenance-off")
 		return
 	}
 	if err != nil {
@@ -181,7 +345,7 @@ func (h *Handler) rescan(w http.ResponseWriter, r *http.Request, session authSes
 	for _, invalidApp := range invalid {
 		warnings = append(warnings, invalidApp.Error())
 	}
-	writeJSON(w, http.StatusOK, rescanResponse{Apps: h.snapshots(), Warnings: warnings})
+	writeJSON(w, http.StatusOK, rescanResponse{Apps: h.snapshots(), Warnings: warnings, RestartRequired: h.manager.RestartRequired()})
 }
 
 func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +414,12 @@ func secureHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
+}
+
+func writeText(w http.ResponseWriter, contents string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, contents)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

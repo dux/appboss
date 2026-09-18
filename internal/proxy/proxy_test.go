@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"io"
 	"net"
@@ -34,7 +35,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nmax_body: 1k\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
 	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
 	cfg := config.Default()
@@ -71,19 +72,39 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	waitForProxyState(t, manager, super.Running)
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/hello?x=1", nil)
 	request.Host = "demo.test"
+	request.Header.Set("CF-Ray", "ray-123")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	body, _ := io.ReadAll(response.Result().Body)
-	if response.Code != http.StatusOK || string(body) != "hello from demo" {
+	if response.Code != http.StatusOK || string(body) != "hello from demo ray-123" {
 		t.Fatalf("unexpected proxy response: %d %s", response.Code, body)
+	}
+	if _, ok := response.Header()["X-Powered-By"]; ok || response.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("headers were not applied: %v", response.Header())
+	}
+	chunked := httptest.NewRequest(http.MethodPost, "http://demo.test/upload", struct{ io.Reader }{strings.NewReader(strings.Repeat("x", 4096))})
+	chunked.Host = "demo.test"
+	chunkedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(chunkedResponse, chunked)
+	if chunkedResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked body over max_body: %d %s", chunkedResponse.Code, chunkedResponse.Body.String())
 	}
 	time.Sleep(30 * time.Millisecond)
 	rates, err := requestLogs.Rates("demo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rates.LastMinute != 1 {
-		t.Fatalf("request was not logged: %+v", rates)
+	if rates.LastMinute != 3 {
+		t.Fatalf("requests were not logged: %+v", rates)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "requests.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var requestID string
+	if err := db.QueryRow(`SELECT request_id FROM requests WHERE path = '/hello?x=1'`).Scan(&requestID); err != nil || requestID != "ray-123" {
+		t.Fatalf("request id row = %q, %v", requestID, err)
 	}
 	assertUpgradePassthrough(t, handler)
 	if err := manager.Stop("demo"); err != nil {
@@ -129,7 +150,17 @@ func TestProxyHelperProcess(t *testing.T) {
 	if os.Getenv("BOSS_PROXY_HELPER") != "1" {
 		return
 	}
-	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "hello from demo") })
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Powered-By", "helper")
+		_, _ = io.WriteString(w, "hello from demo "+r.Header.Get("X-Request-ID"))
+	})
+	http.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(w, "uploaded")
+	})
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			http.Error(w, "upgrade required", http.StatusBadRequest)
@@ -174,6 +205,9 @@ func waitForProxyState(t *testing.T, manager *super.Manager, state super.State) 
 
 func writeProxyFixture(t *testing.T, path, contents string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(contents), 0o640); err != nil {
 		t.Fatal(err)
 	}

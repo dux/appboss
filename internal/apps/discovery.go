@@ -75,6 +75,26 @@ func Discover(cfg config.Config) ([]*App, []error, error) {
 	return resolveHosts(found, invalid)
 }
 
+// Lookup discovers every app and returns the one called name, or its scan error when it is
+// invalid, so the CLI and the console print the same thing for the same app.
+func Lookup(cfg config.Config, name string) (*App, error) {
+	found, invalid, err := Discover(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for _, scanErr := range invalid {
+		if scanError, ok := scanErr.(ScanError); ok && scanError.Name == name {
+			return nil, scanErr
+		}
+	}
+	for _, app := range found {
+		if app.Name == name {
+			return app, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown app %q", name)
+}
+
 func resolveHosts(found []*App, invalid []error) ([]*App, []error, error) {
 	owners := map[string]string{}
 	valid := found[:0]
@@ -82,10 +102,6 @@ func resolveHosts(found []*App, invalid []error) ([]*App, []error, error) {
 		conflict := ""
 		for _, host := range app.Config.Hosts {
 			normalized := strings.ToLower(strings.TrimSuffix(host, "."))
-			if !hostName.MatchString(normalized) {
-				conflict = fmt.Sprintf("invalid host pattern %q", host)
-				break
-			}
 			if owner := owners[normalized]; owner != "" {
 				conflict = fmt.Sprintf("host pattern %q is already owned by %s", host, owner)
 				break
@@ -136,7 +152,10 @@ func loadChildApp(cfg config.Config, name, dir string) (*App, error) {
 	return buildApp(name, dir, appCfg)
 }
 
-func buildApp(name, dir string, appCfg config.App) (*App, error) {
+// validateApp checks what the config loader cannot see on its own: the procfile parses, every
+// referenced process exists and host patterns are well formed. Host conflicts need the whole
+// fleet and stay in resolveHosts.
+func validateApp(appCfg config.App) (map[string]Command, error) {
 	commands, err := ParseProcfile(appCfg.Procfile)
 	if err != nil {
 		return nil, err
@@ -150,6 +169,19 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		if _, ok := commands[process]; !ok {
 			return nil, fmt.Errorf("processes.%s is not in procfile", process)
 		}
+	}
+	for _, host := range appCfg.Hosts {
+		if !hostName.MatchString(strings.ToLower(strings.TrimSuffix(host, "."))) {
+			return nil, fmt.Errorf("invalid host pattern %q", host)
+		}
+	}
+	return commands, nil
+}
+
+func buildApp(name, dir string, appCfg config.App) (*App, error) {
+	commands, err := validateApp(appCfg)
+	if err != nil {
+		return nil, err
 	}
 	env := minimalEnvironment()
 	if _, err := os.Stat(filepath.Join(dir, "mise.toml")); err == nil {

@@ -23,6 +23,7 @@ type Entry struct {
 	BytesOut   int64
 	IP         string
 	UserAgent  string
+	RequestID  string
 }
 
 type Rates struct {
@@ -92,6 +93,10 @@ func (m *Manager) get(app string, retention, flush time.Duration) (*writer, erro
 			return nil, err
 		}
 	}
+	if err := addColumn(db, "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	w := &writer{db: db, entries: make(chan Entry, 2048), stop: make(chan struct{}), done: make(chan struct{})}
 	w.retention.Store(int64(retention))
 	m.writers[app] = w
@@ -100,6 +105,33 @@ func (m *Manager) get(app string, retention, flush time.Duration) (*writer, erro
 	}
 	go w.loop(flush)
 	return w, nil
+}
+
+// addColumn is the whole migration story: databases created before a column existed get it on open.
+func addColumn(db *sql.DB, name, definition string) error {
+	rows, err := db.Query(`PRAGMA table_info(requests)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id, notNull, primaryKey int
+			column, columnType      string
+			defaultValue            sql.NullString
+		)
+		if err := rows.Scan(&id, &column, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if column == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE requests ADD COLUMN ` + name + ` ` + definition)
+	return err
 }
 
 func (m *Manager) Prune(ctx context.Context) error {
@@ -217,14 +249,14 @@ func (w *writer) insert(entries []Entry) {
 	if err != nil {
 		return
 	}
-	statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return
 	}
 	defer statement.Close()
 	for _, entry := range entries {
-		if _, err := statement.Exec(entry.Time.UTC().Format(time.RFC3339Nano), entry.Method, entry.Host, entry.Path, entry.Status, entry.DurationMS, entry.BytesOut, entry.IP, entry.UserAgent); err != nil {
+		if _, err := statement.Exec(entry.Time.UTC().Format(time.RFC3339Nano), entry.Method, entry.Host, entry.Path, entry.Status, entry.DurationMS, entry.BytesOut, entry.IP, entry.UserAgent, entry.RequestID); err != nil {
 			_ = tx.Rollback()
 			return
 		}
