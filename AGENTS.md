@@ -7,7 +7,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 
 * Build with `make build`; `~/bin/appboss` is a symlink to `./bin/appboss`, so a rebuild is what the shell runs.
 * Validate with `make check` (vet and tests). Add a test next to the package you change.
-* The demo host is `./demo/appboss.yaml`; run it with `make demo` or `appboss start` inside `./demo`. It listens on `127.0.0.1:8080`, so every hostname needs `:8080`.
+* The demo host is `./demo/appboss.yaml`; run it with `make demo` or `appboss start` inside `./demo`. It listens on `:80`, so every hostname is port 80 and the daemon needs root (`make demo` uses `sudo`).
 * Console static assets are embedded with `go:embed`. A CSS or component change needs a rebuild and a daemon restart to show up.
 * Do not add Docker, TLS, rate limiting or deploy logic. Cloudflare owns the edge, lux-deploy owns releases.
 * Config is real YAML on disk. Never introduce a database copy of the config.

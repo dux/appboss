@@ -1,11 +1,11 @@
 apps: ./apps
 
 proxy:
-  listen: 127.0.0.1:8080
+  listen: ":80"
 
 management:
   host: boss.lvh.me
-  url: http://boss.lvh.me:8080
+  url: http://boss.lvh.me
   auth:
     realm: auth.authcog.com
     admin_emails:

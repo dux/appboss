@@ -22,12 +22,12 @@ make build            # ./bin/appboss
 make demo             # builds, then runs the host session on ./demo/appboss.yaml
 ```
 
-The demo listens on `127.0.0.1:8080` and hosts two apps.
-Use the hostnames with the port; the bare hostnames refuse to connect.
+The demo listens on `:80` and hosts two apps.
+Binding port 80 needs root or `CAP_NET_BIND_SERVICE`, so `make demo` runs the daemon through `sudo`.
 
-* http://boss.lvh.me:8080 - management console
-* http://sinatra.lvh.me:8080 - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
-* http://bun.lvh.me:8080 - Bun app
+* http://boss.lvh.me - management console
+* http://sinatra.lvh.me - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
+* http://bun.lvh.me - Bun app
 
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
 `make kill` stops the demo apps and clears the port range after a crash.
@@ -45,7 +45,7 @@ Host file (`./demo/appboss.yaml`):
 apps: ./apps
 
 proxy:
-  listen: 127.0.0.1:8080
+  listen: ":80"
 
 management:
   host: boss.lvh.me
@@ -74,7 +74,7 @@ hosts:
 health: http:/up
 ```
 
-The proxy listens on `:80` by default and owns that port for every app; the demo sets `127.0.0.1:8080` so a hand-run session needs no capability.
+The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
 Every key that takes a list also accepts a single value, so `hosts: myapp.com` equals `hosts: [myapp.com]`.
 `proxy.listen` and `management.host` are such lists: several listen addresses each get a listener with the same routing, and several console hostnames are all accepted.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.

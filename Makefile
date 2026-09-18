@@ -28,11 +28,11 @@ check: vet test ## Run static checks and tests
 
 demo: build ## Run the local demo daemon
 	@printf '%s\n' \
-		'Management console: http://boss.lvh.me:8080 (also :3100)' \
+		'Management console: http://boss.lvh.me (also :3100)' \
 		'Apps:' \
-		'  http://sinatra.lvh.me:8080' \
-		'  http://bun.lvh.me:8080'
-	$(BINARY) start -c ./demo/appboss.yaml
+		'  http://sinatra.lvh.me' \
+		'  http://bun.lvh.me'
+	sudo $(BINARY) start -c ./demo/appboss.yaml
 
 demo-watch: build ## Rebuild and restart the demo on changes
 	$(WATCH) --restart --clear \
