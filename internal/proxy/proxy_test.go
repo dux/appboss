@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/ports"
-	"deploy-boss/internal/super"
+	"app-boss/internal/config"
+	"app-boss/internal/logstore"
+	"app-boss/internal/ports"
+	"app-boss/internal/super"
 )
 
 func TestClientIP(t *testing.T) {
@@ -42,7 +42,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "dboss.sock")
+	cfg.Socket = filepath.Join(root, "appboss.sock")
 	cfg.Ports.Range = [2]int{32200, 32220}
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
@@ -97,7 +97,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if rates.LastMinute != 3 {
 		t.Fatalf("requests were not logged: %+v", rates)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "dboss.sqlite"))
+	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "appboss.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}

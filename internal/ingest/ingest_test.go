@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/super"
+	"app-boss/internal/logstore"
+	"app-boss/internal/super"
 )
 
 func TestParseLineReadsJSONAndPlain(t *testing.T) {
@@ -199,7 +199,7 @@ func TestDaemonSinkBuffersLines(t *testing.T) {
 	if _, err := daemon.Write([]byte(" done\n")); err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.entries) != 2 || sink.entries[0].Source != "dboss" || sink.entries[1].Message != "partial done" {
+	if len(sink.entries) != 2 || sink.entries[0].Source != "appboss" || sink.entries[1].Message != "partial done" {
 		t.Fatalf("unexpected daemon entries: %+v", sink.entries)
 	}
 }

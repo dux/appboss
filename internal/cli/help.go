@@ -18,19 +18,19 @@ type command struct {
 
 type option struct{ flag, help string }
 
-var configOption = option{"-c, --config <path>", "config file (default: $DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml)"}
-var socketOption = option{"--socket <path>", "control socket (default: $DBOSS_SOCKET, the config's socket when it exists, then /run/dboss/dboss.sock)"}
+var configOption = option{"-c, --config <path>", "config file (default: $APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml)"}
+var socketOption = option{"--socket <path>", "control socket (default: $APPBOSS_SOCKET, the config's socket when it exists, then /run/appboss/appboss.sock)"}
 var jsonOption = option{"--json", "machine-readable output"}
 var appArgumentNote = "app defaults to the current folder's app when run inside one."
 
-// commands is the single source for `dboss`, `dboss help <command>` and `<command> --help`.
+// commands is the single source for `appboss`, `appboss help <command>` and `<command> --help`.
 var commands = []command{
 	{name: "start", args: "[-c path]", group: "Host session", summary: "run the host session in the foreground; Ctrl-C stops every app",
-		details: []string{"Loads the config, clears every listener in ports.range, starts the apps that were running before, then serves the proxy, the management console and the control socket.", "On a terminal every process's output is echoed with an app/proc prefix. Under systemd only dboss's own log reaches journald; app output stays in log_dir."},
+		details: []string{"Loads the config, clears every listener in ports.range, starts the apps that were running before, then serves the proxy, the management console and the control socket.", "On a terminal every process's output is echoed with an app/proc prefix. Under systemd only appboss's own log reaches journald; app output stays in log_dir."},
 		options: []option{configOption}},
 	{name: "systemd", args: "[-c path] [--user name] [--bin path] [--install]", group: "Host session", summary: "print the systemd unit for this config, or install and enable it",
-		details: []string{"The unit runs `dboss start -c <absolute config>` as the given user from the config directory with Restart=always and CAP_NET_BIND_SERVICE for port 80."},
-		options: []option{configOption, {"--user <name>", "service user (default: current user)"}, {"--bin <path>", "dboss binary (default: this executable)"}, {"--install", "write /etc/systemd/system/dboss.service, reload systemd and enable the service"}}},
+		details: []string{"The unit runs `appboss start -c <absolute config>` as the given user from the config directory with Restart=always and CAP_NET_BIND_SERVICE for port 80."},
+		options: []option{configOption, {"--user <name>", "service user (default: current user)"}, {"--bin <path>", "appboss binary (default: this executable)"}, {"--install", "write /etc/systemd/system/appboss.service, reload systemd and enable the service"}}},
 	{name: "kill", args: "[-c path]", group: "Host session", summary: "stop every app and terminate every listener left in ports.range",
 		details: []string{"Asks the running host to stop each app, then kills whatever still listens in the range. Use it to clean up after a crash or a stray process."},
 		options: []option{configOption, jsonOption}},
@@ -66,13 +66,13 @@ var commands = []command{
 	{name: "check", args: "[-c path]", group: "Config", summary: "validate the config and every app without starting anything",
 		details: []string{"Exits 1 and lists each invalid app when something is wrong. Good as a pre-deploy step."},
 		options: []option{configOption, jsonOption}},
-	{name: "rescan", args: "", group: "Config", summary: "re-read the apps directory, every dboss.yaml and the host defaults",
+	{name: "rescan", args: "", group: "Config", summary: "re-read the apps directory, every appboss.yaml and the host defaults",
 		details: []string{"App-level changes apply right away. Host keys that changed (proxy, ports, apps, ...) are listed as restart required."},
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "ports", args: "", group: "Config", summary: "show the live port table, one fixed port per app process",
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "password", args: "", group: "Config", summary: "print a bcrypt hash for basic_auth",
-		details: []string{"Prompts without echo on a terminal; reads one line from stdin otherwise, so `printf secret | dboss password` works in scripts."}},
+		details: []string{"Prompts without echo on a terminal; reads one line from stdin otherwise, so `printf secret | appboss password` works in scripts."}},
 }
 
 func findCommand(name string) *command {
@@ -97,8 +97,8 @@ func wantsHelp(args []string) bool {
 // usage prints the overview: every command grouped, then the shared options.
 func (c CLI) usage(out io.Writer) {
 	style := newStyle(out)
-	fmt.Fprintf(out, "%s runs, proxies and supervises the apps on one host.\n\n", style.bold("dboss"))
-	fmt.Fprintf(out, "%s\n  dboss <command> [options]\n  dboss help <command>\n\n", style.heading("Usage"))
+	fmt.Fprintf(out, "%s runs, proxies and supervises the apps on one host.\n\n", style.bold("appboss"))
+	fmt.Fprintf(out, "%s\n  appboss <command> [options]\n  appboss help <command>\n\n", style.heading("Usage"))
 	var group string
 	width := 0
 	for _, cmd := range commands {
@@ -117,16 +117,16 @@ func (c CLI) usage(out io.Writer) {
 	fmt.Fprintf(out, "\n%s\n", style.heading("Options"))
 	writeOptions(out, style, []option{configOption, socketOption, jsonOption})
 	fmt.Fprintf(out, "\nRemote commands talk to the running host over its control socket.\n")
-	fmt.Fprintf(out, "Run %s for details on one command.\n", style.command("dboss help <command>"))
+	fmt.Fprintf(out, "Run %s for details on one command.\n", style.command("appboss help <command>"))
 }
 
 func (c CLI) help(out io.Writer, name string) error {
 	cmd := findCommand(name)
 	if cmd == nil {
-		return fmt.Errorf("unknown command %q (run dboss help)", name)
+		return fmt.Errorf("unknown command %q (run appboss help)", name)
 	}
 	style := newStyle(out)
-	fmt.Fprintf(out, "%s\n  dboss %s %s\n\n", style.heading("Usage"), style.command(cmd.name), cmd.args)
+	fmt.Fprintf(out, "%s\n  appboss %s %s\n\n", style.heading("Usage"), style.command(cmd.name), cmd.args)
 	fmt.Fprintf(out, "%s.\n", strings.ToUpper(cmd.summary[:1])+cmd.summary[1:])
 	for _, line := range cmd.details {
 		fmt.Fprintf(out, "\n%s\n", wrap(line, 96))

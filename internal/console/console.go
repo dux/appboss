@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"deploy-boss/internal/apps"
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/ops"
-	"deploy-boss/internal/super"
+	"app-boss/internal/apps"
+	"app-boss/internal/config"
+	"app-boss/internal/logstore"
+	"app-boss/internal/ops"
+	"app-boss/internal/super"
 )
 
 const maxRequestBody = 1 << 20
@@ -28,7 +28,7 @@ const maxRequestBody = 1 << 20
 //go:embed static/*
 var assets embed.FS
 
-// ConfigStore edits the config files dboss reads; apps.Store is the real one.
+// ConfigStore edits the config files appboss reads; apps.Store is the real one.
 type ConfigStore interface {
 	Files() ([]apps.ConfigFile, error)
 	Read(id string) (apps.ConfigFile, error)
@@ -90,7 +90,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore) (*Handler, 
 	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0])}, nil
 }
 
-// LoginURL mints a one-time link for `dboss login`. It points at the console's loopback
+// LoginURL mints a one-time link for `appboss login`. It points at the console's loopback
 // listener, so it works without DNS and, through an SSH tunnel, from another machine.
 func (h *Handler) LoginURL() (string, error) {
 	token, err := h.auth.issueCLIToken()
@@ -130,12 +130,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeLogs(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/assets/"):
 		h.serveAsset(w, r, strings.TrimPrefix(r.URL.Path, "/assets/"))
+	case r.Method == http.MethodGet && r.URL.Path == "/favicon.ico":
+		h.serveFavicon(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/bootstrap":
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
 		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/log/channels":
 		h.logChannels(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/log/tree":
+		h.logTree(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/log/search":
 		h.logSearch(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/action":
@@ -182,6 +186,19 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, name string
 		contentType = "text/plain; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// serveFavicon answers the browser's default /favicon.ico request with the SVG mark, so no
+// request escapes to a 404 before the <link rel="icon"> is read.
+func (h *Handler) serveFavicon(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(h.static, "favicon.svg")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -394,6 +411,15 @@ func (h *Handler) logChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"channels": channels, "updated_at": time.Now().UTC()})
 }
 
+func (h *Handler) logTree(w http.ResponseWriter, r *http.Request) {
+	apps, err := h.service.LogTree()
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"apps": apps, "updated_at": time.Now().UTC()})
+}
+
 // logSearch answers one viewer query. The request channel reads the requests table, every other
 // channel reads the log rows, so the UI can treat them as one list.
 func (h *Handler) logSearch(w http.ResponseWriter, r *http.Request) {
@@ -524,7 +550,7 @@ func secureHeaders(w http.ResponseWriter) {
 	// Fez compiles components with new Function, wires template handlers as inline on* attributes
 	// and injects scoped CSS as <style> nodes, so script and style need the unsafe-* sources.
 	// Every origin other than the console itself stays blocked.
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'none'; object-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")

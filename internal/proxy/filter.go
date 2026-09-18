@@ -3,7 +3,7 @@ package proxy
 import (
 	"net/http"
 
-	"deploy-boss/internal/super"
+	"app-boss/internal/super"
 )
 
 // Filter is one stage of the request pipeline. It either answers the request itself or calls

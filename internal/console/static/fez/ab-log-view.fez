@@ -16,28 +16,26 @@
       this.state.method = ''
       this.state.status = ''
       this.state.query = ''
-      this.state.live = !this.state.page
-      this.state.apps = []
-      this.state.channels = []
+      this.state.tree = []
+      this.state.open = {}
       this.state.rows = []
       this.state.kind = 'log'
       this.state.loaded = false
       this.state.busy = false
       this.state.error = ''
-      this.state.updated = ''
       this.state.before = ''
-      this.state.older = false
-      this.state.expanded = -1
+      this.state.expandedKey = ''
       this.state.queryNode = null
       this.state.queryTimer = 0
       if (this.state.page) {
-        const params = new URLSearchParams(location.search)
-        this.state.app = params.get('app') || this.state.app
-        this.state.channel = params.get('channel') || this.state.channel
-        this.state.range = params.get('range') || this.state.range
-        this.state.level = params.get('level') || ''
-        this.state.query = params.get('q') || ''
-        this.state.live = params.get('live') !== '0'
+        this.state.app = Pjax.qs('app') || this.state.app
+        this.state.channel = Pjax.qs('channel') || this.state.channel
+        this.state.range = Pjax.qs('range') || this.state.range
+        this.state.level = Pjax.qs('level') || ''
+        this.state.method = Pjax.qs('method') || ''
+        this.state.status = Pjax.qs('status') || ''
+        this.state.process = Pjax.qs('process') || ''
+        this.state.query = Pjax.qs('q') || ''
       }
     }
 
@@ -50,42 +48,86 @@
       clearTimeout(this.state.queryTimer)
     }
 
-    async ready() {
-      if (!(this.globalState.apps || []).length) {
-        try {
-          const data = await Boss.api('/api/apps')
-          this.globalState.apps = data.apps || []
-        } catch (error) {
-          this.state.error = error.message
-        }
-      }
-      this.applyApps()
-      await this.reload()
-      this.setInterval(() => this.tick(), 2000)
+    // Process and search inputs are fez:keep-style fields: typing must not fight a re-render.
+    afterRender() {
+      this.syncValue(this.state.rangeNode, this.state.range)
+      this.syncValue(this.state.levelNode, this.state.level)
+      this.syncValue(this.state.methodNode, this.state.method)
+      this.syncValue(this.state.statusNode, this.state.status)
+      this.syncValue(this.state.processNode, this.state.process)
+      this.syncValue(this.state.queryNode, this.state.query)
     }
 
-    applyApps() {
-      const names = (this.globalState.apps || []).map((app) => app.name)
-      this.state.apps = names
-      if (!this.state.app && names.length) this.state.app = names[0]
+    syncValue(node, value) {
+      if (node && node !== document.activeElement && node.value !== value) node.value = value
+    }
+
+    async ready() {
+      await this.reload()
     }
 
     async reload() {
-      await this.loadChannels()
+      await this.loadTree()
       await this.load()
     }
 
-    async loadChannels() {
-      if (!this.state.app) return
+    async loadTree() {
       try {
-        const data = await Boss.api(`/api/log/channels?app=${encodeURIComponent(this.state.app)}`)
-        this.state.channels = data.channels || []
-        if (!this.state.channels.some((channel) => channel.id === this.state.channel)) {
-          this.state.channel = this.state.channels.length ? this.state.channels[0].id : 'stdout'
+        const data = await Boss.api('/api/log/tree')
+        this.state.tree = data.apps || []
+        const names = this.state.tree.map((group) => group.name)
+        if (!this.state.app && names.length) this.state.app = names[0]
+        const group = this.state.tree.find((entry) => entry.name === this.state.app)
+        const ids = (group?.channels || []).map((channel) => channel.id)
+        if (ids.length && !ids.includes(this.state.channel)) this.state.channel = ids[0]
+        if (this.state.app && !this.state.open[this.state.app]) {
+          this.state.open = { ...this.state.open, [this.state.app]: true }
         }
+        this.state.error = ''
       } catch (error) {
         this.state.error = error.message
       }
+    }
+
+    bytes(value) {
+      let amount = Number(value || 0)
+      if (amount < 1024) return `${amount} B`
+      const units = ['KB', 'MB', 'GB', 'TB']
+      let unit = units[0]
+      amount /= 1024
+      for (let index = 1; amount >= 1024 && index < units.length; index += 1) {
+        amount /= 1024
+        unit = units[index]
+      }
+      return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`
+    }
+
+    appLabel(name) {
+      return name === '_appboss' ? 'Host (appboss)' : name
+    }
+
+    toggleApp(index) {
+      const group = this.state.tree[index]
+      if (!group) return
+      const open = { ...this.state.open }
+      open[group.name] = !open[group.name]
+      this.state.open = open
+    }
+
+    pickLog(appIndex, channelIndex) {
+      const group = this.state.tree[appIndex]
+      const channel = group?.channels?.[channelIndex]
+      if (!group || !channel) return
+      if (!this.state.open[group.name]) this.state.open = { ...this.state.open, [group.name]: true }
+      if (this.state.app === group.name && this.state.channel === channel.id) return
+      this.state.app = group.name
+      this.state.channel = channel.id
+      this.state.process = ''
+      this.state.level = ''
+      this.state.method = ''
+      this.state.status = ''
+      this.state.expandedKey = ''
+      this.load()
     }
 
     rangeMs() {
@@ -117,17 +159,15 @@
           this.state.rows = [...this.state.rows, ...rows]
         } else {
           this.state.rows = rows
-          this.state.expanded = -1
         }
         this.state.kind = data.kind
         this.state.loaded = true
         this.state.error = ''
-        this.state.updated = new Date().toLocaleTimeString()
-        this.syncUrl()
       } catch (error) {
         this.state.error = error.message
       } finally {
         this.state.busy = false
+        if (this.state.page) this.syncUrl()
       }
     }
 
@@ -140,34 +180,8 @@
 
     loadOlder() {
       if (!this.state.rows.length) return
-      this.state.live = false
       this.state.before = this.state.rows[this.state.rows.length - 1].time
       this.load({ append: true })
-    }
-
-    tick() {
-      if (this.state.live && !document.hidden) this.load()
-    }
-
-    toggleLive() {
-      this.state.live = !this.state.live
-      if (this.state.live) this.load()
-    }
-
-    async pickApp(value) {
-      this.state.app = value
-      this.state.process = ''
-      this.state.expanded = -1
-      await this.reload()
-    }
-
-    pickChannel(value) {
-      this.state.channel = value
-      this.state.process = ''
-      this.state.level = ''
-      this.state.method = ''
-      this.state.status = ''
-      this.load()
     }
 
     pickRange(value) {
@@ -224,8 +238,15 @@
       this.load()
     }
 
+    rowKey(row) {
+      return `${row.time}|${row.source || row.method || ''}|${row.process || row.path || ''}|${row.message || row.status || ''}`
+    }
+
     expand(index) {
-      this.state.expanded = this.state.expanded === index ? -1 : index
+      const row = this.state.rows[index]
+      if (!row) return
+      const key = this.rowKey(row)
+      this.state.expandedKey = this.state.expandedKey === key ? '' : key
     }
 
     copyRow(index) {
@@ -266,12 +287,19 @@
     }
 
     syncUrl() {
-      if (!this.state.page) return
-      const params = new URLSearchParams({ app: this.state.app, channel: this.state.channel, range: this.state.range })
-      if (this.state.query) params.set('q', this.state.query)
-      if (this.state.level) params.set('level', this.state.level)
-      if (!this.state.live) params.set('live', '0')
-      history.replaceState(null, '', `${location.pathname}?${params}`)
+      this.setQs('app', this.state.app)
+      this.setQs('channel', this.state.channel)
+      this.setQs('range', this.state.range === '1h' ? '' : this.state.range)
+      this.setQs('level', this.state.level)
+      this.setQs('process', this.state.process)
+      this.setQs('method', this.state.method)
+      this.setQs('status', this.state.status)
+      this.setQs('q', this.state.query)
+    }
+
+    setQs(key, value) {
+      if ((Pjax.qs(key) || '') === (value || '')) return
+      Pjax.qs(key, value || null, { replace: true })
     }
 
     shortcut(event) {
@@ -283,51 +311,61 @@
       if (event.key === '/') {
         event.preventDefault()
         this.state.queryNode?.focus()
-      } else if (event.key === 'l') {
-        this.toggleLive()
       } else if (event.key === 'r') {
         this.load()
       } else if (event.key === 'Escape') {
-        this.state.expanded = -1
+        this.state.expandedKey = ''
       }
     }
   }
 </script>
 
 <section class="log-view" class:log-view-page={state.page}>
+  <nav class="log-nav" aria-label="Apps">
+    {#each state.tree as group, appIndex}
+      <div class="log-nav-group">
+        <button class="log-nav-app" class:open={state.open[group.name]} class:current={group.name === state.app} type="button" aria-expanded={state.open[group.name] ? 'true' : 'false'} onclick="fez.toggleApp({appIndex})">
+          <span class="log-nav-chevron" aria-hidden="true"></span>
+          <span class="log-nav-name">{appLabel(group.name)}</span>
+          <span class="log-nav-size">{bytes(group.bytes)}</span>
+        </button>
+        <div class="log-nav-fold" class:open={state.open[group.name]}>
+          <div class="log-nav-logs">
+            {#each group.channels as channel, channelIndex}
+              <button class="log-nav-log" class:active={group.name === state.app && channel.id === state.channel} type="button" onclick="fez.pickLog({appIndex},{channelIndex})">
+                {channel.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {:else}
+      <p class="log-nav-empty text-muted">Loading...</p>
+    {/each}
+  </nav>
+  <div class="log-main">
   <div class="log-toolbar">
     <div class="log-toolbar-row">
-      <select class="log-control" aria-label="App" onchange="fez.pickApp(this.value)">
-        {#each state.apps as name}
-          <option value={name} selected={name === state.app}>{name}</option>
-        {/each}
-        <option value="_dboss" selected={state.app === '_dboss'}>Host (dboss)</option>
-      </select>
-      <select class="log-control log-channel" aria-label="Log type" onchange="fez.pickChannel(this.value)">
-        {#each state.channels as channel}
-          <option value={channel.id} selected={channel.id === state.channel}>{channel.label}</option>
-        {/each}
-      </select>
-      <select class="log-control" aria-label="Time range" onchange="fez.pickRange(this.value)">
+      <select class="log-control" fez:this="rangeNode" aria-label="Time range" onchange="fez.pickRange(this.value)">
         {#each [['5m', 'Last 5 min'], ['15m', 'Last 15 min'], ['1h', 'Last hour'], ['6h', 'Last 6 hours'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['all', 'All time']] as option}
           <option value={option[0]} selected={option[0] === state.range}>{option[1]}</option>
         {/each}
       </select>
       {#if state.channel === 'request'}
-        <select class="log-control" aria-label="Method" onchange="fez.pickMethod(this.value)">
+        <select class="log-control" fez:this="methodNode" aria-label="Method" onchange="fez.pickMethod(this.value)">
           <option value="">Any method</option>
           {#each ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as method}
             <option value={method} selected={method === state.method}>{method}</option>
           {/each}
         </select>
-        <select class="log-control" aria-label="Status" onchange="fez.pickStatus(this.value)">
+        <select class="log-control" fez:this="statusNode" aria-label="Status" onchange="fez.pickStatus(this.value)">
           <option value="">Any status</option>
           {#each ['2xx', '3xx', '4xx', '5xx'] as status}
             <option value={status} selected={status === state.status}>{status}</option>
           {/each}
         </select>
       {:else}
-        <select class="log-control" aria-label="Level" onchange="fez.pickLevel(this.value)">
+        <select class="log-control" fez:this="levelNode" aria-label="Level" onchange="fez.pickLevel(this.value)">
           <option value="">All levels</option>
           {#each ['fatal', 'error', 'warn', 'info', 'debug'] as level}
             <option value={level} selected={level === state.level}>{level}</option>
@@ -341,19 +379,10 @@
         <input fez:this="queryNode" placeholder="Search (prefix match)" oninput="fez.queueSearch()" onkeydown="fez.searchKey(event)">
       </label>
       {#if state.channel === 'stdout'}
-        <input class="log-control log-process-input" placeholder="Process" onchange="fez.pickProcess(this.value)" onkeydown="fez.pickProcessKey(event)">
+        <input class="log-control log-process-input" fez:this="processNode" placeholder="Process" onchange="fez.pickProcess(this.value)" onkeydown="fez.pickProcessKey(event)">
       {/if}
       <button class="btn btn-sm" type="button" onclick="fez.clearFilters()">Clear</button>
       <span class="log-spacer"></span>
-      <button class="btn btn-sm" class:btn-primary={state.live} type="button" onclick="fez.toggleLive()" title="Toggle live tail (l)">
-        {#if state.live}
-          <svg class="icon"><use href="#i-pause"></use></svg>
-          Live
-        {:else}
-          <svg class="icon"><use href="#i-play"></use></svg>
-          Paused
-        {/if}
-      </button>
       <button class="btn btn-sm" type="button" onclick="fez.load()" title="Refresh (r)">
         <svg class="icon"><use href="#i-refresh"></use></svg>
         Refresh
@@ -393,7 +422,7 @@
       </thead>
       <tbody>
         {#each state.rows as row, index}
-          <tr class="log-row" class:log-row-open={state.expanded === index} onclick="fez.expand({index})">
+          <tr class="log-row" class:log-row-open={state.expandedKey === rowKey(row)} onclick="fez.expand({index})">
             {#if state.kind === 'request'}
               <td class="log-time">{row.timeLabel}</td>
               <td class="log-method">{row.method}</td>
@@ -409,7 +438,7 @@
               <td class="log-message">{@html highlight(row.message)}</td>
             {/if}
           </tr>
-          {#if state.expanded === index}
+          {#if state.expandedKey === rowKey(row)}
             <tr class="log-detail-row">
               <td colspan="7">
                 <div class="log-detail-head">
@@ -432,11 +461,9 @@
   <div class="log-footer">
     <button class="btn btn-sm" type="button" onclick="fez.loadOlder()" disabled={!state.rows.length || state.busy}>Load older</button>
     <span class="text-muted">{state.rows.length} rows</span>
-    {#if state.updated}
-      <span class="text-muted">Updated {state.updated}</span>
-    {/if}
     {#if state.busy}
       <span class="spinner" aria-hidden="true"></span>
     {/if}
+  </div>
   </div>
 </section>

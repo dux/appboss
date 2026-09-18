@@ -61,7 +61,7 @@
       </div>
     </div>
     {#if state.mode === 'keys'}
-      <db-config-keys />
+      <ab-config-keys />
     {:else}
       <pre>{state.text}</pre>
     {/if}

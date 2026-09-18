@@ -272,7 +272,7 @@
     <div>
       <strong>Restart required.</strong>
       {globalState.restartRequired.join(', ')} changed in the host file and only {globalState.restartRequired.length === 1 ? 'applies' : 'apply'} on the next start.
-      Run <code>systemctl restart dboss</code>, or Ctrl-C the terminal session and run <code>dboss start</code> again.
+      Run <code>systemctl restart appboss</code>, or Ctrl-C the terminal session and run <code>appboss start</code> again.
     </div>
   </div>
 {/if}

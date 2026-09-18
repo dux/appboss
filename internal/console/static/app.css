@@ -533,10 +533,9 @@ code {
 
 .datagrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px 24px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 16px 12px;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
 }
 
 .datagrid-item {
@@ -551,43 +550,6 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-}
-
-.table {
-  width: 100%;
-  margin: 0;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.table th {
-  padding: 8px 20px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-align: left;
-  text-transform: uppercase;
-}
-
-.table td {
-  padding: 9px 20px;
-  border-top: 1px solid var(--border-soft);
-  font-variant-numeric: tabular-nums;
-}
-
-.table td.mono {
-  font-family: var(--mono);
-}
-
-.table th.num,
-.table td.num {
-  text-align: right;
-}
-
-.table tr > :first-child {
-  font-weight: 500;
 }
 
 .alert {
@@ -903,7 +865,7 @@ code {
   line-height: 20px;
 }
 
-.drawer .fez-db-config-keys {
+.drawer .fez-ab-config-keys {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -1121,7 +1083,7 @@ code {
   background: var(--bg);
 }
 
-.log-page > .fez-db-log-shell {
+.log-page > .fez-ab-log-shell {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -1130,15 +1092,15 @@ code {
 
 .log-page .log-navbar { flex: 0 0 auto; }
 
-.log-page .fez-db-log-view {
+.log-page .fez-ab-log-view {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
 }
 
 .log-view {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1146,9 +1108,125 @@ code {
   box-shadow: var(--shadow);
 }
 
+.view .log-view {
+  min-height: 560px;
+}
+
 .log-view-page {
   flex: 1 1 auto;
   margin: 12px;
+  min-height: 0;
+}
+
+.log-nav {
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.log-nav-empty {
+  margin: 12px 8px;
+  font-size: 13px;
+}
+
+.log-nav-app {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+}
+
+.log-nav-app:hover {
+  background: rgb(4 32 69 / 5%);
+}
+
+.log-nav-app.current .log-nav-name {
+  color: var(--primary);
+}
+
+.log-nav-chevron {
+  width: 0;
+  height: 0;
+  flex: 0 0 auto;
+  border: 4px solid transparent;
+  border-left-color: var(--muted);
+  transition: transform 120ms ease-out;
+}
+
+.log-nav-app.open .log-nav-chevron {
+  transform: rotate(90deg);
+}
+
+.log-nav-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-nav-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-nav-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 120ms ease-out;
+}
+
+.log-nav-fold.open {
+  grid-template-rows: 1fr;
+}
+
+.log-nav-logs {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.log-nav-log {
+  display: block;
+  width: 100%;
+  padding: 6px 10px 6px 28px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  overflow: hidden;
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.log-nav-log:hover {
+  background: rgb(4 32 69 / 5%);
+}
+
+.log-nav-log.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  font-weight: 600;
+}
+
+.log-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -1179,8 +1257,6 @@ code {
 }
 
 select.log-control { max-width: 220px; }
-
-.log-channel { font-weight: 600; }
 
 .log-process-input { max-width: 160px; }
 
@@ -1338,8 +1414,11 @@ select.log-control { max-width: 220px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .page-actions { justify-content: flex-start; }
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .datagrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .config-editor { grid-template-columns: 1fr; }
   .list-group { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); }
+  .log-view { grid-template-columns: 1fr; }
+  .log-nav { border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; }
 }
 
 @media (max-width: 560px) {
@@ -1348,7 +1427,6 @@ select.log-control { max-width: 220px; }
   .stat-row { grid-template-columns: 1fr; }
   .datagrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-actions { width: 100%; margin-left: 0; }
-  .table th.num:nth-child(3), .table td.num:nth-child(3) { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

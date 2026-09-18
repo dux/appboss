@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/super"
+	"app-boss/internal/logstore"
+	"app-boss/internal/super"
 )
 
 type fakeRuntime struct {

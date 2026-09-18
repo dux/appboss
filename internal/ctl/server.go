@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"deploy-boss/internal/ops"
+	"app-boss/internal/ops"
 )
 
 type Server struct {

@@ -1,8 +1,8 @@
 GO ?= go
 WATCH ?= watchexec
 BIN_DIR := ./bin
-BINARY := $(BIN_DIR)/dboss
-CMD := ./cmd/dboss
+BINARY := $(BIN_DIR)/appboss
+CMD := ./cmd/appboss
 
 .DEFAULT_GOAL := help
 
@@ -11,7 +11,7 @@ CMD := ./cmd/dboss
 help: ## List available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build dboss into ./bin/dboss
+build: ## Build appboss into ./bin/appboss
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BINARY) $(CMD)
 
@@ -32,7 +32,7 @@ demo: build ## Run the local demo daemon
 		'Apps:' \
 		'  http://sinatra.lvh.me:8080' \
 		'  http://bun.lvh.me:8080'
-	$(BINARY) start -c ./demo/dboss.yaml
+	$(BINARY) start -c ./demo/appboss.yaml
 
 demo-watch: build ## Rebuild and restart the demo on changes
 	$(WATCH) --restart --clear \
@@ -42,11 +42,11 @@ demo-watch: build ## Rebuild and restart the demo on changes
 		--watch ./web \
 		--watch ./go.mod \
 		--watch ./go.sum \
-		--ignore './demo/.dboss/**' \
+		--ignore './demo/.appboss/**' \
 		-- $(MAKE) demo
 
 kill: build ## Kill all demo apps and listeners in the app port range
-	$(BINARY) kill -c ./demo/dboss.yaml
+	$(BINARY) kill -c ./demo/appboss.yaml
 
 clean: ## Remove generated binaries
 	rm -rf $(BIN_DIR)

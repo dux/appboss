@@ -9,25 +9,25 @@ import (
 	"os/user"
 	"path/filepath"
 
-	"deploy-boss/internal/config"
+	"app-boss/internal/config"
 )
 
-const unitPath = "/etc/systemd/system/dboss.service"
+const unitPath = "/etc/systemd/system/appboss.service"
 
-// systemd renders the unit that runs `dboss start` for the resolved config, and with --install
+// systemd renders the unit that runs `appboss start` for the resolved config, and with --install
 // writes it in place and enables it. The unit is generated so the paths always match this box.
 func (c CLI) systemd(args []string) error {
 	set := flag.NewFlagSet("systemd", flag.ContinueOnError)
 	set.SetOutput(c.Err)
 	configPath := configFlag(set)
 	userName := set.String("user", "", "service user (default: current user)")
-	binary := set.String("bin", "", "dboss binary (default: this executable)")
+	binary := set.String("bin", "", "appboss binary (default: this executable)")
 	install := set.Bool("install", false, "write "+unitPath+", reload systemd and enable the service")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: dboss systemd [-c path] [--user name] [--bin path] [--install]")
+		return errors.New("usage: appboss systemd [-c path] [--user name] [--bin path] [--install]")
 	}
 	path, err := findConfig(*configPath)
 	if err != nil {
@@ -61,20 +61,20 @@ func (c CLI) systemd(args []string) error {
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return err
 	}
-	for _, command := range [][]string{{"systemctl", "daemon-reload"}, {"systemctl", "enable", "--now", "dboss"}} {
+	for _, command := range [][]string{{"systemctl", "daemon-reload"}, {"systemctl", "enable", "--now", "appboss"}} {
 		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Stdout, cmd.Stderr = c.Out, c.Err
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s: %w", command, err)
 		}
 	}
-	fmt.Fprintf(c.Out, "installed %s and enabled dboss\n", unitPath)
+	fmt.Fprintf(c.Out, "installed %s and enabled appboss\n", unitPath)
 	return nil
 }
 
 func renderUnit(cfg config.Config, userName, binary string) string {
 	return fmt.Sprintf(`[Unit]
-Description=dboss host %s
+Description=appboss host %s
 After=network.target
 
 [Service]
@@ -85,7 +85,7 @@ WorkingDirectory=%s
 ExecStart=%s start -c %s
 Restart=always
 RestartSec=2
-RuntimeDirectory=dboss
+RuntimeDirectory=appboss
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 PrivateTmp=true

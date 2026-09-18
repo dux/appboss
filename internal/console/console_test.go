@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"deploy-boss/internal/apps"
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/ops"
-	"deploy-boss/internal/super"
+	"app-boss/internal/apps"
+	"app-boss/internal/config"
+	"app-boss/internal/logstore"
+	"app-boss/internal/ops"
+	"app-boss/internal/super"
 )
 
 type fakeManager struct {
@@ -85,8 +85,8 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{files: map[string]*apps.ConfigFile{
-		"host":        {ID: "host", Path: "/srv/dboss.yaml", Source: "dboss.yaml", Contents: "apps: ./apps\n"},
-		"app:sinatra": {ID: "app:sinatra", App: "sinatra", Path: "/srv/apps/sinatra/dboss.yaml", Source: "dboss.yaml", Contents: "procfile:\n  web: ./server\n"},
+		"host":        {ID: "host", Path: "/srv/appboss.yaml", Source: "appboss.yaml", Contents: "apps: ./apps\n"},
+		"app:sinatra": {ID: "app:sinatra", App: "sinatra", Path: "/srv/apps/sinatra/appboss.yaml", Source: "appboss.yaml", Contents: "procfile:\n  web: ./server\n"},
 	}, invalid: map[string]string{}}
 }
 
@@ -142,7 +142,7 @@ func (s *fakeStore) CreateLocal(app string) (apps.ConfigFile, error) {
 	if file == nil || file.HasLocal {
 		return apps.ConfigFile{}, errors.New("cannot create override")
 	}
-	file.HasLocal, file.Source, file.Path = true, "dboss.local.yaml", "/srv/apps/sinatra/dboss.local.yaml"
+	file.HasLocal, file.Source, file.Path = true, "appboss.local.yaml", "/srv/apps/sinatra/appboss.local.yaml"
 	return s.Read("app:" + app)
 }
 
@@ -174,6 +174,18 @@ func (fakeLogs) SearchRequests(string, logstore.RequestFilter) ([]logstore.Reque
 
 func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
 	return []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}}, nil
+}
+
+func (fakeLogs) Tree([]string) ([]logstore.AppTree, error) {
+	return []logstore.AppTree{{
+		Name:     "sinatra",
+		Bytes:    4096,
+		Channels: []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}},
+	}, {
+		Name:     logstore.HostApp,
+		Bytes:    1024,
+		Channels: []logstore.Channel{{ID: "appboss", Label: "appboss"}},
+	}}, nil
 }
 
 func TestConsoleBootstrapAndActions(t *testing.T) {
@@ -208,6 +220,21 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	}
 }
 
+func TestConsoleServesFavicon(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, _ := sessionCookie(t, handler)
+	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/favicon.ico", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(response.Body.String(), "<svg") {
+		t.Fatalf("unexpected favicon: %d %s", response.Code, response.Header().Get("Content-Type"))
+	}
+	if csp := response.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self'") {
+		t.Fatalf("favicon needs img-src 'self': %s", csp)
+	}
+}
+
 func TestConsoleServesLogViewerPageAndTextExport(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
@@ -215,7 +242,7 @@ func TestConsoleServesLogViewerPageAndTextExport(t *testing.T) {
 	page.AddCookie(cookie)
 	pageResponse := httptest.NewRecorder()
 	handler.ServeHTTP(pageResponse, page)
-	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "db-log-view") {
+	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "ab-log-view") {
 		t.Fatalf("unexpected viewer page: %d %s", pageResponse.Code, pageResponse.Body.String())
 	}
 
@@ -268,7 +295,7 @@ func TestConsoleServesAuthenticatedRoot(t *testing.T) {
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Deploy Boss") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "App Boss") {
 		t.Fatalf("unexpected root response: %d %s", response.Code, response.Body.String())
 	}
 }
@@ -288,6 +315,10 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	channels := call(t, handler, cookie, session, http.MethodGet, "/api/log/channels?app=sinatra", "")
 	if channels.Code != http.StatusOK || !strings.Contains(channels.Body.String(), `"id":"file:production.log"`) {
 		t.Fatalf("unexpected channels: %d %s", channels.Code, channels.Body.String())
+	}
+	tree := call(t, handler, cookie, session, http.MethodGet, "/api/log/tree", "")
+	if tree.Code != http.StatusOK || !strings.Contains(tree.Body.String(), `"name":"sinatra"`) || !strings.Contains(tree.Body.String(), `"bytes":4096`) || !strings.Contains(tree.Body.String(), `"id":"file:production.log"`) {
+		t.Fatalf("unexpected tree: %d %s", tree.Code, tree.Body.String())
 	}
 	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/log/search", "")
 	if missingApp.Code != http.StatusBadRequest {
@@ -346,7 +377,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 	manager := &fakeManager{warnings: []error{errors.New("bun: procfile.web command is empty")}}
 	handler := newTestHandler(t, manager, nil)
 	store := handler.store.(*fakeStore)
-	store.invalid["broken"] = "decode dboss.yaml: yaml: line 3: mapping values are not allowed in this context"
+	store.invalid["broken"] = "decode appboss.yaml: yaml: line 3: mapping values are not allowed in this context"
 	cookie, session := sessionCookie(t, handler)
 
 	list := call(t, handler, cookie, session, http.MethodGet, "/api/config", "")
@@ -377,7 +408,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 	}
 
 	local := call(t, handler, cookie, session, http.MethodPost, "/api/config/local", `{"app":"sinatra"}`)
-	if local.Code != http.StatusOK || !strings.Contains(local.Body.String(), `"source":"dboss.local.yaml"`) {
+	if local.Code != http.StatusOK || !strings.Contains(local.Body.String(), `"source":"appboss.local.yaml"`) {
 		t.Fatalf("unexpected override: %d %s", local.Code, local.Body.String())
 	}
 	effective := call(t, handler, cookie, session, http.MethodGet, "/api/config/effective?app=sinatra", "")

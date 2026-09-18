@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/ports"
+	"app-boss/internal/config"
+	"app-boss/internal/ports"
 )
 
 func TestHostMatch(t *testing.T) {
@@ -223,7 +223,7 @@ func TestPortsFollowAppNameOrder(t *testing.T) {
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "dboss.sock")
+	cfg.Socket = filepath.Join(root, "appboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
@@ -293,7 +293,7 @@ func supervisorTestConfig(t *testing.T, portRange [2]int) config.Config {
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "dboss.sock")
+	cfg.Socket = filepath.Join(root, "appboss.sock")
 	cfg.Ports.Range = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)

@@ -118,30 +118,28 @@
       <span class="subheader">Requests / hour</span>
       <span class="datagrid-content">{number(props.app.request_rates?.last_hour)}</span>
     </div>
+    {#each state.processes as process}
+      <div class="datagrid-item">
+        <span class="subheader">Process</span>
+        <span class="datagrid-content">{process.name}</span>
+      </div>
+      <div class="datagrid-item">
+        <span class="subheader">Port</span>
+        <span class="datagrid-content">{process.port || '-'}</span>
+      </div>
+      <div class="datagrid-item">
+        <span class="subheader">PID</span>
+        <span class="datagrid-content">{process.pid || '-'}</span>
+      </div>
+      <div class="datagrid-item">
+        <span class="subheader">Restarts</span>
+        <span class="datagrid-content">{process.restarts || 0}</span>
+      </div>
+    {:else}
+      <div class="datagrid-item">
+        <span class="subheader">Process</span>
+        <span class="datagrid-content text-muted">No active processes</span>
+      </div>
+    {/each}
   </div>
-
-  <table class="table">
-    <thead>
-      <tr>
-        <th>Process</th>
-        <th class="num">Port</th>
-        <th class="num">PID</th>
-        <th class="num">Restarts</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each state.processes as process}
-        <tr>
-          <td>{process.name}</td>
-          <td class="num mono">{process.port || '-'}</td>
-          <td class="num mono">{process.pid || '-'}</td>
-          <td class="num">{process.restarts || 0}</td>
-        </tr>
-      {:else}
-        <tr>
-          <td colspan="4" class="text-muted">No active processes</td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
 </article>

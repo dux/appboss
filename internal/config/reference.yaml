@@ -1,15 +1,15 @@
-# deploy-boss configuration reference
+# app-boss configuration reference
 #
 # One file name, two roles:
-#   1. <host>/dboss.yaml            host config with `apps` (this document, part 1)
-#   2. <app>/dboss.yaml             app config with `procfile` (part 2)
+#   1. <host>/appboss.yaml            host config with `apps` (this document, part 1)
+#   2. <app>/appboss.yaml             app config with `procfile` (part 2)
 #   3. state files under state_dir  written by boss, never hand-edited (part 3)
 #
 # A file that has `procfile` is an app; a file that has `apps` is a host. Never both.
-# An app file may also carry host keys so `dboss start` inside the app folder runs it
+# An app file may also carry host keys so `appboss start` inside the app folder runs it
 # standalone (single mode); the same file under a host must not, or the app is invalid.
-# Whenever a folder is resolved to its config, dboss.local.yaml is used when it exists,
-# dboss.yaml otherwise. The local file is server-only and gitignored.
+# Whenever a folder is resolved to its config, appboss.local.yaml is used when it exists,
+# appboss.yaml otherwise. The local file is server-only and gitignored.
 #
 # Rules that apply everywhere:
 #   - Durations are Go duration strings: 30s, 20m, 6h, 72h. No days suffix; use 72h.
@@ -18,22 +18,22 @@
 #   - Every key that takes a list also accepts a single value: `hosts: myapp.com` is
 #     `hosts: [myapp.com]`.
 #   - Unknown keys are an error at load time, not a warning. Typos must not pass silently.
-#   - Per-app values in an app's dboss.yaml override global defaults.* one key at a time.
+#   - Per-app values in an app's appboss.yaml override global defaults.* one key at a time.
 #     Process keys can be overridden once more under processes.<name>; web keys cannot.
 #   - App-level changes (defaults.* and app files) apply on rescan without a restart. Changing
 #     apps, state_dir, log_dir, socket, proxy, management, ports or daemon needs a restart;
 #     rescan and the console report which keys are waiting.
 #   - Env vars in values are NOT expanded. Config is literal.
 #
-# Load order at `dboss start`:
-#   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in
-#   single mode) -> per app: dboss.local.yaml or dboss.yaml, .env, .env.local
+# Load order at `appboss start`:
+#   root appboss.yaml -> validate -> walk the apps directory (or use the root file itself in
+#   single mode) -> per app: appboss.local.yaml or appboss.yaml, .env, .env.local
 #   -> validate each app (an invalid app is reported and skipped, it does not stop the session)
 #   -> terminate listeners in ports.range -> assign one fixed port per (app, proctype)
 #   -> start apps that were running before -> listen.
 
 # =============================================================================
-# PART 1: <host>/dboss.yaml
+# PART 1: <host>/appboss.yaml
 # =============================================================================
 ---
 # --- Paths -------------------------------------------------------------------
@@ -46,21 +46,21 @@ apps: ./apps
 
 # Session-owned runtime state. Contains process state and the console signing key.
 # Must be writable by the service user. Created on first run.
-state_dir: ./.dboss/state
+state_dir: ./.appboss/state
 
 # Process logs and request logs. Contains <app>/<proctype>.log and <app>/requests.sqlite.
-log_dir: ./.dboss/log
+log_dir: ./.appboss/log
 
 # Unix socket for the control API. The CLI talks here. In production set it to
-# /run/dboss/dboss.sock: that is where `dboss restart` run inside an app folder looks when
-# the folder's own socket does not exist, and the generated unit creates /run/dboss.
-socket: ./.dboss/dboss.sock
+# /run/appboss/appboss.sock: that is where `appboss restart` run inside an app folder looks when
+# the folder's own socket does not exist, and the generated unit creates /run/appboss.
+socket: ./.appboss/appboss.sock
 
 # --- Proxy -------------------------------------------------------------------
 
 proxy:
   # The public listener, one address or a list; every address gets its own listener
-  # with the same routing. dboss owns port 80 and routes every request to an app;
+  # with the same routing. appboss owns port 80 and routes every request to an app;
   # Cloudflare proxies straight to it. The systemd unit grants CAP_NET_BIND_SERVICE,
   # so no root is needed. For a hand-run session on Linux use a high port such as
   # 127.0.0.1:8080. The management console is served on the same listener,
@@ -144,7 +144,7 @@ management:
 
 ports:
   # Inclusive range boss hands out. This range belongs exclusively to boss:
-  # daemon startup and `dboss kill` terminate every listener in it before apps
+  # daemon startup and `appboss kill` terminate every listener in it before apps
   # start, and every spawn kills whatever still holds its port. This requires
   # `lsof`. The first port belongs to the management console, reserved whether
   # or not the console is enabled. After it one fixed port is assigned per
@@ -153,7 +153,7 @@ ports:
   range: [3100, 3990]
 
 # --- Per-app defaults --------------------------------------------------------
-# Every key here can be overridden per app in the app's dboss.yaml with the same name.
+# Every key here can be overridden per app in the app's appboss.yaml with the same name.
 
 defaults:
   # Stop the whole app after this long without a proxied HTTP request.
@@ -173,7 +173,7 @@ defaults:
   stop_timeout: 20s
   stop_signal: TERM         # TERM | INT | QUIT | USR1 | USR2
 
-  # Restart policy when a process exits on its own (not via dboss stop).
+  # Restart policy when a process exits on its own (not via appboss stop).
   #   on-failure   restart only when exit code != 0 or killed by signal
   #   always       restart on any exit
   #   never        leave it stopped, mark app crashed if it was the web process
@@ -188,15 +188,15 @@ defaults:
   # Process log files (stdout+stderr of each proctype).
   log_max_size: 10m         # rotate when the file exceeds this
   log_keep: 5               # rotated files kept per proctype
-  log_tail_lines: 500       # lines kept in memory for `dboss logs` without -f
+  log_tail_lines: 500       # lines kept in memory for `appboss logs` without -f
 
   # Log store (SQLite written by the proxy and the ingestion module).
   # Every app database holds the REQUEST rows from the proxy and the STDOUT rows from the
-  # process log segments; dboss also tails every *.log file under the app's ./log directory.
+  # process log segments; appboss also tails every *.log file under the app's ./log directory.
   # Requests and app log files are pruned after log_retention, process stdout after
   # stdout_retention. 0 disables the matching channels for the app.
   log_retention: 336h       # 14 days for request rows and app log files
-  stdout_retention: 3h      # process stdout and the dboss daemon log
+  stdout_retention: 3h      # process stdout and the appboss daemon log
   log_flush: 1s             # batch insert interval
 
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
@@ -234,7 +234,7 @@ defaults:
   # read; chunked bodies are capped and answer 413 when they overflow.
   max_body: 0
 
-  # HTTP basic auth: user -> bcrypt hash, generated with `dboss password`. Empty = open.
+  # HTTP basic auth: user -> bcrypt hash, generated with `appboss password`. Empty = open.
   # Set globally on a staging box to protect every app with one line. Applies to static files too.
   basic_auth: {}
   #   alice: "$2a$10$..."
@@ -251,7 +251,7 @@ defaults:
   #   X-Frame-Options: DENY
   #   X-Powered-By: ""
 
-  # File served while the app is in maintenance mode (`dboss maintenance <app> on`), relative
+  # File served while the app is in maintenance mode (`appboss maintenance <app> on`), relative
   # to the app folder. Default: <static>/503.html when it exists, then the built-in page.
   # HTML GETs get the page with 503 and Retry-After: 30; everything else an empty 503.
   maintenance_page: ""
@@ -266,19 +266,19 @@ daemon:
   resume_running: true
   # Daily prune of logs and request rows older than log_retention, at this local time.
   prune_at: "04:10"
-  # dboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
+  # appboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
   log_level: info           # debug | info | warn | error
   # How often each running process's log segment is sealed and ingested into the per-app
   # log store. A sealed segment stays on disk until its rows are committed.
   log_ingest_interval: 5s
 
 # =============================================================================
-# PART 2: <app>/dboss.yaml   (required, per app)
+# PART 2: <app>/appboss.yaml   (required, per app)
 # =============================================================================
 ---
 # Only keys listed here are allowed under a host. Anything under defaults.* in the host config
 # can be repeated here with the same name to override it for this app. When this file is the
-# one `dboss start` runs directly (single mode), part 1 keys are allowed as well.
+# one `appboss start` runs directly (single mode), part 1 keys are allowed as well.
 
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
@@ -329,7 +329,7 @@ headers:
 # from ports.range and injects it as PORT into that process's environment,
 # always, for every procfile entry. There is no pin, no override, no opt-out.
 # An app that ignores PORT and binds its own port will not be reachable
-# through the proxy. Read the allocation with `dboss ports`.
+# through the proxy. Read the allocation with `appboss ports`.
 
 # Per-proctype overrides. Process keys only (health, stop, restart, logs, shell, env,
 # resources); a web key here is an error. Useful for a worker that needs a longer
@@ -346,10 +346,10 @@ processes:
 #     cron-style processes that never listen. Not configurable. A PORT set in
 #     .env or .env.local is overwritten and a warning is logged.
 #   - Env available to every command, in priority order (highest first):
-#       PORT, APP_NAME, PROC_TYPE, DBOSS_SOCKET    injected by boss, always win
+#       PORT, APP_NAME, PROC_TYPE, APPBOSS_SOCKET    injected by boss, always win
 #       .env.local                                server-only overrides
 #       .env                                      committed defaults
-#       defaults.env / dboss.yaml env             boss config
+#       defaults.env / appboss.yaml env             boss config
 #       mise env (PATH and tool vars)             when mise.toml exists
 #       daemon's own environment                  minimal: HOME, LANG, TZ
 #
@@ -375,7 +375,7 @@ running.json:
   - myapp-staging
 
 # state_dir/maintenance.json
-# Apps currently in maintenance mode. Updated by `dboss maintenance`; survives a restart.
+# Apps currently in maintenance mode. Updated by `appboss maintenance`; survives a restart.
 #
 # state_dir/<app>/<proctype>.pid
 # One line: the pid of the running child. Removed when the process exits.
@@ -392,25 +392,25 @@ running.json:
 # CLI lookup rules
 # =============================================================================
 #
-#   Config, every command:   -c path, then $DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml.
-#   Socket, remote commands: --socket, then $DBOSS_SOCKET, then the socket of the config found
-#                            above if that file exists on disk, then /run/dboss/dboss.sock.
+#   Config, every command:   -c path, then $APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml.
+#   Socket, remote commands: --socket, then $APPBOSS_SOCKET, then the socket of the config found
+#                            above if that file exists on disk, then /run/appboss/appboss.sock.
 #   App, remote commands:    the argument, or inside an app folder that folder's app.
 #
-#   dboss start [-c path]                      foreground host session
-#   dboss systemd [-c path] [--user u] [--bin p] [--install]
-#   dboss kill [-c path]                       stop every app and clear ports.range
-#   dboss maintenance [app] on|off             answer with the maintenance page, app keeps running
-#   dboss password                             print a bcrypt hash for basic_auth
-#   DBOSS_SOCKET is injected into app processes, so a process can always find its host.
+#   appboss start [-c path]                      foreground host session
+#   appboss systemd [-c path] [--user u] [--bin p] [--install]
+#   appboss kill [-c path]                       stop every app and clear ports.range
+#   appboss maintenance [app] on|off             answer with the maintenance page, app keeps running
+#   appboss password                             print a bcrypt hash for basic_auth
+#   APPBOSS_SOCKET is injected into app processes, so a process can always find its host.
 #
-# `dboss config` validates the host file and prints it as written, comments included.
-# `dboss config <app>` does the same for that app's file.
-# `dboss config -d` / `--defaults` prints the resolved config with every default filled in.
-# `dboss config --reference` prints this document.
+# `appboss config` validates the host file and prints it as written, comments included.
+# `appboss config <app>` does the same for that app's file.
+# `appboss config -d` / `--defaults` prints the resolved config with every default filled in.
+# `appboss config --reference` prints this document.
 # Errors name the file, line and key: an unknown key suggests the closest valid one.
-# `dboss check` validates the config and every app without starting anything.
+# `appboss check` validates the config and every app without starting anything.
 #
-# The management console edits these same files: the host file and, per app, the file dboss
-# reads for that folder (dboss.local.yaml when it exists). "Create server override" copies
-# dboss.yaml to dboss.local.yaml so edits made on the box survive the next deploy.
+# The management console edits these same files: the host file and, per app, the file appboss
+# reads for that folder (appboss.local.yaml when it exists). "Create server override" copies
+# appboss.yaml to appboss.local.yaml so edits made on the box survive the next deploy.

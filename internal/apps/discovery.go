@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"deploy-boss/internal/config"
+	"app-boss/internal/config"
 )
 
 var processName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)

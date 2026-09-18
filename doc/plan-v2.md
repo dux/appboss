@@ -1,4 +1,4 @@
-# deploy-boss v2: proxy features, global-or-per-app config, console config editor
+# app-boss v2: proxy features, global-or-per-app config, console config editor
 
 ## Context
 
@@ -6,12 +6,12 @@ v1 runs apps, allocates ports, proxies by host, wakes idle apps and logs request
 Everything nginx or Caddy did in front of a Rails or Bun app is still missing: static files, canonical host redirects, maintenance pages, body limits, basic auth for staging, response headers.
 Cloudflare owns TLS, HTTP/2 and 3, compression, caching, WAF and rate limiting, so those stay out.
 
-v2 adds the missing proxy features, makes every app-level key settable once for all apps or per app, and adds a configuration editor to the management console that edits the real `dboss.yaml` files on disk.
+v2 adds the missing proxy features, makes every app-level key settable once for all apps or per app, and adds a configuration editor to the management console that edits the real `appboss.yaml` files on disk.
 
 Three rules carry through the whole plan:
 
 * One config surface.
-  Every per-app key lives under `defaults:` in the host file and can be repeated at the top level of an app's `dboss.yaml`.
+  Every per-app key lives under `defaults:` in the host file and can be repeated at the top level of an app's `appboss.yaml`.
   The app value wins, key by key.
 * Real files.
   The console edits the same YAML files the CLI reads; there is no database copy of the config.
@@ -73,7 +73,7 @@ func apply(target any, overrides any)
 
 ### 1.3 Effective config and live reload
 
-* `config.Effective(app)` returns the fully resolved app config; `dboss config <app>` already prints this, the console reuses it.
+* `config.Effective(app)` returns the fully resolved app config; `appboss config <app>` already prints this, the console reuses it.
 * `Manager.Rescan` currently reloads only `Apps` and `App` from the root file.
   It also reloads `Defaults`, so a change to a global default reaches every app on the next rescan.
   A running app picks up the new spec through the existing `requestUpdate` path; process keys apply on the next process start, web keys apply immediately because the proxy reads them from the snapshot.
@@ -83,7 +83,7 @@ func apply(target any, overrides any)
 ### 1.4 Snapshot carries what the proxy needs
 
 `super.Snapshot` gains `Dir string`, `Web config.Web` and `Maintenance bool`.
-`Web.BasicAuth` is `json:"-"` so hashes never reach the console or `dboss status --json`.
+`Web.BasicAuth` is `json:"-"` so hashes never reach the console or `appboss status --json`.
 The proxy takes everything per request from `ResolveHost`, so a rescan changes behaviour without any proxy state.
 
 ## Part 2: proxy features
@@ -115,19 +115,19 @@ Each step is one small function with its own test in `proxy_test.go`.
   New dependency `golang.org/x/crypto/bcrypt`.
 * `401` with `WWW-Authenticate: Basic realm="<app>"` when missing or wrong.
   Comparison is bcrypt's own constant-time compare; user lookup is a map hit, which is fine because the user list is not secret.
-* `dboss password` reads a password from the terminal without echo and prints the hash, so nobody has to find an `htpasswd`.
+* `appboss password` reads a password from the terminal without echo and prints the hash, so nobody has to find an `htpasswd`.
 * Protects static files too, since it runs before the static step.
 
 ### 2.4 Maintenance mode
 
 Runtime state, not config: the app keeps running, only the proxy answers differently.
 
-* `dboss maintenance <app> on|off`, wire method `maintenance` in `./internal/ctl`.
+* `appboss maintenance <app> on|off`, wire method `maintenance` in `./internal/ctl`.
   `[app]` defaults to the folder's app like the other commands.
 * Persisted in `state_dir/maintenance.json` so it survives a host restart, mirroring `running.json`.
 * Proxy serves `503` with `Retry-After: 30` and the maintenance page for HTML `GET`s, empty `503` otherwise.
   Page lookup: `maintenance_page` if set, then `<static>/503.html`, then the embedded `web/maintenance.html`.
-* `dboss ls` shows `maintenance` in the STATE column; the console card gets a toggle next to start and stop.
+* `appboss ls` shows `maintenance` in the STATE column; the console card gets a toggle next to start and stop.
 
 ### 2.5 Static files
 
@@ -155,7 +155,7 @@ Runtime state, not config: the app keeps running, only the proxy answers differe
 
 * `X-Request-ID` is set to `CF-Ray` when present, else 16 random bytes hex, and forwarded to the app.
 * `reqlog` gains a `request_id` column, added with `ALTER TABLE` on open when missing.
-  `dboss status` output is unchanged; the console request table (Part 3) shows it.
+  `appboss status` output is unchanged; the console request table (Part 3) shows it.
 
 ### 2.9 Deferred
 
@@ -167,16 +167,16 @@ It doubles the host table and there is no app that needs it.
 ### 3.1 What is editable
 
 Everything.
-The editor lists one entry per file dboss actually reads:
+The editor lists one entry per file appboss actually reads:
 
-* `Host` - the root file `dboss start` was pointed at.
-* one entry per app - the file `config.FindInDir` picks for that folder, so `dboss.local.yaml` when it exists, else `dboss.yaml`.
+* `Host` - the root file `appboss start` was pointed at.
+* one entry per app - the file `config.FindInDir` picks for that folder, so `appboss.local.yaml` when it exists, else `appboss.yaml`.
 
 In single mode there is exactly one entry because the host file is the app file.
 
-On a production box the committed `dboss.yaml` is overwritten by the next deploy.
-The app entry therefore shows which file is active and offers **Create server override** when only `dboss.yaml` exists.
-That copies `dboss.yaml` to `dboss.local.yaml` and switches the editor to it, so edits made on the server live in the file that survives deploys.
+On a production box the committed `appboss.yaml` is overwritten by the next deploy.
+The app entry therefore shows which file is active and offers **Create server override** when only `appboss.yaml` exists.
+That copies `appboss.yaml` to `appboss.local.yaml` and switches the editor to it, so edits made on the server live in the file that survives deploys.
 
 ### 3.2 Store
 
@@ -187,7 +187,7 @@ type ConfigFile struct {
     ID       string // "host" or "app:<name>"
     App      string
     Path     string // absolute
-    Source   string // dboss.yaml or dboss.local.yaml
+    Source   string // appboss.yaml or appboss.local.yaml
     Contents string
     Revision string // sha256 of Contents
     HasLocal bool   // app entries only
@@ -233,24 +233,24 @@ A **Configuration** section below the fleet in `index.html`, built in the existi
   No third-party editor; the files are short and the console has no build step.
 * Toolbar: **Validate**, **Save**, **Effective config** (opens the resolved YAML for the selected app read-only), **Reference** (opens the annotated reference in a drawer), **Create server override** when applicable.
 * Errors from validate or save show under the editor with the line highlighted when the YAML error carries one.
-* After save: toast with the rescan result; a banner lists restart-required keys with the exact command to run (`systemctl restart dboss` or Ctrl-C in the terminal).
+* After save: toast with the rescan result; a banner lists restart-required keys with the exact command to run (`systemctl restart appboss` or Ctrl-C in the terminal).
 * A conflict answer reloads the file from disk into a second panel so the operator can copy their change over.
 
 ### 3.5 Reference
 
 `doc/plan-config.yaml` moves to `internal/config/reference.yaml` and is embedded.
-`dboss config --reference` prints it and the console serves it in the drawer, so the documentation ships in the binary and can never drift from the release.
+`appboss config --reference` prints it and the console serves it in the drawer, so the documentation ships in the binary and can never drift from the release.
 `doc/plan.md` links to it.
 
 ## Part 4: CLI additions
 
 ```
-dboss maintenance [app] on|off
-dboss password                 print a bcrypt hash for basic_auth
-dboss config --reference       print the annotated config reference
+appboss maintenance [app] on|off
+appboss password                 print a bcrypt hash for basic_auth
+appboss config --reference       print the annotated config reference
 ```
 
-`dboss config <app>` keeps printing the effective config and is what the console's effective view calls.
+`appboss config <app>` keeps printing the effective config and is what the console's effective view calls.
 
 ## Part 5: order of work
 
@@ -258,7 +258,7 @@ Each step leaves `make check` green and the demo working.
 
 1. Config model: `Process` and `Web` groups, `Overrides` with `apply`, field-set test, `config.Parse`, rescan reloads defaults, `RestartRequired`.
 2. Snapshot fields `Dir`, `Web`, `Maintenance`; proxy steps 2.1, 2.2, 2.7, 2.6 (no new deps).
-3. Basic auth and `dboss password` (adds `x/crypto`).
+3. Basic auth and `appboss password` (adds `x/crypto`).
 4. Static files with the demo sinatra app gaining a `public/` folder and `static: ./public`.
 5. Maintenance mode end to end: state, ctl, CLI, proxy, console toggle, built-in page.
 6. Request id column in `reqlog`.
@@ -271,10 +271,10 @@ Each step leaves `make check` green and the demo working.
 * `make check` after every step.
 * Demo host (`make demo`) with sinatra given `public/robots.txt`, `public/assets/app.css`, `canonical_host: sinatra.lvh.me` and a second host `www.sinatra.lvh.me`:
   * `curl -H 'Host: www.sinatra.lvh.me'` answers `301` to `https://sinatra.lvh.me/`.
-  * `curl -H 'Host: sinatra.lvh.me' /assets/app.css` answers `200` with the immutable cache header while `dboss ls` still shows sinatra stopped.
-  * `dboss maintenance sinatra on` makes `/` answer `503` with the page and `dboss ls` show `maintenance`; `off` restores it.
-  * `basic_auth` set globally in `demo/dboss.yaml`: `/` answers `401`, then `200` with `-u`.
+  * `curl -H 'Host: sinatra.lvh.me' /assets/app.css` answers `200` with the immutable cache header while `appboss ls` still shows sinatra stopped.
+  * `appboss maintenance sinatra on` makes `/` answer `503` with the page and `appboss ls` show `maintenance`; `off` restores it.
+  * `basic_auth` set globally in `demo/appboss.yaml`: `/` answers `401`, then `200` with `-u`.
   * `allow_ips: [10.0.0.0/8]` with `CF-Connecting-IP: 10.1.1.1` passes and `203.0.113.1` gets `403`.
   * a `Content-Length` above `max_body` answers `413`.
-* Console at `http://boss.lvh.me:8080`: edit `demo/apps/bun/dboss.yaml` to add a host, save, see the rescan toast and the new host on the card; edit `demo/dboss.yaml` `defaults.idle_stop`, save, see it in the effective view; change `proxy.listen`, save, see the restart-required banner; save with a stale revision from a second tab and get the conflict panel; create a server override for sinatra and confirm `dboss.local.yaml` exists and is the active file.
+* Console at `http://boss.lvh.me:8080`: edit `demo/apps/bun/appboss.yaml` to add a host, save, see the rescan toast and the new host on the card; edit `demo/appboss.yaml` `defaults.idle_stop`, save, see it in the effective view; change `proxy.listen`, save, see the restart-required banner; save with a stale revision from a second tab and get the conflict panel; create a server override for sinatra and confirm `appboss.local.yaml` exists and is the active file.
 * `curl` a request with `CF-Ray: abc` and confirm the row in `requests.sqlite` carries it.

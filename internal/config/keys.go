@@ -59,11 +59,11 @@ var keyDocs = map[string]keyDoc{
 	"management.auth.realm":                  {description: "AuthCog realm used for sign-in"},
 	"management.auth.admin_emails":           {description: "email addresses allowed into the console", example: "[admin@example.com]"},
 	"management.auth.session_ttl":            {description: "signed console session lifetime"},
-	"ports.range":                            {description: "inclusive port range dboss owns; the first port is the console"},
+	"ports.range":                            {description: "inclusive port range appboss owns; the first port is the console"},
 	"daemon.idle_tick":                       {description: "how often idle apps are checked"},
 	"daemon.resume_running":                  {description: "on start, resume the apps in running.json (every app on a first start)"},
 	"daemon.prune_at":                        {description: "local time of the daily request-log prune"},
-	"daemon.log_level":                       {description: "dboss's own log level: debug, info, warn, error"},
+	"daemon.log_level":                       {description: "appboss's own log level: debug, info, warn, error"},
 	"daemon.log_ingest_interval":             {description: "how often process log segments are sealed and ingested into the log store"},
 
 	"procfile":       {description: "process commands by name; names match [a-z][a-z0-9_-]*", example: "{web: bundle exec puma -C config/puma.rb}"},
@@ -84,9 +84,9 @@ var keyDocs = map[string]keyDoc{
 	"restart_backoff":  {description: "delay between restarts: first delay, multiplier, cap"},
 	"log_max_size":     {description: "rotate a process log file above this size"},
 	"log_keep":         {description: "rotated log files kept per process"},
-	"log_tail_lines":   {description: "lines kept in memory for dboss logs"},
+	"log_tail_lines":   {description: "lines kept in memory for appboss logs"},
 	"log_retention":    {description: "how long request rows and app log files are kept; 0 disables both"},
-	"stdout_retention": {description: "how long process stdout and the dboss daemon log are kept; 0 disables both"},
+	"stdout_retention": {description: "how long process stdout and the appboss daemon log are kept; 0 disables both"},
 	"log_flush":        {description: "request log batch insert interval"},
 	"shell":            {description: "run commands through sh -c instead of exec"},
 	"env":              {description: "extra environment for every process, lowest priority", example: "{RAILS_ENV: production}"},
@@ -96,7 +96,7 @@ var keyDocs = map[string]keyDoc{
 	"static":           {description: "directory served straight from disk for GET and HEAD, relative to the app", example: "./public"},
 	"static_immutable": {description: "path prefixes under static cached as immutable for a year"},
 	"max_body":         {description: "request body limit; 0 none"},
-	"basic_auth":       {description: "HTTP basic auth users to bcrypt hashes from dboss password", example: "{alice: \"$2a$10$...\"}"},
+	"basic_auth":       {description: "HTTP basic auth users to bcrypt hashes from appboss password", example: "{alice: \"$2a$10$...\"}"},
 	"allow_ips":        {description: "CIDRs allowed to reach the app; empty allows everyone", example: "[10.0.0.0/8]"},
 	"headers":          {description: "response headers added to every response; an empty value removes one", example: "{X-Frame-Options: DENY}"},
 	"maintenance_page": {description: "file served in maintenance mode, relative to the app", example: "./public/503.html"},
@@ -208,7 +208,7 @@ func typeName(t reflect.Type) string {
 	return t.Kind().String()
 }
 
-// formatValue renders a default the way it is written in dboss.yaml. Empty strings, lists
+// formatValue renders a default the way it is written in appboss.yaml. Empty strings, lists
 // and maps render as "" so the caller falls back to the example.
 func formatValue(value reflect.Value) string {
 	switch v := value.Interface().(type) {

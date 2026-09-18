@@ -1,4 +1,4 @@
-module deploy-boss
+module app-boss
 
 go 1.25.0
 

@@ -1,7 +1,7 @@
 <script>
   const GROUPS = [
-    { id: 'host', title: 'Host keys', note: 'dboss.yaml with apps:' },
-    { id: 'app', title: 'App keys', note: 'dboss.yaml with procfile:' },
+    { id: 'host', title: 'Host keys', note: 'appboss.yaml with apps:' },
+    { id: 'app', title: 'App keys', note: 'appboss.yaml with procfile:' },
     { id: 'shared', title: 'Shared app keys', note: 'defaults: in the host file, top level in an app file' },
   ]
 

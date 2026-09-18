@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-boss/internal/config"
+	"app-boss/internal/config"
 )
 
 func storeFixture(t *testing.T) (*Store, string) {

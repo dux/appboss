@@ -152,9 +152,9 @@
 
 <header class="navbar">
   <div class="container navbar-inner">
-    <a class="brand" href="/" aria-label="Deploy Boss home">
+    <a class="brand" href="/" aria-label="App Boss home">
       <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-terminal"></use></svg></span>
-      <span class="brand-name">Deploy Boss</span>
+      <span class="brand-name">App Boss</span>
     </a>
     <div class="navbar-user">
       <span class="avatar" aria-hidden="true">{initials()}</span>
@@ -183,13 +183,13 @@
 <main class="page-body">
   <div class="container">
     <section class="view" class:d-none={state.view !== 'overview'}>
-      <db-overview />
+      <ab-overview />
     </section>
     <section class="view" class:d-none={state.view !== 'logs'}>
-      <db-logs />
+      <ab-logs />
     </section>
     <section class="view" class:d-none={state.view !== 'config'}>
-      <db-config />
+      <ab-config />
     </section>
   </div>
 </main>

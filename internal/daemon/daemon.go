@@ -17,17 +17,17 @@ import (
 	"syscall"
 	"time"
 
-	"deploy-boss/internal/apps"
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/console"
-	"deploy-boss/internal/ctl"
-	"deploy-boss/internal/ingest"
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/module"
-	"deploy-boss/internal/ops"
-	"deploy-boss/internal/ports"
-	"deploy-boss/internal/proxy"
-	"deploy-boss/internal/super"
+	"app-boss/internal/apps"
+	"app-boss/internal/config"
+	"app-boss/internal/console"
+	"app-boss/internal/ctl"
+	"app-boss/internal/ingest"
+	"app-boss/internal/logstore"
+	"app-boss/internal/module"
+	"app-boss/internal/ops"
+	"app-boss/internal/ports"
+	"app-boss/internal/proxy"
+	"app-boss/internal/super"
 )
 
 // Daemon is one running host session. New builds and binds it; Run serves until the context is
@@ -116,12 +116,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	if d.management != nil {
-		log.Printf("management console: http://127.0.0.1:%d (run `dboss login` for a one-time sign-in link)", d.managementPort)
+		log.Printf("management console: http://127.0.0.1:%d (run `appboss login` for a one-time sign-in link)", d.managementPort)
 		if d.cfg.Management.URL != "" {
 			log.Printf("management console: %s (AuthCog sign-in)", d.cfg.Management.URL)
 		}
 	}
-	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
+	log.Printf("appboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
 	<-ctx.Done()
 	return nil
 }
@@ -146,7 +146,7 @@ func (d *Daemon) Close() error {
 // is discovered, so app ports never shift when the console is turned on or off.
 func newAllocator(cfg config.Config) (*ports.Allocator, int) {
 	allocator := ports.New(cfg.Ports.Range)
-	port, _ := allocator.Allocate("dboss", "management")
+	port, _ := allocator.Allocate("appboss", "management")
 	return allocator, port
 }
 

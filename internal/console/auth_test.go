@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"deploy-boss/internal/config"
+	"app-boss/internal/config"
 )
 
 func TestCLILoginLinkSignsInOnce(t *testing.T) {
@@ -73,7 +73,7 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 	}
 	anonymous := httptest.NewRecorder()
 	handler.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/", nil))
-	if anonymous.Code != http.StatusUnauthorized || !strings.Contains(anonymous.Body.String(), "dboss login") {
+	if anonymous.Code != http.StatusUnauthorized || !strings.Contains(anonymous.Body.String(), "appboss login") {
 		t.Fatalf("anonymous loopback request = %d %q", anonymous.Code, anonymous.Body.String())
 	}
 	other := httptest.NewRecorder()

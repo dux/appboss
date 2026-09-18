@@ -1,6 +1,6 @@
 .DS_Store
 /boss
-/dboss
+/appboss
 /bin/
 /coverage/
 /tmp/
@@ -12,7 +12,7 @@ vendor/bundle/
 *.log
 *.pid
 *.sock
-.dboss/
-dboss.local.yaml
+.appboss/
+appboss.local.yaml
 /demo/log/
 /demo/state/

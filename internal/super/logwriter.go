@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// logWriter is the daemon-owned sink for one process's stdout and stderr. Because dboss, not the
+// logWriter is the daemon-owned sink for one process's stdout and stderr. Because appboss, not the
 // child, holds the file, it can seal the current segment for ingestion and open a fresh one
 // without the process noticing. Writes are serialized because os/exec copies stdout and stderr
 // through two pipes into the same writer.

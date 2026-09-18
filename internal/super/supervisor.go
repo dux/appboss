@@ -22,10 +22,10 @@ import (
 	"syscall"
 	"time"
 
-	"deploy-boss/internal/apps"
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/ports"
-	"deploy-boss/internal/res"
+	"app-boss/internal/apps"
+	"app-boss/internal/config"
+	"app-boss/internal/ports"
+	"app-boss/internal/res"
 )
 
 type State string
@@ -349,7 +349,7 @@ func (m *Manager) Rescan() ([]error, error) {
 	m.mu.Lock()
 	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults
 	if len(restartRequired) > 0 && strings.Join(restartRequired, ",") != strings.Join(m.restartRequired, ",") {
-		log.Printf("rescan: %s changed in %s, restart dboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
+		log.Printf("rescan: %s changed in %s, restart appboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
 	}
 	m.restartRequired = restartRequired
 	seen := map[string]bool{}
@@ -1139,7 +1139,7 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 	values["PORT"] = strconv.Itoa(port)
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
-	values["DBOSS_SOCKET"] = socket
+	values["APPBOSS_SOCKET"] = socket
 	keys := slices.Sorted(maps.Keys(values))
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {

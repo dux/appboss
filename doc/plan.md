@@ -1,23 +1,23 @@
-# deploy-boss
+# app-boss
 
 Bare-metal app host for one Linux box.
-Runs the processes described by `dboss.yaml`, allocates ports, proxies HTTP to them, stops idle apps and wakes them on the next request, and keeps structured request logs per app.
+Runs the processes described by `appboss.yaml`, allocates ports, proxies HTTP to them, stops idle apps and wakes them on the next request, and keeps structured request logs per app.
 It works in two modes with the same binary and the same file: inside one app folder as a Procfile replacement, or in a host folder that runs a directory of apps.
 
 Sits directly behind the Cloudflare proxy as the origin; nothing else runs in front of it.
 Replaces Caddy, lux-deploy's port allocator and unit renderer, and the Caddy-log-to-SQLite importer.
-lux-deploy keeps rsync, releases, hooks and rollback and calls `dboss` at the end of a deploy.
+lux-deploy keeps rsync, releases, hooks and rollback and calls `appboss` at the end of a deploy.
 
 Language: Go, stdlib plus `modernc.org/sqlite` and `gopkg.in/yaml.v3`.
 Single static binary, one process.
-`dboss start` always runs in the foreground; systemd is the daemonizer and `dboss systemd` writes the unit.
+`appboss start` always runs in the foreground; systemd is the daemonizer and `appboss systemd` writes the unit.
 
 ## Goals
 
 * Symlink an app folder into the host's `apps/` directory and keep its process configuration with the app.
 * Every app process gets `PORT` filled in.
   Ports are sticky across restarts.
-* `dboss run|stop|restart|ls|logs|ports|rescan` CLI, all with `--json`.
+* `appboss run|stop|restart|ls|logs|ports|rescan` CLI, all with `--json`.
 * The built-in management console shows live app state and controls the supervisor through its in-process API.
 * Idle apps stop after N hours without HTTP traffic and wake on the next request with a "starting, refresh in 5s" page.
 * Per-app SQLite request log written by the proxy, pruned on a schedule.
@@ -49,55 +49,55 @@ Websocket and other `Upgrade` connections are passed through as is.
 
 ## Two modes, one file
 
-`dboss.yaml` is the only config file.
+`appboss.yaml` is the only config file.
 A file with `procfile` describes an app; a file with `apps` describes a host that runs a directory of apps.
 A file cannot be both.
-Whenever a folder is resolved to its config, `dboss.local.yaml` is used when it exists and `dboss.yaml` otherwise.
+Whenever a folder is resolved to its config, `appboss.local.yaml` is used when it exists and `appboss.yaml` otherwise.
 The local file is server-only and gitignored, the same split as `.env.local` over `.env`.
 
-Config lookup for every command: `-c path`, then `DBOSS_CONFIG`, then the current folder.
+Config lookup for every command: `-c path`, then `APPBOSS_CONFIG`, then the current folder.
 
 ### Single mode (an app folder)
 
 ```
 myapp/
-  dboss.yaml        committed: procfile, hosts, overrides; may also carry proxy, ports, ... for standalone runs
-  dboss.local.yaml  optional server-only replacement for dboss.yaml
+  appboss.yaml        committed: procfile, hosts, overrides; may also carry proxy, ports, ... for standalone runs
+  appboss.local.yaml  optional server-only replacement for appboss.yaml
   .env .env.local mise.toml
-  .dboss/           state/, log/, dboss.sock (gitignored, created on first start)
+  .appboss/           state/, log/, appboss.sock (gitignored, created on first start)
 ```
 
-`cd myapp && dboss start` runs this one app in the foreground with its output echoed as `myapp/web | ...`.
+`cd myapp && appboss start` runs this one app in the foreground with its output echoed as `myapp/web | ...`.
 The app name is the folder name.
-`run|stop|restart|status|logs` without an app name target the folder's app, so a deploy hook can call `dboss restart` from the release directory.
+`run|stop|restart|status|logs` without an app name target the folder's app, so a deploy hook can call `appboss restart` from the release directory.
 
 ### Multi mode (a host folder)
 
 ```
-/srv/dboss/
-  dboss.yaml        apps: ./apps, proxy, management, ports, defaults, daemon
+/srv/appboss/
+  appboss.yaml        apps: ./apps, proxy, management, ports, defaults, daemon
   apps/
     myapp         -> /apps/myapp
     myapp-staging -> /apps/myapp-staging
-  .dboss/           or explicit state_dir, log_dir, socket
+  .appboss/           or explicit state_dir, log_dir, socket
 ```
 
 * Every entry of the `apps` directory is an app, named after the entry.
   Entries are symlinks to app folders or plain subfolders; dot entries are skipped.
 * The entry path, not its target, is the process working directory, so a target that is itself a release symlink keeps working after a swap and restart.
 * Apps are walked in name order; that fixes the initial port assignment.
-* Adding an app is `ln -s /apps/new /srv/dboss/apps/new` followed by `dboss rescan`.
-* An app's `dboss.yaml` under a host must not contain host keys (`proxy`, `ports`, `apps`, ...); such an app is reported as invalid.
+* Adding an app is `ln -s /apps/new /srv/appboss/apps/new` followed by `appboss rescan`.
+* An app's `appboss.yaml` under a host must not contain host keys (`proxy`, `ports`, `apps`, ...); such an app is reported as invalid.
 
 ### App folder contract
 
 * Env is `.env` overlaid by `.env.local`.
-* deploy-boss injects `PORT`, `APP_NAME`, `PROC_TYPE`, `DBOSS_SOCKET`, and the app's `PATH` resolved once via `mise env` when a `mise.toml` exists.
-* Rescan is explicit (`dboss rescan`, a save in the console, or implicit on `dboss run <app>`).
+* app-boss injects `PORT`, `APP_NAME`, `PROC_TYPE`, `APPBOSS_SOCKET`, and the app's `PATH` resolved once via `mise env` when a `mise.toml` exists.
+* Rescan is explicit (`appboss rescan`, a save in the console, or implicit on `appboss run <app>`).
 * Rescan re-reads the apps directory and every app's config, or the root file itself in single mode, and the host `defaults`.
-  App-level keys apply live; a changed host key (`proxy`, `ports`, `apps`, `state_dir`, `log_dir`, `socket`, `management`, `daemon`) is reported as restart required and takes effect on the next `dboss start`.
+  App-level keys apply live; a changed host key (`proxy`, `ports`, `apps`, `state_dir`, `log_dir`, `socket`, `management`, `daemon`) is reported as restart required and takes effect on the next `appboss start`.
 
-### dboss.yaml (required, per app)
+### appboss.yaml (required, per app)
 
 ```yaml
 procfile:
@@ -120,11 +120,11 @@ Everything else falls back to global defaults.
 Every key under `defaults:` in the host file can be repeated at the top level of an app file, and the app value wins key by key.
 Process keys (health, restart, logs, env, resources) can be overridden once more under `processes.<name>`; web keys (`static`, `basic_auth`, `allow_ips`, `max_body`, `headers`, `maintenance_page`) are app-level only.
 
-## Host config `/srv/dboss/dboss.yaml`
+## Host config `/srv/appboss/appboss.yaml`
 
 ```yaml
 apps: ./apps
-socket: /run/dboss/dboss.sock   # default is ./.dboss/dboss.sock; the well-known path lets app folders find the host
+socket: /run/appboss/appboss.sock   # default is ./.appboss/appboss.sock; the well-known path lets app folders find the host
 proxy:
   listen: ":80"
 management:
@@ -144,9 +144,9 @@ defaults:
 ```
 
 Relative paths resolve from the directory containing the config.
-`state_dir`, `log_dir` and `socket` default to `.dboss/` next to it.
+`state_dir`, `log_dir` and `socket` default to `.appboss/` next to it.
 Every key, its default and meaning, the full per-app format, env-file formats, and state files are documented in `internal/config/reference.yaml`.
-That file is embedded in the binary, printed by `dboss config --reference` and shown in the console, so it never drifts from the release.
+That file is embedded in the binary, printed by `appboss config --reference` and shown in the console, so it never drifts from the release.
 
 ## Process model
 
@@ -163,7 +163,7 @@ Per process (one per `procfile` entry):
 
 * Spawn with the configured app folder as cwd and merged env.
 * Use `Setsid: true` so the child is its own session and process group.
-* Pipe stdout and stderr to `log_dir/<app>/<proctype>.log` and keep the last N lines in memory for `dboss logs`.
+* Pipe stdout and stderr to `log_dir/<app>/<proctype>.log` and keep the last N lines in memory for `appboss logs`.
 * Block on `Wait` in the goroutine.
   On exit, record the code, apply restart policy with exponential backoff, and mark the app crashed after `max_restarts` consecutive failures.
 * Stop with SIGTERM to the process group, wait `stop_timeout`, then send SIGKILL.
@@ -174,7 +174,7 @@ Per process (one per `procfile` entry):
 
 ### Surviving a daemon restart
 
-On startup, deploy-boss terminates every listener in `ports.range`, then starts fresh every app listed in `running.json`.
+On startup, app-boss terminates every listener in `ports.range`, then starts fresh every app listed in `running.json`.
 When no `running.json` exists yet, which is the case on a first start, every discovered app is started.
 Nothing is adopted: the previous children were killed on shutdown, and anything left over is stale by definition.
 
@@ -194,13 +194,13 @@ Nothing outside the app goroutine knows which backend is active.
 
 * Ports are assigned once at daemon startup and never change while the daemon runs.
   Apps are walked in `apps` order and their proctypes in name order, so the first configured app's `web` gets `ports.range[0]`.
-  Apps added by `dboss rescan` get the next free port.
+  Apps added by `appboss rescan` get the next free port.
 * Always inject `PORT` into every configured process, including workers.
   There is no pinning or opt-out, and a `PORT` in `.env` is overwritten.
-* The configured range is reserved exclusively for deploy-boss apps.
-  At daemon startup, deploy-boss uses `lsof` to terminate every listener in the range before starting any app.
+* The configured range is reserved exclusively for app-boss apps.
+  At daemon startup, app-boss uses `lsof` to terminate every listener in the range before starting any app.
   Before every spawn it kills whatever still holds that process's port, so a stale process can never block a start.
-* `dboss ports` lists the live table.
+* `appboss ports` lists the live table.
 * The proxy and process both read the same table, so a mismatch is impossible.
 
 ## Proxy
@@ -209,14 +209,14 @@ Nothing outside the app goroutine knows which backend is active.
 Cloudflare owns TLS, HTTP/2 and 3, compression, caching, WAF and rate limiting; everything nginx or Caddy did in front of the app lives here.
 Per request:
 
-1. Look up the host in the app table built from every app's `dboss.yaml` hosts.
+1. Look up the host in the app table built from every app's `appboss.yaml` hosts.
    Serve the boss 404 page for an unknown host.
    Every request that resolves to an app is logged, whatever step answers it.
 2. `canonical_host`: a request for any other host of the app answers `301` to `<scheme>://<canonical><path?query>`, scheme from `X-Forwarded-Proto`, default `https`.
 3. `allow_ips`: the client IP (`CF-Connecting-IP`, then the remote address) must fall in one of the CIDRs, else `403`.
 4. `basic_auth`: `401` with `WWW-Authenticate: Basic realm="<app>"` unless the request carries a user from the map with a password matching its bcrypt hash.
-   `dboss password` prints the hash.
-5. Maintenance mode (`dboss maintenance <app> on`): `503` with `Retry-After: 30` and the maintenance page for HTML `GET`s, an empty `503` otherwise.
+   `appboss password` prints the hash.
+5. Maintenance mode (`appboss maintenance <app> on`): `503` with `Retry-After: 30` and the maintenance page for HTML `GET`s, an empty `503` otherwise.
    The page is `maintenance_page`, then `<static>/503.html`, then the built-in one.
    The app keeps running; the flag is persisted in `state_dir/maintenance.json`.
 6. `static`: `GET` and `HEAD` for a regular file under the directory are served from disk with `Last-Modified`, conditional and range support, without waking or touching the app.
@@ -260,35 +260,35 @@ The CLI is the same binary talking to that socket.
 The management console calls the same manager in-process and never shells out.
 
 ```
-dboss start [-c path]              run the host session in the foreground; Ctrl-C stops every app
-dboss systemd [--install]          print the systemd unit for this config, or install and enable it
-dboss ls [--json]                  apps, state, ports, uptime, last activity, mem
-dboss run|stop|restart [app]       app defaults to the current folder's app
-dboss status [app] [--json]        full detail incl. process list and restarts
-dboss logs [app] [-f] [-n 200]     tail process logs
-dboss maintenance [app] on|off     answer with the maintenance page while the app keeps running
-dboss ports                        live port table
-dboss rescan                       re-read the apps directory and every dboss.yaml
-dboss kill                         stop all apps and clear every listener in ports.range
-dboss config [app] [-d]            validate and print a config file as written, or with -d the resolved config
-dboss config --reference           print the annotated configuration reference
-dboss check                        validate the config and every app without starting
-dboss password                     print a bcrypt hash for basic_auth
-dboss help [command]               grouped overview, or synopsis, details and options of one command
+appboss start [-c path]              run the host session in the foreground; Ctrl-C stops every app
+appboss systemd [--install]          print the systemd unit for this config, or install and enable it
+appboss ls [--json]                  apps, state, ports, uptime, last activity, mem
+appboss run|stop|restart [app]       app defaults to the current folder's app
+appboss status [app] [--json]        full detail incl. process list and restarts
+appboss logs [app] [-f] [-n 200]     tail process logs
+appboss maintenance [app] on|off     answer with the maintenance page while the app keeps running
+appboss ports                        live port table
+appboss rescan                       re-read the apps directory and every appboss.yaml
+appboss kill                         stop all apps and clear every listener in ports.range
+appboss config [app] [-d]            validate and print a config file as written, or with -d the resolved config
+appboss config --reference           print the annotated configuration reference
+appboss check                        validate the config and every app without starting
+appboss password                     print a bcrypt hash for basic_auth
+appboss help [command]               grouped overview, or synopsis, details and options of one command
 ```
 
 Every command accepts `--json`.
 Exit codes are meaningful for scripts.
 Config errors name the file, line and key, and carry a hint: an unknown key suggests the closest valid one, a bad duration or size shows the accepted forms.
-Remote commands find the socket via `--socket`, `DBOSS_SOCKET`, the socket of the config in reach when it exists, then `/run/dboss/dboss.sock`.
+Remote commands find the socket via `--socket`, `APPBOSS_SOCKET`, the socket of the config in reach when it exists, then `/run/appboss/appboss.sock`.
 
-When stdout is a terminal, `dboss start` echoes every process's output with a colored `app/proc | ` prefix, foreman style.
-Under systemd stdout is not a terminal, so journald only receives dboss's own log and app output stays in `log_dir`.
+When stdout is a terminal, `appboss start` echoes every process's output with a colored `app/proc | ` prefix, foreman style.
+Under systemd stdout is not a terminal, so journald only receives appboss's own log and app output stays in `log_dir`.
 
 ## systemd
 
-`dboss systemd` renders a unit that runs `dboss start -c <absolute config>` as the current user from the config directory, with `Restart=always`, `RuntimeDirectory=dboss` and `CAP_NET_BIND_SERVICE` for port 80.
-`dboss systemd --install` writes `/etc/systemd/system/dboss.service`, reloads systemd and enables the service.
+`appboss systemd` renders a unit that runs `appboss start -c <absolute config>` as the current user from the config directory, with `Restart=always`, `RuntimeDirectory=appboss` and `CAP_NET_BIND_SERVICE` for port 80.
+`appboss systemd --install` writes `/etc/systemd/system/appboss.service`, reloads systemd and enables the service.
 There is no static unit file in the repo because the paths differ per box.
 
 ## Management console
@@ -297,10 +297,10 @@ The daemon serves an embedded management console from a dedicated listener and h
 It shows live app state, resource use, request rates, process details, and start, stop, restart, maintenance, and rescan controls.
 The page refreshes app state every five seconds.
 
-Below the fleet, a configuration editor edits the real YAML files on disk: the host file and, per app, the file `dboss start` actually reads (`dboss.local.yaml` when it exists, else `dboss.yaml`).
+Below the fleet, a configuration editor edits the real YAML files on disk: the host file and, per app, the file `appboss start` actually reads (`appboss.local.yaml` when it exists, else `appboss.yaml`).
 There is no database copy of the config.
 The editor validates through the real loaders, saves atomically with a revision check (a stale save shows the disk version side by side), rescans right away, and reports invalid apps and host keys that need a restart.
-**Create server override** copies `dboss.yaml` to `dboss.local.yaml` so edits made on the box survive the next deploy.
+**Create server override** copies `appboss.yaml` to `appboss.local.yaml` so edits made on the box survive the next deploy.
 **Effective config** shows the resolved app config and **Reference** the embedded annotated reference.
 
 AuthCog protects only the management console.
@@ -315,15 +315,15 @@ The demo console is at `http://boss.lvh.me:8080`, next to the demo apps, and at 
 ## lux-deploy integration
 
 lux-deploy stops rendering systemd units and Caddy config.
-After a symlink swap, it runs `dboss restart <app>` and `health.sh` can call `dboss status <app>`.
-`host:apps` becomes `dboss ls`.
+After a symlink swap, it runs `appboss restart <app>` and `health.sh` can call `appboss status <app>`.
+`host:apps` becomes `appboss ls`.
 The Caddy log importer is retired.
 
 ## Repo layout
 
 ```
-cmd/dboss/main.go         subcommand dispatch
-internal/config/          dboss.yaml loading (host and app roles), defaults, overrides, embedded reference
+cmd/appboss/main.go         subcommand dispatch
+internal/config/          appboss.yaml loading (host and app roles), defaults, overrides, embedded reference
 internal/apps/            apps directory walk, env merge, procfile validation, config file store
 internal/super/           app goroutine, state machine, spawn, port clearing, terminal echo
 internal/res/             procgroup and cgroup backends
@@ -338,18 +338,18 @@ web/                      starting.html, crashed.html, 404.html, maintenance.htm
 
 ## Milestones
 
-1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, and `dboss start|ls|run|stop|restart|rescan|logs`.
+1. **Supervise.** App loading, env, procfile, ports, spawn, stop, restart, and `appboss start|ls|run|stop|restart|rescan|logs`.
    Runs on macOS.
 2. **Proxy.** Host table, forward, starting page, readiness, idle stop.
-3. **Logs.** SQLite request log, prune, `dboss status` shows request rates.
-4. **Ops.** `dboss systemd`, management console, lux-deploy calls `dboss restart`.
+3. **Logs.** SQLite request log, prune, `appboss status` shows request rates.
+4. **Ops.** `appboss systemd`, management console, lux-deploy calls `appboss restart`.
 5. **Proxy features.** Canonical host, allow list, basic auth, maintenance mode, static files, body limit, response headers, request id; global-or-per-app config; console config editor.
 6. **Later.** cgroup backend and per-app memory limits.
 
 ## Open questions
 
-* Should `dboss ls` memory come from summing children (procgroup) and be labelled approximate until cgroups land? Yes, label it.
+* Should `appboss ls` memory come from summing children (procgroup) and be labelled approximate until cgroups land? Yes, label it.
 * Procfile commands with shell syntax (`&&`, `$VAR`) execute directly by default.
-  Set `shell: true` in `dboss.yaml` to use `sh -c`.
+  Set `shell: true` in `appboss.yaml` to use `sh -c`.
 * Multiple `web`-like process types behind the proxy: only `web` is routed.
   Others are background only.

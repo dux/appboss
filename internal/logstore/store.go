@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"deploy-boss/internal/super"
+	"app-boss/internal/super"
 	_ "modernc.org/sqlite"
 )
 
@@ -52,15 +52,23 @@ type Rates struct {
 	LastDay    int64
 }
 
-// HostApp is the reserved app name that backs dboss's own daemon log. It never collides with a
+// HostApp is the reserved app name that backs appboss's own daemon log. It never collides with a
 // discovered app because app process names must match [a-z][a-z0-9_-]*.
-const HostApp = "_dboss"
+const HostApp = "_appboss"
 
 // Channel is one selectable log type in the console: the request table, process stdout, the
-// dboss daemon log, or one app log file.
+// appboss daemon log, or one app log file.
 type Channel struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+}
+
+// AppTree is one app in the log viewer's left nav: the sqlite files on disk and the channels
+// inside them.
+type AppTree struct {
+	Name     string    `json:"name"`
+	Bytes    int64     `json:"bytes"`
+	Channels []Channel `json:"channels"`
 }
 
 // TailOffset is how far the file tailer has read into one app log file.
@@ -70,7 +78,7 @@ type TailOffset struct {
 	Offset int64
 }
 
-// LogFilter narrows SearchLogs. Channel selects one log type: "stdout", "dboss" or "file:<path>".
+// LogFilter narrows SearchLogs. Channel selects one log type: "stdout", "appboss" or "file:<path>".
 // Query is full-text over message and raw.
 type LogFilter struct {
 	Channel string
@@ -124,9 +132,9 @@ type Store struct {
 	cancel        context.CancelFunc
 }
 
-// New returns a store that writes under dir (one <app>/dboss.sqlite per app). snapshotter and
+// New returns a store that writes under dir (one <app>/appboss.sqlite per app). snapshotter and
 // pruneAt drive the daily retention prune; pass nil to disable it. hostRetention bounds the
-// reserved HostApp database that holds dboss's own daemon log.
+// reserved HostApp database that holds appboss's own daemon log.
 func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt string, hostRetention time.Duration) *Store {
 	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, hostRetention: hostRetention, apps: map[string]*appWriter{}}
 }
@@ -207,7 +215,7 @@ func (s *Store) writer(app string) (*appWriter, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "dboss.sqlite"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "appboss.sqlite"))
 	if err != nil {
 		return nil, err
 	}
@@ -453,30 +461,91 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	return result, rows.Err()
 }
 
-// Channels lists the log types an app has. The reserved HostApp exposes only the dboss daemon
+// Channels lists the log types an app has. The reserved HostApp exposes only the appboss daemon
 // log; every real app exposes the request table, process stdout and one channel per app log file.
 func (s *Store) Channels(app string) ([]Channel, error) {
+	return s.channelsFor(app)
+}
+
+// Tree returns name, on-disk sqlite size and channels for each app. Missing databases stay
+// missing: this does not create them.
+func (s *Store) Tree(names []string) ([]AppTree, error) {
+	out := make([]AppTree, 0, len(names))
+	for _, name := range names {
+		channels, err := s.channelsFor(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, AppTree{Name: name, Bytes: s.diskBytes(name), Channels: channels})
+	}
+	return out, nil
+}
+
+func (s *Store) channelsFor(app string) ([]Channel, error) {
 	if app == HostApp {
-		return []Channel{{ID: "dboss", Label: "dboss"}}, nil
+		return []Channel{{ID: "appboss", Label: "appboss"}}, nil
 	}
 	channels := []Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}}
-	w, err := s.writer(app)
+	files, err := s.fileProcesses(app)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := w.db.Query(`SELECT DISTINCT process FROM logs WHERE source = 'file' ORDER BY process`)
+	for _, path := range files {
+		channels = append(channels, Channel{ID: "file:" + path, Label: path})
+	}
+	return channels, nil
+}
+
+func (s *Store) diskBytes(app string) int64 {
+	var total int64
+	dir := filepath.Join(s.dir, app)
+	for _, name := range []string{"appboss.sqlite", "appboss.sqlite-wal", "appboss.sqlite-shm"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+	}
+	return total
+}
+
+func (s *Store) fileProcesses(app string) ([]string, error) {
+	s.mu.Lock()
+	w := s.apps[app]
+	s.mu.Unlock()
+	if w != nil {
+		return queryFileProcesses(w.db)
+	}
+	path := filepath.Join(s.dir, app, "appboss.sqlite")
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return queryFileProcesses(db)
+}
+
+func queryFileProcesses(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT DISTINCT process FROM logs WHERE source = 'file' ORDER BY process`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	var files []string
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {
 			return nil, err
 		}
-		channels = append(channels, Channel{ID: "file:" + path, Label: path})
+		files = append(files, path)
 	}
-	return channels, rows.Err()
+	return files, rows.Err()
 }
 
 // TailOffsets returns every tracked app log file for app, keyed by absolute path.
@@ -555,7 +624,7 @@ func (s *Store) Rates(app string) (Rates, error) {
 }
 
 // Prune deletes rows older than their retention from one app's database. Request rows and app
-// log files use retention, process stdout and the dboss daemon log use stdoutRetention. A zero
+// log files use retention, process stdout and the appboss daemon log use stdoutRetention. A zero
 // retention disables the whole store, matching Request/RecordLogs.
 func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetention time.Duration) error {
 	if retention <= 0 {

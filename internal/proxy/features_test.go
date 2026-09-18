@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/super"
+	"app-boss/internal/config"
+	"app-boss/internal/super"
 )
 
 // featureHandler has no manager: every step before forwarding must answer on its own.

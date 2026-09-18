@@ -6,9 +6,10 @@ package ops
 import (
 	"errors"
 	"fmt"
+	"slices"
 
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/super"
+	"app-boss/internal/logstore"
+	"app-boss/internal/super"
 )
 
 // ErrUnknownAction is returned by Do for a method it does not implement, so a transport can tell
@@ -52,6 +53,7 @@ type LogStore interface {
 	SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error)
 	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
 	Channels(app string) ([]logstore.Channel, error)
+	Tree(names []string) ([]logstore.AppTree, error)
 }
 
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
@@ -85,7 +87,7 @@ func New(runtime Runtime, rates Rates, store LogStore) *Service {
 }
 
 // SearchLogs and SearchRequests are the read side of the log store, shared by the console and
-// any future `dboss logs --search`.
+// any future `appboss logs --search`.
 func (s *Service) SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error) {
 	if s.store == nil {
 		return nil, errors.New("log store is not enabled")
@@ -106,6 +108,20 @@ func (s *Service) Channels(app string) ([]logstore.Channel, error) {
 		return nil, errors.New("log store is not enabled")
 	}
 	return s.store.Channels(app)
+}
+
+// LogTree is the log viewer's left nav: every app, sqlite size on disk, and the channels inside.
+func (s *Service) LogTree() ([]logstore.AppTree, error) {
+	if s.store == nil {
+		return nil, errors.New("log store is not enabled")
+	}
+	names := make([]string, 0, len(s.runtime.Snapshots())+1)
+	for _, snapshot := range s.runtime.Snapshots() {
+		names = append(names, snapshot.Name)
+	}
+	slices.Sort(names)
+	names = append(names, logstore.HostApp)
+	return s.store.Tree(names)
 }
 
 // Do runs one action by name. Both transports call it, so the name-to-method mapping lives here

@@ -28,7 +28,7 @@ func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 	if cfg.Apps != filepath.Join(dir, "apps") || cfg.Defaults.IdleStop.Value() != 2*time.Hour || cfg.Ports.Range[0] != 3100 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.Dir != dir || cfg.App != nil || cfg.Socket != filepath.Join(dir, ".dboss", "dboss.sock") {
+	if cfg.Dir != dir || cfg.App != nil || cfg.Socket != filepath.Join(dir, ".appboss", "appboss.sock") {
 		t.Fatalf("unexpected root fields: dir=%q app=%v socket=%q", cfg.Dir, cfg.App, cfg.Socket)
 	}
 	writeConfigFile(t, path, "apps: ./apps\nunknown: true\n")
@@ -265,7 +265,7 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	defaults.Headers = map[string]string{"X-Frame-Options": "DENY"}
 	defaults.BasicAuth = map[string]string{"ops": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}
 	data := "procfile:\n  web: ./server\nhosts: [demo.test, www.demo.test]\ncanonical_host: demo.test\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic: ./public\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
-	app, err := ParseApp([]byte(data), "app/dboss.yaml", defaults)
+	app, err := ParseApp([]byte(data), "app/appboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
 	} {
-		_, err := ParseApp([]byte(test.data), "dboss.yaml", defaults)
+		_, err := ParseApp([]byte(test.data), "appboss.yaml", defaults)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: got %v, want error containing %q", test.name, err, test.want)
 		}
@@ -304,14 +304,14 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 }
 
 func TestParseRootValidatesWithoutDisk(t *testing.T) {
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  static: ./public\n"), "/srv/dboss.yaml")
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  static: ./public\n"), "/srv/appboss.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Apps != "/srv/apps" || cfg.Defaults.Static != "./public" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  nope: 1\n"), "/srv/dboss.yaml"); err == nil {
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  nope: 1\n"), "/srv/appboss.yaml"); err == nil {
 		t.Fatal("expected unknown key error")
 	}
 }
@@ -320,11 +320,11 @@ func TestStdoutRetentionDefaultsAndValidates(t *testing.T) {
 	if got := Default().Defaults.StdoutRetention.Value(); got != 3*time.Hour {
 		t.Fatalf("stdout_retention default = %v, want 3h", got)
 	}
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: 6h\n"), "/srv/dboss.yaml")
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: 6h\n"), "/srv/appboss.yaml")
 	if err != nil || cfg.Defaults.StdoutRetention.Value() != 6*time.Hour {
 		t.Fatalf("stdout_retention override: %v %v", err, cfg.Defaults.StdoutRetention.Value())
 	}
-	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: -1h\n"), "/srv/dboss.yaml"); err == nil {
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: -1h\n"), "/srv/appboss.yaml"); err == nil {
 		t.Fatal("negative stdout_retention should fail")
 	}
 }
@@ -346,23 +346,23 @@ func TestRestartRequiredListsHostKeys(t *testing.T) {
 
 func TestErrorsPointAtLineAndKey(t *testing.T) {
 	for _, test := range []struct{ name, data, want, hint string }{
-		{"typo", "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n", "dboss.yaml:3: defaults.idle_stpo: unknown key", `did you mean "idle_stop"?`},
-		{"duration", "apps: ./apps\ndefaults:\n  idle_stop: 2 hours\n", `dboss.yaml:3: defaults.idle_stop: invalid duration "2 hours"`, "durations look like"},
-		{"enum", "apps: ./apps\ndefaults:\n  restart: sometimes\n", `dboss.yaml:3: defaults.restart: must be on-failure, always or never, not "sometimes"`, ""},
-		{"listen", "apps: ./apps\nproxy:\n  listen: 80\n", `dboss.yaml:3: proxy.listen: invalid address "80"`, "host:port"},
-		{"syntax", "apps: ./apps\ndefaults:\n  idle_stop: [1\n", "dboss.yaml:2: syntax error", ""},
+		{"typo", "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n", "appboss.yaml:3: defaults.idle_stpo: unknown key", `did you mean "idle_stop"?`},
+		{"duration", "apps: ./apps\ndefaults:\n  idle_stop: 2 hours\n", `appboss.yaml:3: defaults.idle_stop: invalid duration "2 hours"`, "durations look like"},
+		{"enum", "apps: ./apps\ndefaults:\n  restart: sometimes\n", `appboss.yaml:3: defaults.restart: must be on-failure, always or never, not "sometimes"`, ""},
+		{"listen", "apps: ./apps\nproxy:\n  listen: 80\n", `appboss.yaml:3: proxy.listen: invalid address "80"`, "host:port"},
+		{"syntax", "apps: ./apps\ndefaults:\n  idle_stop: [1\n", "appboss.yaml:2: syntax error", ""},
 	} {
-		_, err := Parse([]byte(test.data), "/srv/dboss.yaml")
+		_, err := Parse([]byte(test.data), "/srv/appboss.yaml")
 		if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), test.hint) {
 			t.Errorf("%s: got %v, want %q with hint %q", test.name, err, test.want, test.hint)
 		}
 	}
-	_, err := ParseApp([]byte("procfile:\n  web: ./x\nhost: [a.test]\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
-	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: host: unknown key`) || !strings.Contains(err.Error(), `did you mean "hosts"?`) {
+	_, err := ParseApp([]byte("procfile:\n  web: ./x\nhost: [a.test]\n"), "/srv/apps/demo/appboss.yaml", Default().Defaults)
+	if err == nil || !strings.Contains(err.Error(), `appboss.yaml:3: host: unknown key`) || !strings.Contains(err.Error(), `did you mean "hosts"?`) {
 		t.Errorf("app typo: got %v", err)
 	}
 	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
+	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/appboss.yaml" {
 		t.Errorf("structured error = %+v", cfgErr)
 	}
 }

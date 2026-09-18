@@ -15,7 +15,7 @@ Bun.serve({
         <body>
           <main>
             <h1>Hello from Bun</h1>
-            <p>Served by deploy-boss on port ${port}.</p>
+            <p>Served by app-boss on port ${port}.</p>
           </main>
         </body>
       </html>`,

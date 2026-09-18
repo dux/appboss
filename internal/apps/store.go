@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"deploy-boss/internal/config"
+	"app-boss/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,7 +16,7 @@ import (
 // caller edited. The returned ConfigFile then carries the current contents.
 var ErrConflict = errors.New("file changed on disk")
 
-// ConfigFile is one file dboss reads. IDs are "host" or "app:<name>" and map to paths only on
+// ConfigFile is one file appboss reads. IDs are "host" or "app:<name>" and map to paths only on
 // the server, so a client never names a path.
 type ConfigFile struct {
 	ID       string `json:"id"`
@@ -111,7 +111,7 @@ func (s *Store) Validate(id, contents string) error {
 			return err
 		}
 		if (parsed.App != nil) != (s.root.App != nil) {
-			return errors.New("the host file cannot switch between apps and procfile while dboss runs")
+			return errors.New("the host file cannot switch between apps and procfile while appboss runs")
 		}
 		if parsed.App != nil {
 			_, err = validateApp(*parsed.App)
@@ -149,7 +149,7 @@ func (s *Store) Write(id, contents, revision string) (ConfigFile, error) {
 	return s.Read(id)
 }
 
-// CreateLocal copies an app's dboss.yaml to dboss.local.yaml so edits made on the server live
+// CreateLocal copies an app's appboss.yaml to appboss.local.yaml so edits made on the server live
 // in the file the next deploy does not overwrite.
 func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	file, err := s.lookup("app:" + app)

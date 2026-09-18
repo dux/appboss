@@ -123,11 +123,11 @@ func (l *List) UnmarshalYAML(node *yaml.Node) error {
 // FileName and LocalFileName are the two config file names looked up in a folder.
 // The local file is server-only and, when present, replaces the committed one entirely.
 const (
-	FileName      = "dboss.yaml"
-	LocalFileName = "dboss.local.yaml"
+	FileName      = "appboss.yaml"
+	LocalFileName = "appboss.local.yaml"
 )
 
-// FindInDir returns the config file to use for dir: dboss.local.yaml when it exists, else dboss.yaml.
+// FindInDir returns the config file to use for dir: appboss.local.yaml when it exists, else appboss.yaml.
 func FindInDir(dir string) (string, error) {
 	for _, name := range []string{LocalFileName, FileName} {
 		path := filepath.Join(dir, name)
@@ -138,7 +138,7 @@ func FindInDir(dir string) (string, error) {
 	return "", fmt.Errorf("no %s in %s", FileName, dir)
 }
 
-// Config is the root dboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
+// Config is the root appboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
 type Config struct {
 	SourcePath string     `yaml:"-" json:"-"`
 	Dir        string     `yaml:"-" json:"-"`
@@ -228,7 +228,7 @@ type Process struct {
 }
 
 // Web drives the proxy in front of the app. BasicAuth never leaves the process as JSON so the
-// hashes stay out of the console and `dboss status --json`.
+// hashes stay out of the console and `appboss status --json`.
 type Web struct {
 	Static          string            `yaml:"static" json:"static"`
 	StaticImmutable List              `yaml:"static_immutable" json:"static_immutable"`
@@ -253,7 +253,7 @@ type Daemon struct {
 
 func Default() Config {
 	return Config{
-		StateDir: ".dboss/state", LogDir: ".dboss/log", Socket: ".dboss/dboss.sock",
+		StateDir: ".appboss/state", LogDir: ".appboss/log", Socket: ".appboss/appboss.sock",
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
@@ -262,7 +262,7 @@ func Default() Config {
 	}
 }
 
-// file is the full dboss.yaml schema: host keys plus app keys. Which role the file plays
+// file is the full appboss.yaml schema: host keys plus app keys. Which role the file plays
 // is decided after decoding from whether procfile or apps is present.
 type file struct {
 	Config  `yaml:",inline"`
@@ -320,7 +320,7 @@ func Parse(data []byte, path string) (Config, error) {
 	cfg.Dir = filepath.Dir(absolutePath)
 	hasApp := keys["procfile"]
 	if hasApp && cfg.Apps != "" {
-		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root dboss.yaml or drop apps"}, path, root)
+		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root appboss.yaml or drop apps"}, path, root)
 	}
 	if !hasApp && cfg.Apps == "" {
 		return Config{}, located(&Error{Message: "needs procfile (an app) or apps (a host)", Hint: "an app file starts with procfile:, a host file with apps: ./apps"}, path, root)
@@ -576,7 +576,7 @@ func validateWeb(w Web) error {
 			return keyErr("basic_auth", "invalid user %q", user)
 		}
 		if _, err := bcrypt.Cost([]byte(hash)); err != nil {
-			return &Error{Key: "basic_auth." + user, Message: "must be a bcrypt hash", Hint: "run `dboss password` to print one"}
+			return &Error{Key: "basic_auth." + user, Message: "must be a bcrypt hash", Hint: "run `appboss password` to print one"}
 		}
 	}
 	for name := range w.Headers {
@@ -622,8 +622,8 @@ type appFile struct {
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }
 
-// LoadApp reads an app's dboss.yaml under a host. Host keys are rejected here because only the
-// root file dboss start was pointed at owns the proxy, ports and runtime directories.
+// LoadApp reads an app's appboss.yaml under a host. Host keys are rejected here because only the
+// root file appboss start was pointed at owns the proxy, ports and runtime directories.
 func LoadApp(path string, defaults Defaults) (App, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -1,5 +1,5 @@
-// Package ingest turns logs into rows in the log store. It parses dboss's sealed process stdout
-// segments, tails the *.log files an app writes under its ./log directory, and copies dboss's own
+// Package ingest turns logs into rows in the log store. It parses appboss's sealed process stdout
+// segments, tails the *.log files an app writes under its ./log directory, and copies appboss's own
 // daemon log. It is the only place that knows how to parse a log line.
 package ingest
 
@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/super"
+	"app-boss/internal/logstore"
+	"app-boss/internal/super"
 )
 
 // Sealer asks the supervisor to seal one app's process log segments.
@@ -126,7 +126,7 @@ func (m *Module) ingestSealed(app, path string) error {
 }
 
 // tailFiles reads new bytes from every *.log file under the app's ./log directory. The files are
-// the app's, not dboss's: they are never rotated or deleted here.
+// the app's, not appboss's: they are never rotated or deleted here.
 func (m *Module) tailFiles(snapshot super.Snapshot) {
 	dir := filepath.Join(snapshot.Dir, "log")
 	files := logFiles(dir)
@@ -307,7 +307,7 @@ func detectLevel(line string) string {
 	return "info"
 }
 
-// DaemonSink mirrors dboss's own log lines into the reserved host database. It is an io.Writer so
+// DaemonSink mirrors appboss's own log lines into the reserved host database. It is an io.Writer so
 // the daemon can add it to the stdlib logger output next to stderr.
 type DaemonSink struct {
 	store   Store
@@ -328,7 +328,7 @@ func (s *DaemonSink) Write(p []byte) (int, error) {
 		}
 		line := strings.TrimRight(string(s.partial[:index]), "\r")
 		s.partial = s.partial[index+1:]
-		entry := ParseLine("dboss", "", line)
+		entry := ParseLine("appboss", "", line)
 		_ = s.store.RecordLogs(logstore.HostApp, []logstore.LogEntry{entry})
 	}
 	return len(p), nil

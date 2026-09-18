@@ -22,9 +22,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/logstore"
-	"deploy-boss/internal/super"
+	"app-boss/internal/config"
+	"app-boss/internal/logstore"
+	"app-boss/internal/super"
 )
 
 const maintenanceRetryAfter = 30

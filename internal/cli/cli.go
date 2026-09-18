@@ -18,11 +18,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"deploy-boss/internal/apps"
-	"deploy-boss/internal/config"
-	"deploy-boss/internal/ctl"
-	"deploy-boss/internal/daemon"
-	"deploy-boss/internal/super"
+	"app-boss/internal/apps"
+	"app-boss/internal/config"
+	"app-boss/internal/ctl"
+	"app-boss/internal/daemon"
+	"app-boss/internal/super"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -51,13 +51,13 @@ func (c CLI) Run(args []string) int {
 	command := args[0]
 	if command == "help" {
 		if err := c.help(c.Out, args[1]); err != nil {
-			fmt.Fprintln(c.Err, "dboss:", err)
+			fmt.Fprintln(c.Err, "appboss:", err)
 			return 2
 		}
 		return 0
 	}
 	if findCommand(command) == nil {
-		fmt.Fprintf(c.Err, "dboss: unknown command %q\n\n", command)
+		fmt.Fprintf(c.Err, "appboss: unknown command %q\n\n", command)
 		c.usage(c.Err)
 		return 2
 	}
@@ -79,7 +79,7 @@ func (c CLI) Run(args []string) int {
 		err = c.remote(command, args[1:])
 	}
 	if err != nil {
-		fmt.Fprintln(c.Err, "dboss:", err)
+		fmt.Fprintln(c.Err, "appboss:", err)
 		return 1
 	}
 	return 0
@@ -88,7 +88,7 @@ func (c CLI) Run(args []string) int {
 // configFlag registers -c and --config on set; both write to the same variable.
 func configFlag(set *flag.FlagSet) *string {
 	var path string
-	set.StringVar(&path, "c", "", "config file (default: DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml)")
+	set.StringVar(&path, "c", "", "config file (default: APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml)")
 	set.StringVar(&path, "config", "", "config file")
 	return &path
 }
@@ -103,7 +103,7 @@ func (c CLI) start(args []string) error {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: dboss start [-c path]")
+		return errors.New("usage: appboss start [-c path]")
 	}
 	path, err := findConfig(*configPath)
 	if err != nil {
@@ -131,7 +131,7 @@ func (c CLI) start(args []string) error {
 // input is read as one line so the hash can be scripted.
 func (c CLI) password(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: dboss password")
+		return errors.New("usage: appboss password")
 	}
 	password, err := c.readPassword("Password: ")
 	if err != nil {
@@ -189,7 +189,7 @@ func (c CLI) local(command string, args []string) error {
 	}
 	if command == "config" && *keys {
 		if set.NArg() > 1 {
-			return errors.New("usage: dboss config --keys [filter]")
+			return errors.New("usage: appboss config --keys [filter]")
 		}
 		return c.printKeys(set.Arg(0), *jsonOutput)
 	}
@@ -203,7 +203,7 @@ func (c CLI) local(command string, args []string) error {
 	}
 	if command == "kill" {
 		if set.NArg() != 0 {
-			return errors.New("usage: dboss kill [-c path]")
+			return errors.New("usage: appboss kill [-c path]")
 		}
 		return c.kill(cfg, *jsonOutput)
 	}
@@ -226,7 +226,7 @@ func (c CLI) local(command string, args []string) error {
 		return nil
 	}
 	if set.NArg() > 1 {
-		return errors.New("usage: dboss config [app] [-d|--defaults]")
+		return errors.New("usage: appboss config [app] [-d|--defaults]")
 	}
 	if set.NArg() == 0 {
 		if withDefaults {
@@ -329,22 +329,22 @@ func (c CLI) remote(command string, args []string) error {
 	switch command {
 	case "ls", "rescan", "ports", "login":
 		if len(opts.rest) != 0 {
-			return fmt.Errorf("usage: dboss %s", command)
+			return fmt.Errorf("usage: appboss %s", command)
 		}
 	case "run", "stop", "restart", "status":
 		if len(opts.rest) > 1 {
-			return fmt.Errorf("usage: dboss %s [app]", command)
+			return fmt.Errorf("usage: appboss %s [app]", command)
 		}
 		if request.App, err = appArgument(opts.rest, opts.config); err != nil {
-			return fmt.Errorf("usage: dboss %s <app> (%w)", command, err)
+			return fmt.Errorf("usage: appboss %s <app> (%w)", command, err)
 		}
 	case "maintenance":
 		if len(opts.rest) == 0 || len(opts.rest) > 2 || (opts.rest[len(opts.rest)-1] != "on" && opts.rest[len(opts.rest)-1] != "off") {
-			return errors.New("usage: dboss maintenance [app] on|off")
+			return errors.New("usage: appboss maintenance [app] on|off")
 		}
 		request.On = opts.rest[len(opts.rest)-1] == "on"
 		if request.App, err = appArgument(opts.rest[:len(opts.rest)-1], opts.config); err != nil {
-			return fmt.Errorf("usage: dboss maintenance <app> on|off (%w)", err)
+			return fmt.Errorf("usage: appboss maintenance <app> on|off (%w)", err)
 		}
 	case "logs":
 		var appArgs []string
@@ -352,7 +352,7 @@ func (c CLI) remote(command string, args []string) error {
 			appArgs, opts.rest = opts.rest[:1], opts.rest[1:]
 		}
 		if request.App, err = appArgument(appArgs, opts.config); err != nil {
-			return fmt.Errorf("usage: dboss logs <app> [-f] [-n 200] [--process name] (%w)", err)
+			return fmt.Errorf("usage: appboss logs <app> [-f] [-n 200] [--process name] (%w)", err)
 		}
 		set := flag.NewFlagSet("logs", flag.ContinueOnError)
 		set.SetOutput(c.Err)
@@ -363,7 +363,7 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		if set.NArg() != 0 {
-			return errors.New("usage: dboss logs [app] [-f] [-n 200] [--process name]")
+			return errors.New("usage: appboss logs [app] [-f] [-n 200] [--process name]")
 		}
 		request.Lines, request.Process = *lines, *processName
 		if *follow && opts.json {
@@ -426,8 +426,8 @@ func (c CLI) remote(command string, args []string) error {
 	return c.printHuman(request.Method, data)
 }
 
-// flagsFirst moves flags ahead of positional arguments so `dboss config app -d` and
-// `dboss config --keys static --json` parse the same as with the flags in front.
+// flagsFirst moves flags ahead of positional arguments so `appboss config app -d` and
+// `appboss config --keys static --json` parse the same as with the flags in front.
 func flagsFirst(args []string) []string {
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
@@ -446,8 +446,8 @@ func flagsFirst(args []string) []string {
 }
 
 var keyGroups = []struct{ id, title, note string }{
-	{config.GroupHost, "Host keys", "dboss.yaml with apps:"},
-	{config.GroupApp, "App keys", "dboss.yaml with procfile:"},
+	{config.GroupHost, "Host keys", "appboss.yaml with apps:"},
+	{config.GroupApp, "App keys", "appboss.yaml with procfile:"},
 	{config.GroupShared, "Shared app keys", "defaults: in the host file, top level in an app file; per-process ones also under processes.<name>"},
 }
 
@@ -544,7 +544,7 @@ func (c CLI) printHuman(method string, data any) error {
 			fmt.Fprintf(c.Out, "  %v\n", message)
 		}
 		if keys, _ := result["restart_required"].([]any); len(keys) > 0 {
-			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart dboss, or Ctrl-C and dboss start)\n", joinAny(keys))
+			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart appboss, or Ctrl-C and appboss start)\n", joinAny(keys))
 		}
 	case "login":
 		fmt.Fprintln(c.Out, data.(map[string]string)["url"])
@@ -631,16 +631,16 @@ func commonArgs(args []string) (remoteOptions, error) {
 	return opts, nil
 }
 
-const defaultSocket = "/run/dboss/dboss.sock"
+const defaultSocket = "/run/appboss/appboss.sock"
 
-// findSocket resolves the control socket: --socket, DBOSS_SOCKET, the socket of the config in
+// findSocket resolves the control socket: --socket, APPBOSS_SOCKET, the socket of the config in
 // reach if it exists on disk, then the well-known production path. The last step is what lets
-// `dboss restart` inside a deployed app folder reach the host session started elsewhere.
+// `appboss restart` inside a deployed app folder reach the host session started elsewhere.
 func findSocket(explicit, configPath string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if env := os.Getenv("DBOSS_SOCKET"); env != "" {
+	if env := os.Getenv("APPBOSS_SOCKET"); env != "" {
 		return env, nil
 	}
 	path, err := findConfig(configPath)
@@ -680,12 +680,12 @@ func findConfig(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if env := os.Getenv("DBOSS_CONFIG"); env != "" {
+	if env := os.Getenv("APPBOSS_CONFIG"); env != "" {
 		return env, nil
 	}
 	path, err := config.FindInDir(".")
 	if err != nil {
-		return "", fmt.Errorf("%w (use -c or DBOSS_CONFIG)", err)
+		return "", fmt.Errorf("%w (use -c or APPBOSS_CONFIG)", err)
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
