@@ -1,0 +1,40 @@
+<script>
+  class {
+    MOUNT = true
+    GLOBAL = 'Drawer'
+
+    init() {
+      this.state.open = false
+      this.state.title = ''
+      this.state.text = ''
+    }
+
+    onMount() {
+      this.on('keydown', (event) => {
+        if (event.key === 'Escape' && this.state.open) this.close()
+      })
+    }
+
+    open(title, text) {
+      this.state.title = title
+      this.state.text = text
+      this.state.open = true
+    }
+
+    close() {
+      this.state.open = false
+    }
+  }
+</script>
+
+<aside class="drawer" class:d-none={!state.open} aria-label={state.title}>
+  {#if state.open}
+    <div class="drawer-head">
+      <strong>{state.title}</strong>
+      <button class="btn btn-ghost btn-icon" type="button" onclick="fez.close()" aria-label="Close">
+        <svg class="icon"><use href="#i-x"></use></svg>
+      </button>
+    </div>
+    <pre>{state.text}</pre>
+  {/if}
+</aside>

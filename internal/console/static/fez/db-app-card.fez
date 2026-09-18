@@ -1,0 +1,147 @@
+<script>
+  class {
+    PROPS = {
+      app: { type: Object, required: true },
+    }
+
+    beforeRender() {
+      const app = this.props.app
+      const web = (app.processes || []).find((process) => process.name === app.web_process && process.port)
+      this.state.serviceUrl = web ? `http://lvh.me:${web.port}` : ''
+      this.state.hosts = (app.hosts || []).join('  /  ') || 'Service port unavailable'
+      this.state.changing = app.state === 'starting' || app.state === 'stopping'
+      this.state.processes = app.processes || []
+      this.state.errorLog = (app.error_log || []).join('\n')
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Number(value || 0))
+    }
+
+    bytes(value) {
+      let amount = Number(value || 0)
+      if (amount < 1024) return `${amount} B`
+      const units = ['KB', 'MB', 'GB', 'TB']
+      let unit = units[0]
+      amount /= 1024
+      for (let index = 1; amount >= 1024 && index < units.length; index += 1) {
+        amount /= 1024
+        unit = units[index]
+      }
+      return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`
+    }
+
+    activity(value) {
+      if (!value || value.startsWith('0001-')) return 'No traffic'
+      const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000)
+      if (seconds < 10) return 'Just now'
+      if (seconds < 60) return `${seconds}s ago`
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+      return `${Math.floor(seconds / 86400)}d ago`
+    }
+
+    act(action) {
+      Boss.runAction(this.props.app.name, action)
+    }
+  }
+</script>
+
+<article class="card app-card" data-state={props.app.state}>
+  <div class="card-header">
+    <span class="app-icon" aria-hidden="true"><svg class="icon"><use href="#i-server"></use></svg></span>
+    <div class="app-identity">
+      <h3 class="app-name">{props.app.name}</h3>
+      {#if state.serviceUrl}
+        <a class="service-link" href={state.serviceUrl} target="_blank" rel="noreferrer">{state.serviceUrl}<svg class="icon"><use href="#i-external"></use></svg></a>
+      {:else}
+        <span class="service-host">{state.hosts}</span>
+      {/if}
+    </div>
+    <div class="app-status">
+      <span class="badge">{props.app.state}</span>
+      {#if props.app.maintenance}
+        <span class="badge badge-warning">maintenance</span>
+      {/if}
+    </div>
+    <div class="btn-list app-actions">
+      <a class="btn btn-sm" href="/logs?app={props.app.name}" target="_blank" rel="noreferrer">
+        <svg class="icon"><use href="#i-file-text"></use></svg>
+        Logs
+      </a>
+      <button class="btn btn-sm" class:btn-warning={props.app.maintenance} type="button" onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'}>
+        <svg class="icon"><use href="#i-tool"></use></svg>
+        {props.app.maintenance ? 'End maintenance' : 'Maintenance'}
+      </button>
+      <button class="btn btn-sm" type="button" onclick="fez.act('start')" disabled={props.app.state === 'running' || props.app.state === 'starting'}>
+        <svg class="icon"><use href="#i-play"></use></svg>
+        Start
+      </button>
+      <button class="btn btn-sm" type="button" onclick="fez.act('restart')" disabled={state.changing || props.app.state === 'stopped'}>
+        <svg class="icon"><use href="#i-rotate"></use></svg>
+        Restart
+      </button>
+      <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.act('stop')" disabled={state.changing || props.app.state === 'stopped'}>
+        <svg class="icon"><use href="#i-stop"></use></svg>
+        Stop
+      </button>
+    </div>
+  </div>
+
+  {#if props.app.error}
+    <div class="alert alert-danger app-error">
+      <svg class="icon"><use href="#i-alert"></use></svg>
+      <div>
+        <strong>{props.app.error}</strong>
+        {#if state.errorLog}
+          <span class="error-log-label">Last 1000 log lines</span>
+          <pre class="error-log">{state.errorLog}</pre>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <div class="datagrid">
+    <div class="datagrid-item">
+      <span class="subheader">Uptime</span>
+      <span class="datagrid-content">{props.app.uptime || '-'}</span>
+    </div>
+    <div class="datagrid-item">
+      <span class="subheader">Memory</span>
+      <span class="datagrid-content">{bytes(props.app.resources?.memory_bytes)}</span>
+    </div>
+    <div class="datagrid-item">
+      <span class="subheader">Last activity</span>
+      <span class="datagrid-content">{activity(props.app.last_activity)}</span>
+    </div>
+    <div class="datagrid-item">
+      <span class="subheader">Requests / hour</span>
+      <span class="datagrid-content">{number(props.app.request_rates?.last_hour)}</span>
+    </div>
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Process</th>
+        <th class="num">Port</th>
+        <th class="num">PID</th>
+        <th class="num">Restarts</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each state.processes as process}
+        <tr>
+          <td>{process.name}</td>
+          <td class="num mono">{process.port || '-'}</td>
+          <td class="num mono">{process.pid || '-'}</td>
+          <td class="num">{process.restarts || 0}</td>
+        </tr>
+      {:else}
+        <tr>
+          <td colspan="4" class="text-muted">No active processes</td>
+        </tr>
+      {/each}
+    </tbody>
+  </table>
+</article>

@@ -1,0 +1,29 @@
+<script>
+  class {
+    MOUNT = true
+    GLOBAL = 'Toast'
+
+    init() {
+      this.state.open = false
+      this.state.message = ''
+      this.state.error = false
+      this.state.timer = null
+    }
+
+    show(message, error = false) {
+      window.clearTimeout(this.state.timer)
+      this.state.message = message
+      this.state.error = error
+      this.state.open = true
+      this.state.timer = window.setTimeout(() => {
+        this.state.open = false
+      }, 5000)
+    }
+
+    onDestroy() {
+      window.clearTimeout(this.state.timer)
+    }
+  }
+</script>
+
+<div class="toast" class:show={state.open} class:error={state.error} role="status" aria-live="polite">{state.message}</div>

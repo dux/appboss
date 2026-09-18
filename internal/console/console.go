@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -119,13 +121,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
-		h.serveAsset(w, r, "index.html", "text/html; charset=utf-8")
+		h.serveAsset(w, r, "index.html")
 	case r.Method == http.MethodGet && r.URL.Path == "/logs":
 		h.writeLogs(w, r)
-	case r.Method == http.MethodGet && r.URL.Path == "/assets/app.css":
-		h.serveAsset(w, r, "app.css", "text/css; charset=utf-8")
-	case r.Method == http.MethodGet && r.URL.Path == "/assets/app.js":
-		h.serveAsset(w, r, "app.js", "text/javascript; charset=utf-8")
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/assets/"):
+		h.serveAsset(w, r, strings.TrimPrefix(r.URL.Path, "/assets/"))
 	case r.Method == http.MethodGet && r.URL.Path == "/api/bootstrap":
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
@@ -155,11 +155,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, path, contentType string) {
-	data, err := fs.ReadFile(h.static, path)
+// serveAsset answers from the embedded static folder. Fez component files (.fez) have no
+// registered type and go out as plain text, which is all the runtime needs to fetch them.
+func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, name string) {
+	if name == "" || !fs.ValidPath(name) {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := fs.ReadFile(h.static, name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
+	}
+	contentType := mime.TypeByExtension(path.Ext(name))
+	if contentType == "" {
+		contentType = "text/plain; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
@@ -410,7 +420,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
 
 func secureHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'")
+	// Fez compiles components with new Function, wires template handlers as inline on* attributes
+	// and injects scoped CSS as <style> nodes, so script and style need the unsafe-* sources.
+	// Every origin other than the console itself stays blocked.
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'none'; object-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")

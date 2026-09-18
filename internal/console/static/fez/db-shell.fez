@@ -1,0 +1,189 @@
+<script>
+  class {
+    GLOBAL = 'Boss'
+
+    init() {
+      this.state.view = this.viewFromHash()
+      this.state.viewer = ''
+      this.state.csrf = ''
+      this.globalState.apps = []
+      this.globalState.loaded = false
+      this.globalState.busy = false
+      this.globalState.status = 'Waiting for daemon'
+      this.globalState.restartRequired = []
+    }
+
+    onMount() {
+      this.on('hashchange', () => {
+        this.state.view = this.viewFromHash()
+      })
+      this.on(document, 'visibilitychange', () => {
+        if (!document.hidden) this.reload({ quiet: true })
+      })
+      this.setInterval(() => this.reload({ quiet: true }), 5000)
+      this.bootstrap()
+    }
+
+    viewFromHash() {
+      return location.hash === '#config' ? 'config' : 'overview'
+    }
+
+    initials() {
+      const name = (this.state.viewer || '').split('@')[0]
+      return name ? name.slice(0, 2).toUpperCase() : '..'
+    }
+
+    async api(path, options = {}) {
+      const headers = new Headers(options.headers || {})
+      if (options.body) headers.set('Content-Type', 'application/json')
+      if (options.method && options.method !== 'GET') headers.set('X-CSRF-Token', this.state.csrf)
+      const response = await fetch(path, { ...options, headers })
+      if (response.status === 401) {
+        window.location.reload()
+        throw new Error('Your session expired. Signing in again.')
+      }
+      if (response.status === 204) return null
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || `Request failed with status ${response.status}`)
+      return data
+    }
+
+    async apiText(path) {
+      const response = await fetch(path)
+      if (response.status === 401) {
+        window.location.reload()
+        throw new Error('Your session expired. Signing in again.')
+      }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || `Request failed with status ${response.status}`)
+      }
+      return response.text()
+    }
+
+    applyApps(apps, updatedAt = new Date().toISOString()) {
+      const fleet = Array.isArray(apps) ? [...apps].sort((a, b) => a.name.localeCompare(b.name)) : []
+      const time = new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      this.globalState.apps = fleet
+      this.globalState.loaded = true
+      this.globalState.status = `Updated ${time}`
+    }
+
+    setBusy(busy) {
+      this.globalState.busy = busy
+    }
+
+    async bootstrap() {
+      try {
+        const data = await this.api('/api/bootstrap')
+        this.state.csrf = data.csrf
+        this.state.viewer = data.viewer
+        this.applyApps(data.apps, data.updated_at)
+        this.globalState.restartRequired = data.restart_required || []
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async reload({ quiet = false } = {}) {
+      if (this.globalState.busy || document.hidden) return
+      try {
+        if (!quiet) this.setBusy(true)
+        const data = await this.api('/api/apps')
+        this.applyApps(data.apps, data.updated_at)
+      } catch (error) {
+        this.globalState.status = 'Daemon unavailable'
+        if (!quiet) Toast.show(error.message, true)
+      } finally {
+        if (!quiet) this.setBusy(false)
+      }
+    }
+
+    async runAction(app, action) {
+      if (this.globalState.busy) return
+      if (['stop', 'restart'].includes(action) && !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${app}?`)) return
+      try {
+        this.setBusy(true)
+        const data = await this.api('/api/action', { method: 'POST', body: JSON.stringify({ app, action }) })
+        this.applyApps(data.apps, data.updated_at)
+        Toast.show(`${app}: ${action.replace('-', ' ')} requested`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      } finally {
+        this.setBusy(false)
+      }
+    }
+
+    async rescan() {
+      if (this.globalState.busy) return
+      try {
+        this.setBusy(true)
+        const data = await this.api('/api/rescan', { method: 'POST', body: '{}' })
+        this.applyApps(data.apps)
+        this.globalState.restartRequired = data.restart_required || []
+        Fez.publish('config:changed')
+        if (data.warnings?.length) {
+          Toast.show(`Rescan finished with ${data.warnings.length} warning(s): ${data.warnings[0]}`, true)
+        } else {
+          Toast.show('App folders rescanned')
+        }
+      } catch (error) {
+        Toast.show(error.message, true)
+      } finally {
+        this.setBusy(false)
+      }
+    }
+
+    async logout() {
+      if (this.globalState.busy) return
+      try {
+        this.setBusy(true)
+        await this.api('/api/logout', { method: 'POST', body: '{}' })
+        window.location.assign('/')
+      } catch (error) {
+        Toast.show(error.message, true)
+        this.setBusy(false)
+      }
+    }
+  }
+</script>
+
+<header class="navbar">
+  <div class="container navbar-inner">
+    <a class="brand" href="/" aria-label="Deploy Boss home">
+      <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+      <span class="brand-name">Deploy Boss</span>
+    </a>
+    <div class="navbar-user">
+      <span class="avatar" aria-hidden="true">{initials()}</span>
+      <span class="user-block">
+        <strong>{state.viewer || 'Connecting...'}</strong>
+        <small>Administrator</small>
+      </span>
+      <button class="btn btn-ghost" type="button" onclick="fez.logout()">
+        <svg class="icon"><use href="#i-logout"></use></svg>
+        Sign out
+      </button>
+    </div>
+  </div>
+</header>
+
+<nav class="navbar-tabs" aria-label="Sections">
+  <div class="container">
+    <ul class="nav-tabs">
+      <li><a class="nav-link" class:active={state.view === 'overview'} href="#overview"><svg class="icon"><use href="#i-home"></use></svg>Overview</a></li>
+      <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Configuration</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main class="page-body">
+  <div class="container">
+    <section class="view" class:d-none={state.view !== 'overview'}>
+      <db-overview />
+    </section>
+    <section class="view" class:d-none={state.view !== 'config'}>
+      <db-config />
+    </section>
+  </div>
+</main>

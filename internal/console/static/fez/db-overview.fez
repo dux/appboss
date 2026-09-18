@@ -1,0 +1,79 @@
+<script>
+  class {
+    beforeRender() {
+      const apps = this.globalState.apps || []
+      this.state.running = apps.filter((app) => app.state === 'running').length
+      this.state.attention = apps.filter((app) => ['crashed', 'starting', 'stopping'].includes(app.state)).length
+      this.state.hourly = apps.reduce((total, app) => total + Number(app.request_rates?.last_hour || 0), 0)
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Number(value || 0))
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Overview</p>
+    <h1 class="page-title">Dashboard</h1>
+  </div>
+  <div class="page-actions">
+    <span class="refresh-status">{globalState.status}</span>
+    <button class="btn" type="button" onclick="Boss.reload()" disabled={globalState.busy}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      Refresh
+    </button>
+    <button class="btn btn-primary" type="button" onclick="Boss.rescan()" disabled={globalState.busy}>
+      <svg class="icon"><use href="#i-scan"></use></svg>
+      Rescan apps
+    </button>
+  </div>
+</div>
+
+<section class="stat-row" aria-label="Fleet summary">
+  <article class="card stat-card">
+    <span class="subheader">Configured</span>
+    <strong class="stat-value">{globalState.loaded ? number(globalState.apps.length) : '-'}</strong>
+    <span class="text-muted">applications</span>
+  </article>
+  <article class="card stat-card">
+    <span class="subheader">Running</span>
+    <strong class="stat-value">{globalState.loaded ? number(state.running) : '-'}</strong>
+    <span class="text-muted">healthy now</span>
+  </article>
+  <article class="card stat-card">
+    <span class="subheader">Attention</span>
+    <strong class="stat-value" class:text-danger={state.attention > 0}>{globalState.loaded ? number(state.attention) : '-'}</strong>
+    <span class="text-muted">crashed or changing</span>
+  </article>
+  <article class="card stat-card">
+    <span class="subheader">Traffic</span>
+    <strong class="stat-value">{globalState.loaded ? number(state.hourly) : '-'}</strong>
+    <span class="text-muted">requests this hour</span>
+  </article>
+</section>
+
+<div class="section-head">
+  <h2>Services</h2>
+  <span class="text-muted">{globalState.apps.length} {globalState.apps.length === 1 ? 'service' : 'services'}</span>
+</div>
+
+<div class="app-grid" aria-live="polite">
+  {#if !globalState.loaded}
+    <div class="card empty-state">
+      <span class="spinner" aria-hidden="true"></span>
+      <strong>Loading services</strong>
+      <span>Reading live state from the daemon.</span>
+    </div>
+  {:else}
+    {#each globalState.apps as app}
+      <db-app-card :app="app" />
+    {:else}
+      <div class="card empty-state">
+        <strong>No services found</strong>
+        <span>Add an app folder to the global config, then rescan.</span>
+      </div>
+    {/each}
+  {/if}
+</div>

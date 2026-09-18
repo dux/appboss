@@ -1,0 +1,349 @@
+<script>
+  class {
+    init() {
+      this.state.files = []
+      this.state.current = null
+      // Edits are kept per file so switching files never loses a change.
+      this.state.buffers = {}
+      this.state.revisions = {}
+      this.state.dirty = {}
+      this.state.conflict = null
+      this.state.busy = false
+      this.state.message = ''
+      this.state.messageError = false
+      this.subscribe('config:changed', () => this.loadFiles())
+    }
+
+    onMount() {
+      const text = this.state.text
+      this.on(text, 'input', () => this.onInput())
+      this.on(text, 'scroll', () => {
+        this.state.gutter.scrollTop = text.scrollTop
+      })
+      this.on(text, 'keydown', (event) => this.onKeydown(event))
+      this.on('beforeunload', (event) => {
+        if (Object.keys(this.state.dirty).length) event.preventDefault()
+      })
+      this.loadFiles()
+    }
+
+    beforeRender() {
+      const file = this.currentFile()
+      this.state.path = file ? file.path : 'Select a file'
+      this.state.canLocal = Boolean(file && file.id !== 'host' && !file.has_local)
+      this.state.canEffective = Boolean(file?.app)
+    }
+
+    currentFile() {
+      return this.state.files.find((file) => file.id === this.state.current) || null
+    }
+
+    label(file) {
+      return file.id === 'host' ? 'Host' : file.app
+    }
+
+    // --- editor DOM (kept out of the template, so typing never re-renders) ---
+
+    onInput() {
+      const file = this.currentFile()
+      if (!file) return
+      this.state.buffers[file.id] = this.state.text.value
+      const dirty = this.state.text.value !== file.saved
+      if (Boolean(this.state.dirty[file.id]) !== dirty) {
+        const next = { ...this.state.dirty }
+        if (dirty) next[file.id] = true
+        else delete next[file.id]
+        this.state.dirty = next
+      }
+      this.renderGutter()
+    }
+
+    onKeydown(event) {
+      const text = this.state.text
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        const { selectionStart, selectionEnd, value } = text
+        text.value = `${value.slice(0, selectionStart)}  ${value.slice(selectionEnd)}`
+        text.selectionStart = selectionStart + 2
+        text.selectionEnd = selectionStart + 2
+        this.onInput()
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        this.save()
+      }
+    }
+
+    renderGutter(errorLine = 0) {
+      const lines = this.state.text.value.split('\n').length
+      const numbers = []
+      for (let line = 1; line <= lines; line += 1) {
+        numbers.push(line === errorLine ? `<span class="error">${line}</span>` : String(line))
+      }
+      this.state.gutter.innerHTML = numbers.join('\n')
+      this.state.gutter.scrollTop = this.state.text.scrollTop
+    }
+
+    syncEditor() {
+      const file = this.currentFile()
+      const text = this.state.text
+      text.disabled = !file
+      text.value = file ? this.state.buffers[file.id] ?? file.saved : ''
+      this.renderGutter()
+    }
+
+    showMessage(message, error = false, line = 0) {
+      this.state.message = line ? `Line ${line}: ${message}` : message
+      this.state.messageError = error
+      this.renderGutter(line)
+      if (line) {
+        const lineHeight = parseFloat(getComputedStyle(this.state.text).lineHeight) || 20
+        this.state.text.scrollTop = Math.max(0, (line - 4) * lineHeight)
+        this.state.gutter.scrollTop = this.state.text.scrollTop
+      }
+    }
+
+    // --- data ---
+
+    async loadFiles() {
+      try {
+        const data = await Boss.api('/api/config')
+        const previous = new Map(this.state.files.map((file) => [file.id, file]))
+        this.state.files = (data.files || []).map((file) => ({ ...file, saved: previous.get(file.id)?.saved ?? '' }))
+        if (!this.currentFile() && this.state.files.length) {
+          await this.select(this.state.files[0].id)
+          return
+        }
+        this.syncEditor()
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async select(id) {
+      const file = this.state.files.find((candidate) => candidate.id === id)
+      if (!file) return
+      if (this.state.buffers[id] === undefined || file.saved === '') {
+        try {
+          const loaded = await Boss.api(`/api/config/file?id=${encodeURIComponent(id)}`)
+          Object.assign(file, loaded, { saved: loaded.contents })
+          if (this.state.buffers[id] === undefined) this.state.buffers[id] = loaded.contents
+          this.state.revisions[id] = loaded.revision
+        } catch (error) {
+          Toast.show(error.message, true)
+          return
+        }
+      }
+      this.state.current = id
+      this.state.message = ''
+      this.state.conflict = null
+      this.syncEditor()
+    }
+
+    async validate() {
+      const file = this.currentFile()
+      if (!file || this.state.busy) return
+      try {
+        this.state.busy = true
+        const result = await Boss.api('/api/config/validate', { method: 'POST', body: JSON.stringify({ id: file.id, contents: this.state.text.value }) })
+        if (result.ok) {
+          this.showMessage(`${file.source} is valid.`)
+        } else {
+          this.showMessage(result.error, true, result.line)
+        }
+      } catch (error) {
+        this.showMessage(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async save() {
+      const file = this.currentFile()
+      if (!file || this.state.busy) return
+      const contents = this.state.text.value
+      try {
+        this.state.busy = true
+        const response = await fetch('/api/config/file', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': Boss.state.csrf },
+          body: JSON.stringify({ id: file.id, contents, revision: this.state.revisions[file.id] }),
+        })
+        if (response.status === 401) {
+          window.location.reload()
+          return
+        }
+        const data = await response.json()
+        if (response.status === 409) {
+          this.state.conflict = data.file
+          this.showMessage('Saved copy is stale: the file changed on disk.', true)
+          return
+        }
+        if (!response.ok) {
+          this.showMessage(data.error || `Save failed with status ${response.status}`, true, data.line)
+          return
+        }
+        Object.assign(file, data.file, { saved: data.file.contents })
+        this.state.buffers[file.id] = data.file.contents
+        this.state.revisions[file.id] = data.file.revision
+        const dirty = { ...this.state.dirty }
+        delete dirty[file.id]
+        this.state.dirty = dirty
+        this.state.conflict = null
+        this.showMessage(`Saved ${file.source} and rescanned.`)
+        Boss.globalState.restartRequired = data.restart_required || []
+        if (data.invalid?.length) {
+          Toast.show(`Saved. Rescan found ${data.invalid.length} invalid app(s): ${data.invalid[0]}`, true)
+        } else {
+          Toast.show(`Saved ${file.source}. Apps rescanned.`)
+        }
+        await this.loadFiles()
+        Boss.reload({ quiet: true })
+      } catch (error) {
+        this.showMessage(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    useDisk() {
+      const file = this.currentFile()
+      const disk = this.state.conflict
+      if (!file || !disk) return
+      Object.assign(file, disk, { saved: disk.contents })
+      this.state.buffers[file.id] = disk.contents
+      this.state.revisions[file.id] = disk.revision
+      const dirty = { ...this.state.dirty }
+      delete dirty[file.id]
+      this.state.dirty = dirty
+      this.state.conflict = null
+      this.showMessage('Loaded the disk version. Your previous edit is gone from the editor.')
+      this.syncEditor()
+    }
+
+    async createOverride() {
+      const file = this.currentFile()
+      if (!file?.app || this.state.busy) return
+      try {
+        this.state.busy = true
+        const created = await Boss.api('/api/config/local', { method: 'POST', body: JSON.stringify({ app: file.app }) })
+        delete this.state.buffers[file.id]
+        await this.loadFiles()
+        const entry = this.state.files.find((candidate) => candidate.id === created.id)
+        if (entry) Object.assign(entry, created, { saved: created.contents })
+        this.state.buffers[created.id] = created.contents
+        this.state.revisions[created.id] = created.revision
+        this.state.current = created.id
+        this.syncEditor()
+        Toast.show(`Created ${created.source} for ${file.app}. Edits now survive deploys.`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async showEffective() {
+      const file = this.currentFile()
+      if (!file?.app) return
+      try {
+        Drawer.open(`Effective config: ${file.app}`, await Boss.apiText(`/api/config/effective?app=${encodeURIComponent(file.app)}`))
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    async showReference() {
+      try {
+        Drawer.open('Configuration reference', await Boss.apiText('/api/config/reference'))
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Configuration</p>
+    <h1 class="page-title">Config files</h1>
+  </div>
+  <div class="page-actions">
+    <span class="text-muted">{state.files.length} {state.files.length === 1 ? 'file' : 'files'}</span>
+  </div>
+</div>
+
+{#if globalState.restartRequired.length}
+  <div class="alert alert-warning" role="status">
+    <svg class="icon"><use href="#i-alert"></use></svg>
+    <div>
+      <strong>Restart required.</strong>
+      {globalState.restartRequired.join(', ')} changed in the host file and only {globalState.restartRequired.length === 1 ? 'applies' : 'apply'} on the next start.
+      Run <code>systemctl restart dboss</code>, or Ctrl-C the terminal session and run <code>dboss start</code> again.
+    </div>
+  </div>
+{/if}
+
+<div class="card config-editor">
+  <nav class="config-files list-group" aria-label="Config files">
+    {#each state.files as file}
+      <button class="list-group-item" class:active={file.id === state.current} type="button" onclick="fez.select('{file.id}')">
+        <strong>
+          {label(file)}
+          {#if state.dirty[file.id]}
+            <span class="dirty-dot" title="Unsaved changes"></span>
+          {/if}
+        </strong>
+        <span>{file.source}</span>
+      </button>
+    {/each}
+  </nav>
+  <div class="config-main">
+    <div class="card-header config-toolbar">
+      <span class="config-path">{state.path}</span>
+      <div class="btn-list">
+        {#if state.canLocal}
+          <button class="btn btn-sm" type="button" onclick="fez.createOverride()" disabled={state.busy}>
+            <svg class="icon"><use href="#i-plus"></use></svg>
+            Create server override
+          </button>
+        {/if}
+        <button class="btn btn-sm" type="button" onclick="fez.showEffective()" disabled={!state.canEffective}>
+          <svg class="icon"><use href="#i-file"></use></svg>
+          Effective config
+        </button>
+        <button class="btn btn-sm" type="button" onclick="fez.showReference()">
+          <svg class="icon"><use href="#i-book"></use></svg>
+          Reference
+        </button>
+        <button class="btn btn-sm" type="button" onclick="fez.validate()" disabled={!state.current || state.busy}>
+          <svg class="icon"><use href="#i-check"></use></svg>
+          Validate
+        </button>
+        <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={!state.current || state.busy}>
+          <svg class="icon"><use href="#i-save"></use></svg>
+          Save
+        </button>
+      </div>
+    </div>
+    <div class="editor" fez:keep="editor">
+      <pre class="gutter" fez:this="gutter" aria-hidden="true"></pre>
+      <textarea fez:this="text" spellcheck="false" wrap="off" aria-label="File contents" disabled></textarea>
+    </div>
+    {#if state.message}
+      <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+    {/if}
+    {#if state.conflict}
+      <div class="conflict">
+        <div class="conflict-head">
+          <div>
+            <strong>The file changed on disk while you edited it.</strong>
+            <span>Copy your change into the version below, or keep editing and save again.</span>
+          </div>
+          <button class="btn btn-sm" type="button" onclick="fez.useDisk()">Use disk version</button>
+        </div>
+        <pre>{state.conflict.contents}</pre>
+      </div>
+    {/if}
+  </div>
+</div>
