@@ -17,6 +17,7 @@
   --shadow: 0 1px 2px rgb(4 32 69 / 6%);
   --shadow-lg: 0 8px 24px rgb(4 32 69 / 14%);
   --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --row-label: calc((100% - 36px) / 4);
   --text-size-small: 14px;
   --text-size-normal: 16px;
   --text-size-big: 20px;
@@ -567,7 +568,7 @@ code {
 
 .service-row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) repeat(5, minmax(0, 1fr));
+  grid-template-columns: var(--row-label) repeat(5, minmax(0, 1fr));
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -610,7 +611,7 @@ code {
 
 .cron-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) auto;
+  grid-template-columns: var(--row-label) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) 90px;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -645,14 +646,14 @@ code {
 }
 
 .cron-row .btn {
-  justify-self: end;
+  justify-self: start;
 }
 
 /* --- Hook list (one row per deploy hook) ----------------------------------- */
 
 .hook-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 3fr) auto;
+  grid-template-columns: var(--row-label) minmax(0, 1.1fr) minmax(0, 3fr) 280px;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -688,7 +689,7 @@ code {
 
 .hook-actions {
   display: flex;
-  justify-self: end;
+  justify-self: start;
   gap: 6px;
 }
 
