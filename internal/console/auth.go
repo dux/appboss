@@ -411,16 +411,12 @@ func secureRequest(r *http.Request) bool {
 	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
 		return true
 	}
-	host, port := r.Host, ""
-	if parsedHost, parsedPort, err := net.SplitHostPort(r.Host); err == nil {
-		host, port = parsedHost, parsedPort
+	host := r.Host
+	if parsedHost, _, err := net.SplitHostPort(r.Host); err == nil {
+		host = parsedHost
 	}
-	local := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".lvh.me") || net.ParseIP(host) != nil
-	if local {
-		value, _ := strconv.Atoi(port)
-		return value <= 999
-	}
-	return true
+	local := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".lvh.me") || net.ParseIP(strings.Trim(host, "[]")) != nil
+	return !local
 }
 
 func randomToken() (string, error) {

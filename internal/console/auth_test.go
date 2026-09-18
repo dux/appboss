@@ -213,9 +213,15 @@ func TestSafeRedirectRejectsAuthorityAndCallbackPaths(t *testing.T) {
 }
 
 func TestSecureRequestFollowsAuthCogLocalRules(t *testing.T) {
-	local := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil)
-	if secureRequest(local) {
-		t.Fatal("high-port lvh.me request should use an HTTP callback")
+	for _, target := range []string{"http://boss.lvh.me/", "http://boss.lvh.me:8081/", "http://127.0.0.1:3100/"} {
+		if secureRequest(httptest.NewRequest(http.MethodGet, target, nil)) {
+			t.Fatalf("%s should use an HTTP callback", target)
+		}
+	}
+	forwarded := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me/", nil)
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	if !secureRequest(forwarded) {
+		t.Fatal("forwarded HTTPS should use an HTTPS callback")
 	}
 	production := httptest.NewRequest(http.MethodGet, "http://boss.example.com/", nil)
 	if !secureRequest(production) {
