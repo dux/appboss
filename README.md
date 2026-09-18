@@ -131,6 +131,12 @@ A stopped app is also started by the first proxied request, which gets a "starti
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `dboss login` sessions.
+`dboss start` prints the loopback address first, and the public address too when `management.url` is set:
+
+```
+management console: http://127.0.0.1:3100 (run `dboss login` for a one-time sign-in link)
+management console: https://boss.example.com (AuthCog sign-in)
+```
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, links to the process logs, and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
 
 ### Signing in

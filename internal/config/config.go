@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/mail"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -165,6 +166,7 @@ type Proxy struct {
 // Management is served by the proxy listener; any of the Host names selects the console.
 type Management struct {
 	Host List           `yaml:"host" json:"host"`
+	URL  string         `yaml:"url" json:"url"`
 	Auth ManagementAuth `yaml:"auth" json:"auth"`
 }
 
@@ -440,6 +442,15 @@ func validateManagement(management Management, proxyEnabled bool) error {
 			return keyErr("host", "duplicate entry %q", host)
 		}
 		hosts[strings.ToLower(host)] = true
+	}
+	if management.URL != "" {
+		parsed, err := url.Parse(management.URL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return &Error{Key: "url", Message: fmt.Sprintf("invalid URL %q", management.URL), Hint: "use the address operators open, e.g. https://boss.example.com"}
+		}
+		if !hosts[strings.ToLower(parsed.Hostname())] {
+			return keyErr("url", "host %q is not one of management.host", parsed.Hostname())
+		}
 	}
 	if !validHostname(management.Auth.Realm) {
 		return keyErr("auth.realm", "invalid hostname %q", management.Auth.Realm)

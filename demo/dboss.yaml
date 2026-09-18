@@ -5,6 +5,7 @@ proxy:
 
 management:
   host: boss.lvh.me
+  url: http://boss.lvh.me:8080
   auth:
     realm: auth.authcog.com
     admin_emails:

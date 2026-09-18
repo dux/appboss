@@ -159,6 +159,29 @@ func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	}
 }
 
+func TestManagementURLMustMatchAHost(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = "/apps"
+	cfg.Management.Host = List{"boss.example.com"}
+	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	for value, wantErr := range map[string]string{
+		"https://boss.example.com":      "",
+		"http://Boss.Example.com:8080/": "",
+		"boss.example.com":              "invalid URL",
+		"ftp://boss.example.com":        "invalid URL",
+		"https://other.example.com":     "not one of management.host",
+	} {
+		cfg.Management.URL = value
+		err := cfg.Validate()
+		if wantErr == "" && err != nil {
+			t.Errorf("%q: unexpected error %v", value, err)
+		}
+		if wantErr != "" && (err == nil || !strings.Contains(err.Error(), wantErr)) {
+			t.Errorf("%q: error = %v, want %q", value, err, wantErr)
+		}
+	}
+}
+
 func TestTrustedCIDRsMustParse(t *testing.T) {
 	cfg := Default()
 	cfg.Apps = "/apps"

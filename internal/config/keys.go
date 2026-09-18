@@ -53,6 +53,7 @@ var keyDocs = map[string]keyDoc{
 	"proxy.upstream.idle_conn_timeout":       {description: "idle keep-alive connection lifetime to an app"},
 	"proxy.upstream.max_idle_conns_per_app":  {description: "idle keep-alive connections kept per app"},
 	"management.host":                        {description: "one or more hostnames of the management console; omit to disable it", example: "boss.example.com"},
+	"management.url":                         {description: "public URL of the console as operators open it, printed on start; its host must be one of management.host", example: "https://boss.example.com"},
 	"management.auth.realm":                  {description: "AuthCog realm used for sign-in"},
 	"management.auth.admin_emails":           {description: "email addresses allowed into the console", example: "[admin@example.com]"},
 	"management.auth.session_ttl":            {description: "signed console session lifetime"},

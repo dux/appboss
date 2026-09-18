@@ -184,6 +184,12 @@ func (c CLI) start(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
+	if management != nil {
+		log.Printf("management console: http://127.0.0.1:%d (run `dboss login` for a one-time sign-in link)", managementPort)
+		if cfg.Management.URL != "" {
+			log.Printf("management console: %s (AuthCog sign-in)", cfg.Management.URL)
+		}
+	}
 	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", cfg.SourcePath, cfg.Socket, strings.Join(cfg.Proxy.Listen, ","), strings.Join(cfg.Management.Host, ","), managementPort)
 	<-ctx.Done()
 	for _, server := range servers {
