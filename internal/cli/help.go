@@ -35,7 +35,7 @@ var commands = []command{
 		details: []string{"Asks the running host to stop each app, then kills whatever still listens in the range. Use it to clean up after a crash or a stray process."},
 		options: []option{configOption, jsonOption}},
 	{name: "login", args: "", group: "Host session", summary: "print a one-time console URL that signs you in as cli@localhost",
-		details: []string{"The link is valid for 3 minutes and works once. It needs management.host to be set in the host config."},
+		details: []string{"The link is valid for 3 minutes and works once. It needs management.host to be set in the host config.", "It points at 127.0.0.1 and the console's own port (the first port of ports.range), so it works without DNS. From another machine, tunnel that port first: ssh -L 3100:127.0.0.1:3100 <host>."},
 		options: []option{socketOption, configOption, jsonOption}},
 
 	{name: "ls", args: "", group: "Apps", summary: "list apps with state, ports, uptime, last activity and memory",
@@ -60,9 +60,9 @@ var commands = []command{
 		details: []string{appArgumentNote, "HTML GETs get 503 with the page (maintenance_page, then <static>/503.html, then the built-in one); everything else an empty 503 with Retry-After: 30.", "The flag survives a host restart."},
 		options: []option{socketOption, configOption, jsonOption}},
 
-	{name: "config", args: "[app] [-d] | --reference", group: "Config", summary: "validate and print a config file, or the resolved config with defaults",
-		details: []string{"Validates first: an unknown key, a bad value or a syntax error is reported with file, line, key and a hint.", "Without -d the file is printed as written, comments included. With -d every default is filled in: the host config, or with an app that app's effective config after the host defaults and its own overrides are merged.", "--reference prints the annotated reference for every key, shipped inside the binary."},
-		options: []option{{"-d, --defaults", "print the resolved config with defaults instead of the file as written"}, {"--reference", "print the annotated configuration reference"}, configOption, jsonOption}},
+	{name: "config", args: "[app] [-d] | --keys [filter] | --reference", group: "Config", summary: "validate and print a config file, the resolved config, or the key reference",
+		details: []string{"Validates first: an unknown key, a bad value or a syntax error is reported with file, line, key and a hint.", "Without -d the file is printed as written, comments included. With -d every default is filled in: the host config, or with an app that app's effective config after the host defaults and its own overrides are merged.", "--keys lists every key with a one-line description and its default, or an example when it has none; a filter narrows by key name. --reference prints the long annotated reference, shipped inside the binary."},
+		options: []option{{"-d, --defaults", "print the resolved config with defaults instead of the file as written"}, {"--keys [filter]", "list every configuration key with description and default"}, {"--reference", "print the annotated configuration reference"}, configOption, jsonOption}},
 	{name: "check", args: "[-c path]", group: "Config", summary: "validate the config and every app without starting anything",
 		details: []string{"Exits 1 and lists each invalid app when something is wrong. Good as a pre-deploy step."},
 		options: []option{configOption, jsonOption}},

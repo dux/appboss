@@ -1,0 +1,72 @@
+<script>
+  const GROUPS = [
+    { id: 'host', title: 'Host keys', note: 'dboss.yaml with apps:' },
+    { id: 'app', title: 'App keys', note: 'dboss.yaml with procfile:' },
+    { id: 'shared', title: 'Shared app keys', note: 'defaults: in the host file, top level in an app file' },
+  ]
+
+  class {
+    init() {
+      this.state.keys = []
+      this.state.query = ''
+      this.state.groups = []
+      this.load()
+    }
+
+    async load() {
+      try {
+        this.state.keys = await Boss.api('/api/config/keys')
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    beforeRender() {
+      const query = this.state.query.trim().toLowerCase()
+      const matches = (key) => !query || key.path.includes(query) || key.description.toLowerCase().includes(query)
+      this.state.groups = GROUPS
+        .map((group) => ({ ...group, keys: this.state.keys.filter((key) => key.group === group.id && matches(key)) }))
+        .filter((group) => group.keys.length)
+    }
+
+    filter(value) {
+      this.state.query = value
+    }
+  }
+</script>
+
+<div class="keys">
+  <div class="keys-search">
+    <input type="search" id="config-keys-filter" placeholder="Filter keys" aria-label="Filter keys" fez:keep="search" oninput="fez.filter(this.value)" />
+  </div>
+  {#each state.groups as group}
+    <section class="keys-group">
+      <h3>{group.title} <small>{group.note}</small></h3>
+      {#each group.keys as key}
+        <div class="key-row">
+          <div class="key-name">
+            <code class="key-path">{key.path}</code>
+            <span class="key-type">{key.type}</span>
+          </div>
+          <div class="key-desc">
+            {key.description}
+            {#if key.per_process}
+              <span class="key-tag">per process</span>
+            {/if}
+          </div>
+          <div class="key-value">
+            {#if key.default}
+              <span class="text-muted">default</span>
+              <code>{key.default}</code>
+            {:else}
+              <span class="text-muted">e.g.</span>
+              <code>{key.example}</code>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </section>
+  {:else}
+    <div class="keys-empty">No keys match.</div>
+  {/each}
+</div>

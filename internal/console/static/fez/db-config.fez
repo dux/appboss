@@ -253,13 +253,6 @@
       }
     }
 
-    async showReference() {
-      try {
-        Drawer.open('Configuration reference', await Boss.apiText('/api/config/reference'))
-      } catch (error) {
-        Toast.show(error.message, true)
-      }
-    }
   }
 </script>
 
@@ -312,9 +305,9 @@
           <svg class="icon"><use href="#i-file"></use></svg>
           Effective config
         </button>
-        <button class="btn btn-sm" type="button" onclick="fez.showReference()">
-          <svg class="icon"><use href="#i-book"></use></svg>
-          Reference
+        <button class="btn btn-sm" type="button" onclick="Drawer.openKeys()">
+          <svg class="icon"><use href="#i-help"></use></svg>
+          Help
         </button>
         <button class="btn btn-sm" type="button" onclick="fez.validate()" disabled={!state.current || state.busy}>
           <svg class="icon"><use href="#i-check"></use></svg>

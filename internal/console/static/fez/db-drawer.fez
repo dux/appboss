@@ -5,6 +5,7 @@
 
     init() {
       this.state.open = false
+      this.state.mode = 'text'
       this.state.title = ''
       this.state.text = ''
     }
@@ -16,9 +17,25 @@
     }
 
     open(title, text) {
+      this.state.mode = 'text'
       this.state.title = title
       this.state.text = text
       this.state.open = true
+    }
+
+    openKeys() {
+      this.state.mode = 'keys'
+      this.state.title = 'Configuration keys'
+      this.state.text = ''
+      this.state.open = true
+    }
+
+    async showReference() {
+      try {
+        this.open('Configuration reference', await Boss.apiText('/api/config/reference'))
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
     }
 
     close() {
@@ -31,10 +48,22 @@
   {#if state.open}
     <div class="drawer-head">
       <strong>{state.title}</strong>
-      <button class="btn btn-ghost btn-icon" type="button" onclick="fez.close()" aria-label="Close">
-        <svg class="icon"><use href="#i-x"></use></svg>
-      </button>
+      <div class="btn-list">
+        {#if state.mode === 'keys'}
+          <button class="btn btn-sm" type="button" onclick="fez.showReference()">
+            <svg class="icon"><use href="#i-book"></use></svg>
+            Annotated reference
+          </button>
+        {/if}
+        <button class="btn btn-ghost btn-icon" type="button" onclick="fez.close()" aria-label="Close">
+          <svg class="icon"><use href="#i-x"></use></svg>
+        </button>
+      </div>
     </div>
-    <pre>{state.text}</pre>
+    {#if state.mode === 'keys'}
+      <db-config-keys />
+    {:else}
+      <pre>{state.text}</pre>
+    {/if}
   {/if}
 </aside>

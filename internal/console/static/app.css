@@ -878,7 +878,7 @@ code {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  width: min(760px, 100vw);
+  width: min(880px, 100vw);
   border-left: 1px solid var(--border);
   background: var(--card);
   box-shadow: var(--shadow-lg);
@@ -901,6 +901,126 @@ code {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 20px;
+}
+
+.drawer .fez-db-config-keys {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* --- Config key reference -------------------------------------------------- */
+
+.keys-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.keys-search input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+}
+
+.keys-search input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.keys-group {
+  padding: 0 20px 8px;
+}
+
+.keys-group h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 18px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.keys-group h3 small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.key-row {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr) 220px;
+  gap: 6px 16px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+
+.key-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.key-path {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.key-type {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.key-desc {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.key-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.key-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.key-value .text-muted {
+  margin-right: 4px;
+  font-size: 11px;
+}
+
+.keys-empty {
+  padding: 32px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .key-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
 .toast {
