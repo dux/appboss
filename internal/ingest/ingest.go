@@ -11,7 +11,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"app-boss/internal/logstore"
+	"app-boss/internal/logx"
 	"app-boss/internal/super"
 )
 
@@ -37,6 +37,7 @@ type Snapshotter interface {
 // log file has been tailed. logstore.Store is the production one.
 type Store interface {
 	RecordLogs(app string, entries []logstore.LogEntry) error
+	AppendLogs(app string, entries []logstore.LogEntry) error
 	TailOffsets(app string) (map[string]logstore.TailOffset, error)
 	SaveTailOffset(app, path string, inode uint64, offset int64) error
 	RemoveTailOffsets(app string, paths []string) error
@@ -104,12 +105,12 @@ func (m *Module) ingestStdout(snapshot super.Snapshot) {
 	}
 	sealed, err := m.sealer.SealLogs(snapshot.Name)
 	if err != nil {
-		log.Printf("seal logs %s: %v", snapshot.Name, err)
+		logx.Warnf("seal logs %s: %v", snapshot.Name, err)
 		return
 	}
 	for _, path := range sealed {
 		if err := m.ingestSealed(snapshot.Name, path); err != nil {
-			log.Printf("ingest %s: %v", path, err)
+			logx.Warnf("ingest %s: %v", path, err)
 		}
 	}
 }
@@ -119,7 +120,7 @@ func (m *Module) ingestSealed(app, path string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.store.RecordLogs(app, entries); err != nil {
+	if err := m.store.AppendLogs(app, entries); err != nil {
 		return err
 	}
 	return os.Remove(path)
@@ -129,10 +130,16 @@ func (m *Module) ingestSealed(app, path string) error {
 // the app's, not appboss's: they are never rotated or deleted here.
 func (m *Module) tailFiles(snapshot super.Snapshot) {
 	dir := filepath.Join(snapshot.Dir, "log")
-	files := logFiles(dir)
+	files, err := logFiles(dir)
+	if err != nil {
+		// Without a complete listing, a transient error would look like deleted files and the
+		// offsets would be dropped, re-reading whole files on the next pass. Skip this round.
+		logx.Warnf("list app log files %s: %v", dir, err)
+		return
+	}
 	tracked, err := m.store.TailOffsets(snapshot.Name)
 	if err != nil {
-		log.Printf("tail offsets %s: %v", snapshot.Name, err)
+		logx.Warnf("tail offsets %s: %v", snapshot.Name, err)
 		return
 	}
 	var stale []string
@@ -142,11 +149,11 @@ func (m *Module) tailFiles(snapshot super.Snapshot) {
 		}
 	}
 	if err := m.store.RemoveTailOffsets(snapshot.Name, stale); err != nil {
-		log.Printf("drop stale offsets %s: %v", snapshot.Name, err)
+		logx.Warnf("drop stale offsets %s: %v", snapshot.Name, err)
 	}
 	for path := range files {
 		if err := m.tailFile(snapshot, dir, path, tracked[path]); err != nil {
-			log.Printf("tail %s: %v", path, err)
+			logx.Warnf("tail %s: %v", path, err)
 		}
 	}
 }
@@ -182,18 +189,22 @@ func (m *Module) tailFile(snapshot super.Snapshot, dir, path string, previous lo
 		return err
 	}
 	if len(entries) > 0 {
-		if err := m.store.RecordLogs(snapshot.Name, entries); err != nil {
+		if err := m.store.AppendLogs(snapshot.Name, entries); err != nil {
 			return err
 		}
 	}
 	return m.store.SaveTailOffset(snapshot.Name, path, inode, next)
 }
 
-// logFiles lists the *.log files under dir, recursively. A missing directory is not an error.
-func logFiles(dir string) map[string]bool {
+// logFiles lists the *.log files under dir, recursively. A missing directory is empty, not an
+// error; any other walk error is returned so the caller does not mistake it for deleted files.
+func logFiles(dir string) (map[string]bool, error) {
 	files := map[string]bool{}
-	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		if strings.HasSuffix(entry.Name(), ".log") {
@@ -201,7 +212,10 @@ func logFiles(dir string) map[string]bool {
 		}
 		return nil
 	})
-	return files
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	return files, nil
 }
 
 func inodeOf(info os.FileInfo) uint64 {

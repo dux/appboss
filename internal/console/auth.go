@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +22,7 @@ import (
 	"time"
 
 	"app-boss/internal/config"
+	"app-boss/internal/logx"
 )
 
 const (
@@ -206,7 +206,7 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	profile, err := a.exchange(r.Context(), challenge.Destination, callback)
 	if err != nil {
-		log.Printf("management AuthCog exchange: %v", err)
+		logx.Errorf("management AuthCog exchange: %v", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}

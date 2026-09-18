@@ -61,10 +61,10 @@
           <li>One fixed <code>PORT</code> per app and process type, injected with <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>APPBOSS_SOCKET</code>.</li>
           <li><code>autostart</code> and <code>running.json</code> resume exactly the apps that should be up across host restarts.</li>
           <li><code>idle_stop</code> stops an idle app; the next request wakes it with a starting page and <code>Retry-After</code>.</li>
-          <li><code>health</code> readiness checks (<code>tcp</code> or <code>http:&lt;path&gt;</code>) with <code>health_interval</code> and <code>health_timeout</code>.</li>
-          <li>Restart policy (<code>restart</code>, <code>max_restarts</code>, <code>restart_backoff</code>) and a <code>crashed</code> state that alerts.</li>
+          <li><code>health</code> checks (<code>tcp</code> or <code>http:&lt;path&gt;</code>) with <code>health_interval</code> and <code>health_timeout</code>; the web process is polled for its whole lifetime.</li>
+          <li>Restart policy (<code>restart</code>, <code>max_restarts</code>, <code>restart_backoff</code>) and a <code>crashed</code> state that alerts; <code>unhealthy_threshold</code> restarts a web process that fails its liveness checks.</li>
           <li>Graceful drain on stop and restart: new requests get <code>503</code> while in-flight ones finish within <code>stop_timeout</code>.</li>
-          <li>Optional cgroup limits (<code>resources</code>, <code>memory_max</code>, <code>cpu_max</code>).</li>
+          <li>Optional cgroup v2 limits (<code>resources</code>, <code>memory_max</code>, <code>cpu_max</code>); falls back to process groups elsewhere.</li>
         </ul>
 
         <h3><a class="help-jump" onclick="fez.select('routing')">Routing &amp; proxy</a></h3>
@@ -177,6 +177,7 @@ health: http:/up</pre>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>appboss run</code>, the console, or a request starts it.</li>
           <li><code>health</code> is the readiness check: <code>tcp</code>, or <code>http:&lt;path&gt;</code> expecting a 2xx. A process that never passes it is restarted.</li>
+          <li>After the web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check).</li>
           <li><code>idle_stop</code> stops an app with no traffic; <code>0s</code> disables it.</li>
         </ul>
         <pre>procfile:

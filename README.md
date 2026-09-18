@@ -7,7 +7,7 @@ Daemon features are modules with a common lifecycle, so a new one (an ingestion 
 
 It sits directly behind Cloudflare as the origin.
 There is no TLS, no containers and no deploy logic; rsync, releases and rollback stay in lux-deploy, which calls `appboss` at the end of a deploy.
-The design documents are `./doc/plan.md` (v1) and `./doc/plan-v2.md` (proxy features, shared defaults, console config editor).
+The configuration reference ships in the binary: `appboss config --reference`, also embedded from `./internal/config/reference.yaml`.
 
 ## Requirements
 
@@ -102,9 +102,10 @@ Every app-level key can be set once under `defaults:` in the host file and repea
 ```
 $ appboss config --keys health
 Shared app keys  (defaults: in the host file, top level in an app file; per-process ones also under processes.<name>)
-  health           readiness check: tcp, or http:<path> expecting 2xx               tcp    per process
-  health_interval  poll interval of the readiness check                             500ms  per process
-  health_timeout   give-up time of the readiness check; counts as a failed restart  1m     per process
+  health               readiness check: tcp, or http:<path> expecting 2xx                                                  tcp    per process
+  health_interval      poll interval of the readiness and liveness checks                                                  500ms  per process
+  health_timeout       give-up time of the readiness check; counts as a failed restart                                     1m     per process
+  unhealthy_threshold  consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks  3      per process
 ```
 
 ## Commands
@@ -173,10 +174,10 @@ Each row belongs to a channel and the console's **Logs** viewer selects one:
 `REQUEST` rows and app log files are kept for `log_retention` (default `336h`, two weeks);
 `STDOUT` and the appboss daemon log for `stdout_retention` (default `3h`). Both are deleted by the
 daily prune; `log_retention: 0` disables the store for the app.
-A second daily job at `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database to reclaim the freed space; set it to `""` to disable.
+A second daily job at `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database to reclaim the freed space, including databases left behind by apps removed from the config; set it to `""` to disable.
 The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it
 seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
-ingestion module parses the sealed segment, batches it into the database and deletes the file.
+ingestion module parses the sealed segment, commits its rows to the database and only then deletes the file, so a transient database error cannot lose lines.
 A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
 keyword guess for the level.
 `appboss logs -f` still tails the live file, while `appboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
@@ -237,6 +238,8 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/appboss/health`): `200 {"app","state"}` while it runs and is not draining, `503` otherwise. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
+The supervisor also watches the web process for its whole lifetime: `health` (`tcp` or `http:<path>`) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
+
 `appboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
 
 ## Notifications
@@ -252,7 +255,7 @@ notify:
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, and `config-changed` a config write that changed a host key and needs a restart. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, and `config-changed` a config write that changed a host key and needs a restart. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
 
 ## Containers
 
@@ -365,6 +368,7 @@ internal/ports/       fixed port allocation inside ports.range
 internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the appboss daemon log into the store
+internal/logx/        leveled logger for appboss's own output (daemon.log_level)
 internal/sysinfo/     read-only host inspection: OS, load, memory, disks and installed toolchains
 internal/metrics/     Prometheus text rendered from the app snapshots
 internal/notify/      debounced operator webhook for crash and failure events
@@ -372,10 +376,9 @@ internal/version/     release version, overridden at build time
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console
-internal/res/         process placement (process groups)
+internal/res/         resource backend: process groups or cgroup v2 limits
 web/                  starting, crashed, maintenance and 404 pages
 demo/                 host config and two sample apps
-doc/                  design documents
 ```
 
 ## Validation

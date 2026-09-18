@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	"app-boss/internal/config"
 )
@@ -21,13 +22,14 @@ func (c CLI) systemd(args []string) error {
 	set.SetOutput(c.Err)
 	configPath := configFlag(set)
 	userName := set.String("user", "", "service user (default: current user)")
+	groupName := set.String("group", "", "service group (default: the user's primary group)")
 	binary := set.String("bin", "", "appboss binary (default: this executable)")
 	install := set.Bool("install", false, "write "+unitPath+", reload systemd and enable the service")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: appboss systemd [-c path] [--user name] [--bin path] [--install]")
+		return errors.New("usage: appboss systemd [-c path] [--user name] [--group name] [--bin path] [--install]")
 	}
 	path, err := findConfig(*configPath)
 	if err != nil {
@@ -53,7 +55,7 @@ func (c CLI) systemd(args []string) error {
 			return err
 		}
 	}
-	unit := renderUnit(cfg, *userName, *binary)
+	unit := renderUnit(cfg, *userName, *groupName, *binary)
 	if !*install {
 		_, err := fmt.Fprint(c.Out, unit)
 		return err
@@ -72,7 +74,13 @@ func (c CLI) systemd(args []string) error {
 	return nil
 }
 
-func renderUnit(cfg config.Config, userName, binary string) string {
+func renderUnit(cfg config.Config, userName, groupName, binary string) string {
+	// Omit Group unless asked: systemd then uses the user's primary group, which need not be
+	// named after the user.
+	groupLine := ""
+	if groupName != "" {
+		groupLine = "Group=" + quoteUnit(groupName) + "\n"
+	}
 	return fmt.Sprintf(`[Unit]
 Description=appboss host %s
 After=network.target
@@ -80,8 +88,7 @@ After=network.target
 [Service]
 Type=simple
 User=%s
-Group=%s
-WorkingDirectory=%s
+%sWorkingDirectory=%s
 ExecStart=%s start -c %s
 Restart=always
 RestartSec=2
@@ -93,5 +100,11 @@ LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-`, cfg.Dir, userName, userName, cfg.Dir, binary, cfg.SourcePath)
+`, cfg.Dir, quoteUnit(userName), groupLine, quoteUnit(cfg.Dir), quoteUnit(binary), quoteUnit(cfg.SourcePath))
+}
+
+// quoteUnit wraps a value in systemd's double quotes and escapes the two characters systemd
+// treats specially there, so a path with spaces survives.
+func quoteUnit(value string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 }

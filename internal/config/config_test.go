@@ -346,6 +346,27 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	}
 }
 
+func TestUnhealthyThreshold(t *testing.T) {
+	if got := Default().Defaults.UnhealthyThreshold; got != 3 {
+		t.Fatalf("default unhealthy_threshold = %d, want 3", got)
+	}
+	defaults := Default().Defaults
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: 5\nprocesses:\n  web:\n    unhealthy_threshold: 0\n"), "appboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.UnhealthyThreshold != 5 {
+		t.Fatalf("app unhealthy_threshold = %d, want 5", app.UnhealthyThreshold)
+	}
+	if got := app.Process("web").UnhealthyThreshold; got != 0 {
+		t.Fatalf("process unhealthy_threshold = %d, want 0", got)
+	}
+	_, err = ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: -1\n"), "appboss.yaml", defaults)
+	if err == nil || !strings.Contains(err.Error(), "unhealthy_threshold") {
+		t.Fatalf("negative unhealthy_threshold: got %v", err)
+	}
+}
+
 func TestAppRejectsInvalidWebKeys(t *testing.T) {
 	defaults := Default().Defaults
 	for _, test := range []struct{ name, data, want string }{

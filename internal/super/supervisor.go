@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -27,6 +26,7 @@ import (
 	"app-boss/internal/apps"
 	"app-boss/internal/config"
 	"app-boss/internal/hook"
+	"app-boss/internal/logx"
 	"app-boss/internal/notify"
 	"app-boss/internal/ports"
 	"app-boss/internal/res"
@@ -96,10 +96,12 @@ type Manager struct {
 	cfg             config.Config
 	ports           *ports.Allocator
 	backend         res.Backend
+	cgroup          res.Backend
 	echo            *Echo
 	secrets         *hook.Store
 	sink            notify.Sink
 	closeOnce       sync.Once
+	rescanMu        sync.Mutex
 	mu              sync.RWMutex
 	apps            map[string]*appRuntime
 	restartRequired []string
@@ -153,7 +155,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -212,9 +214,21 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 	return nil
 }
 
+// selectCgroup returns the cgroup backend when the host can use it and the defaults do not force
+// procgroup. A box without the cgroup v2 hierarchy gets nil and the procgroup fallback.
+func selectCgroup(cfg config.Config) res.Backend {
+	if cfg.Defaults.Resources == "procgroup" {
+		return nil
+	}
+	if !res.Available(res.DefaultCgroupRoot) {
+		return nil
+	}
+	return res.NewCgroup(res.DefaultCgroupRoot)
+}
+
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, secrets: m.secrets, sink: m.sink, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, sink: m.sink, restart: m.Restart, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	runtime.syncCron(time.Now())
@@ -324,7 +338,7 @@ func (m *Manager) traffic(name string) *atomic.Int64 {
 // console start does not.
 func (m *Manager) Wake(name string) {
 	if err := m.Start(name); err != nil {
-		log.Printf("wake %s: %v", name, err)
+		logx.Warnf("wake %s: %v", name, err)
 		m.emit(notify.Event{Type: "wake-failed", App: name, Error: err.Error(), Time: time.Now()})
 	}
 }
@@ -440,13 +454,14 @@ func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecR
 		return ExecResult{}, response.err
 	}
 	spec := response.app
-	resolved, err := resolveExecutable(argv[0], spec.Dir, spec.Env["PATH"])
+	env := processEnv(spec, "exec", 0, m.cfg.Socket, spec.Config.Env)
+	resolved, err := resolveExecutable(argv[0], spec.Dir, env["PATH"])
 	if err != nil {
 		return ExecResult{}, err
 	}
 	command := exec.Command(resolved, argv[1:]...)
 	command.Dir = spec.Dir
-	command.Env = environment(spec, "exec", 0, m.cfg.Socket, nil)
+	command.Env = envSlice(env)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
@@ -583,6 +598,8 @@ func (m *Manager) Ports() map[string]int { return m.ports.Entries() }
 // Rescan re-reads the root file and every app folder. App-level keys, including host defaults,
 // apply live; host keys are left as started and reported through RestartRequired.
 func (m *Manager) Rescan() ([]error, error) {
+	m.rescanMu.Lock()
+	defer m.rescanMu.Unlock()
 	scanConfig := m.cfg
 	var restartRequired []string
 	if m.cfg.SourcePath != "" {
@@ -597,17 +614,26 @@ func (m *Manager) Rescan() ([]error, error) {
 	if err != nil {
 		return invalid, err
 	}
+	// Mutate the app table under the lock, but call into each runtime outside it: a runtime call
+	// can block on the app goroutine (a stop waits for processes), and holding m.mu would stall
+	// every snapshot and proxy host lookup behind it.
+	type update struct {
+		runtime *appRuntime
+		spec    *apps.App
+	}
+	var updates []update
+	var removed []*appRuntime
 	m.mu.Lock()
 	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults
 	if len(restartRequired) > 0 && strings.Join(restartRequired, ",") != strings.Join(m.restartRequired, ",") {
-		log.Printf("rescan: %s changed in %s, restart appboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
+		logx.Infof("rescan: %s changed in %s, restart appboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
 	}
 	m.restartRequired = restartRequired
 	seen := map[string]bool{}
 	for _, spec := range discovered {
 		seen[spec.Name] = true
 		if runtime := m.apps[spec.Name]; runtime != nil {
-			runtime.call(request{kind: requestUpdate, spec: spec})
+			updates = append(updates, update{runtime: runtime, spec: spec})
 		} else if err := m.assignPorts(spec); err != nil {
 			invalid = append(invalid, apps.ScanError{Name: spec.Name, Err: err})
 		} else {
@@ -616,13 +642,19 @@ func (m *Manager) Rescan() ([]error, error) {
 	}
 	for name, runtime := range m.apps {
 		if !seen[name] {
-			_ = runtime.call(request{kind: requestStop})
-			runtime.cancel()
-			<-runtime.closed
+			removed = append(removed, runtime)
 			delete(m.apps, name)
 		}
 	}
 	m.mu.Unlock()
+	for _, item := range updates {
+		item.runtime.call(request{kind: requestUpdate, spec: item.spec})
+	}
+	for _, runtime := range removed {
+		_ = runtime.call(request{kind: requestStop})
+		runtime.cancel()
+		<-runtime.closed
+	}
 	m.syncHookSecrets(discovered)
 	return invalid, nil
 }
@@ -831,6 +863,7 @@ type appRuntime struct {
 	spec             *apps.App
 	allocator        *ports.Allocator
 	backend          res.Backend
+	cgroup           res.Backend
 	echo             *Echo
 	requests         chan request
 	events           chan processEvent
@@ -840,6 +873,7 @@ type appRuntime struct {
 	hooks            map[string]*jobState
 	secrets          *hook.Store
 	sink             notify.Sink
+	restart          func(string) error
 	failures         map[string]int
 	lastActivity     time.Time
 	lastError        string
@@ -857,6 +891,15 @@ func (a *appRuntime) query(req request) response {
 		return <-req.reply
 	case <-a.ctx.Done():
 		return response{err: errors.New("supervisor closed")}
+	}
+}
+
+// sendEvent delivers one event to the runtime loop, giving up if the runtime is shutting down so
+// a background probe can never block forever on a full channel.
+func (a *appRuntime) sendEvent(event processEvent) {
+	select {
+	case a.events <- event:
+	case <-a.ctx.Done():
 	}
 }
 
@@ -1001,7 +1044,7 @@ func (a *appRuntime) start() error {
 		a.state = Running
 		a.lastActivity = time.Now()
 	} else {
-		go a.readiness(web, a.spec.Config.Process(web.name), a.webHost())
+		go a.monitor(web, a.spec.Config.Process(web.name), a.webHost())
 	}
 	return nil
 }
@@ -1106,11 +1149,12 @@ func (a *appRuntime) maxStopTimeout(names []string) time.Duration {
 
 func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	defaults := a.spec.Config.Process(name)
+	env := processEnv(a.spec, name, port, a.cfg.Socket, defaults.Env)
 	var cmd *exec.Cmd
 	if defaults.Shell {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)
 	} else {
-		resolved, err := resolveExecutable(command.Argv[0], a.spec.Dir, a.spec.Env["PATH"])
+		resolved, err := resolveExecutable(command.Argv[0], a.spec.Dir, env["PATH"])
 		if err != nil {
 			return fmt.Errorf("start %s: %w", name, err)
 		}
@@ -1119,7 +1163,7 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 		cmd = exec.Command(resolved, command.Argv[1:]...)
 	}
 	cmd.Dir = a.spec.Dir
-	cmd.Env = environment(a.spec, name, port, a.cfg.Socket, defaults.Env)
+	cmd.Env = envSlice(env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// The port is fixed for this process, so whatever holds it is stale and gets killed first.
 	killed, err := clearPort(port, defaults.StopTimeout.Value())
@@ -1127,7 +1171,7 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 	if len(killed) > 0 {
-		log.Printf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
+		logx.Warnf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
 	}
 	logFile, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
 	if err != nil {
@@ -1141,7 +1185,12 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 		_ = logFile.Close()
 		return fmt.Errorf("start %s: %w", name, err)
 	}
-	if err := a.backend.Place(cmd.Process.Pid); err != nil {
+	backend := a.backendFor(name)
+	limits := res.Limits{MemoryMax: int64(defaults.MemoryMax), CPUMax: defaults.CPUMax}
+	if backend.Name() != "cgroup" && (limits.MemoryMax > 0 || limits.CPUMax > 0) {
+		logx.Warnf("%s/%s: memory_max/cpu_max are ignored by the %s backend", a.spec.Name, name, backend.Name())
+	}
+	if err := backend.Place(a.spec.Name, name, cmd.Process.Pid, limits); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		_ = logFile.Close()
@@ -1174,12 +1223,18 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	return nil
 }
 
-// readiness polls the web process until it answers. It is given the process defaults and host
-// instead of reading the app spec, which a rescan may replace on the runtime goroutine.
-func (a *appRuntime) readiness(p *process, defaults config.Process, host string) {
+// monitor walks the web process from spawn to exit. It first polls until the process answers
+// (readiness, bounded by health_timeout), then keeps polling and reports a health failure after
+// unhealthy_threshold consecutive failures. The runtime handles that exactly like a crash, so
+// restart policy, backoff and max_restarts apply. unhealthy_threshold: 0 stops after readiness.
+// It is given the process defaults and host instead of reading the app spec, which a rescan may
+// replace on the runtime goroutine.
+func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
 	ticker := time.NewTicker(defaults.HealthInterval.Value())
 	defer ticker.Stop()
+	ready := false
+	failures := 0
 	lastError := errors.New("healthcheck timed out")
 	for {
 		select {
@@ -1190,14 +1245,29 @@ func (a *appRuntime) readiness(p *process, defaults config.Process, host string)
 		case <-ticker.C:
 			ok, err := healthCheck(defaults.Health, p.port, host, a.cfg.Proxy.Upstream.DialTimeout.Value())
 			if ok {
-				a.events <- processEvent{kind: "ready", proc: p}
-				return
+				if !ready {
+					ready = true
+					a.sendEvent(processEvent{kind: "ready", proc: p})
+					if defaults.UnhealthyThreshold <= 0 {
+						return
+					}
+				}
+				failures = 0
+				continue
 			}
 			if err != nil {
 				lastError = err
 			}
-			if time.Now().After(deadline) {
-				a.events <- processEvent{kind: "health-failed", proc: p, err: lastError}
+			if !ready {
+				if time.Now().After(deadline) {
+					a.sendEvent(processEvent{kind: "health-failed", proc: p, err: lastError})
+					return
+				}
+				continue
+			}
+			failures++
+			if failures >= defaults.UnhealthyThreshold {
+				a.sendEvent(processEvent{kind: "health-failed", proc: p, err: fmt.Errorf("unhealthy after %d failed checks: %w", failures, lastError)})
 				return
 			}
 		}
@@ -1269,7 +1339,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		if err == nil {
 			err = a.spawn(name, command, port)
 			if err == nil && name == a.spec.Config.WebProcess {
-				go a.readiness(a.processes[name], a.spec.Config.Process(name), a.webHost())
+				go a.monitor(a.processes[name], a.spec.Config.Process(name), a.webHost())
 			}
 		}
 		if err != nil {
@@ -1373,7 +1443,7 @@ func (a *appRuntime) snapshot() Snapshot {
 		if p := a.processes[name]; p != nil {
 			entry.State = Running
 			entry.PID, entry.Port, entry.StartedAt = p.pid, p.port, p.startedAt
-			stats, _ := a.backend.Stats([]int{p.pid})
+			stats, _ := a.backendFor(name).Stats(a.spec.Name, name, []int{p.pid})
 			entry.MemoryBytes = stats.MemoryBytes
 			total.MemoryBytes += stats.MemoryBytes
 			total.CPUPercent += stats.CPUPercent
@@ -1439,9 +1509,19 @@ func (a *appRuntime) cleanupProcess(name string) {
 	if p.log != nil {
 		_ = p.log.Close()
 	}
+	_ = a.backendFor(name).Release(a.spec.Name, name)
 	close(p.done)
 	delete(a.processes, name)
 	a.removePID(name)
+}
+
+// backendFor picks the resource backend of one process: cgroup unless the process asked for
+// procgroup or cgroups are unavailable on this host.
+func (a *appRuntime) backendFor(process string) res.Backend {
+	if a.cgroup != nil && a.spec.Config.Process(process).Resources != "procgroup" {
+		return a.cgroup
+	}
+	return a.backend
 }
 
 func (a *appRuntime) writePID(p *process) error {
@@ -1476,32 +1556,6 @@ func resolveExecutable(name, dir, pathValue string) (string, error) {
 	return "", fmt.Errorf("executable %q not found in app PATH", name)
 }
 
-func (a *appRuntime) rotateLogs() {
-	for name := range a.processes {
-		defaults := a.spec.Config.Process(name)
-		_ = rotateActiveLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
-	}
-}
-
-func rotateActiveLog(path string, maximum int64, keep int) error {
-	info, err := os.Stat(path)
-	if err != nil || maximum <= 0 || info.Size() < maximum {
-		return err
-	}
-	if keep <= 0 {
-		return os.Truncate(path, 0)
-	}
-	shiftRotatedLogs(path, keep)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path+".1", data, 0o640); err != nil {
-		return err
-	}
-	return os.Truncate(path, 0)
-}
-
 // shiftRotatedLogs drops the oldest archive and renames .i to .i+1, making room for a new .1.
 func shiftRotatedLogs(path string, keep int) {
 	_ = os.Remove(fmt.Sprintf("%s.%d", path, keep))
@@ -1512,12 +1566,18 @@ func shiftRotatedLogs(path string, keep int) {
 
 func alive(pid int) bool { err := syscall.Kill(pid, 0); return err == nil || err == syscall.EPERM }
 
-func environment(spec *apps.App, processName string, port int, socket string, extra map[string]string) []string {
+// processEnv assembles one process environment in the documented priority order, lowest first:
+// the daemon environment and mise (spec.Env), then config env (extra, including a process
+// override), then .env and .env.local, then the values appboss injects.
+func processEnv(spec *apps.App, processName string, port int, socket string, extra map[string]string) map[string]string {
 	values := map[string]string{}
 	for key, value := range spec.Env {
 		values[key] = value
 	}
 	for key, value := range extra {
+		values[key] = value
+	}
+	for key, value := range spec.FileEnv {
 		values[key] = value
 	}
 	// Cron jobs run outside the port table, so port 0 means no PORT is injected.
@@ -1527,6 +1587,10 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
 	values["APPBOSS_SOCKET"] = socket
+	return values
+}
+
+func envSlice(values map[string]string) []string {
 	keys := slices.Sorted(maps.Keys(values))
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {

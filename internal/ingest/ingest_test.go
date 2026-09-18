@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,12 +45,21 @@ type fakeApps struct{ snapshots []super.Snapshot }
 func (f fakeApps) Snapshots() []super.Snapshot { return f.snapshots }
 
 type memorySink struct {
-	entries []logstore.LogEntry
-	offsets map[string]logstore.TailOffset
-	removed []string
+	entries   []logstore.LogEntry
+	offsets   map[string]logstore.TailOffset
+	removed   []string
+	appendErr error
 }
 
 func (m *memorySink) RecordLogs(_ string, entries []logstore.LogEntry) error {
+	m.entries = append(m.entries, entries...)
+	return nil
+}
+
+func (m *memorySink) AppendLogs(_ string, entries []logstore.LogEntry) error {
+	if m.appendErr != nil {
+		return m.appendErr
+	}
 	m.entries = append(m.entries, entries...)
 	return nil
 }
@@ -94,6 +104,32 @@ func TestRunOnceIngestsSealedStdoutThenDeletes(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("sealed segment should be removed after ingest: %v", err)
+	}
+}
+
+func TestCommitFailureKeepsSegmentAndOffset(t *testing.T) {
+	segment := filepath.Join(t.TempDir(), "web.log.1.sealed")
+	if err := os.WriteFile(segment, []byte("hello\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "log")
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(logDir, "production.log")
+	if err := os.WriteFile(path, []byte("one\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sink := &memorySink{appendErr: errors.New("database unavailable")}
+	module := New(&fakeSealer{paths: []string{segment}}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module.runOnce()
+
+	if _, err := os.Stat(segment); err != nil {
+		t.Fatalf("a segment must survive a failed commit: %v", err)
+	}
+	if sink.offsets[path].Offset != 0 {
+		t.Fatalf("offset must not advance on a failed commit: %+v", sink.offsets[path])
 	}
 }
 

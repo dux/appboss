@@ -14,27 +14,31 @@ type Stats struct {
 	Approximate bool    `json:"approximate"`
 }
 
+// Limits are the per-process resource limits from config. They are only enforced by the cgroup
+// backend; the procgroup backend ignores them.
+type Limits struct {
+	MemoryMax int64
+	CPUMax    int
+}
+
+// Backend places a process in a resource domain, reports its use and releases the domain when the
+// process is gone. app is the app name, proc the procfile process name.
 type Backend interface {
-	Place(pid int) error
-	KillAll(pids []int, signal syscall.Signal) error
-	Stats(pids []int) (Stats, error)
+	Name() string
+	Place(app, proc string, pid int, limits Limits) error
+	Stats(app, proc string, pids []int) (Stats, error)
+	Release(app, proc string) error
 }
 
 type Procgroup struct{}
 
-func (Procgroup) Place(int) error { return nil }
+func (Procgroup) Name() string { return "procgroup" }
 
-func (Procgroup) KillAll(pids []int, signal syscall.Signal) error {
-	var first error
-	for _, pid := range pids {
-		if err := syscall.Kill(-pid, signal); err != nil && err != syscall.ESRCH && first == nil {
-			first = err
-		}
-	}
-	return first
-}
+func (Procgroup) Place(string, string, int, Limits) error { return nil }
 
-func (Procgroup) Stats(pids []int) (Stats, error) {
+func (Procgroup) Release(string, string) error { return nil }
+
+func (Procgroup) Stats(_ string, _ string, pids []int) (Stats, error) {
 	stats := Stats{Approximate: true}
 	for _, pid := range pids {
 		output, err := exec.Command("ps", "-o", "rss=,%cpu=", "-p", strconv.Itoa(pid)).Output()

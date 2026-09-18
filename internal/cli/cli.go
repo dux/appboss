@@ -732,9 +732,9 @@ func (c CLI) exec(args []string) error {
 	if parsed.json {
 		encoded, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Fprintln(c.Out, string(encoded))
-		return nil
+	} else {
+		fmt.Fprint(c.Out, result.Output)
 	}
-	fmt.Fprint(c.Out, result.Output)
 	if result.ExitCode != 0 {
 		return &exitError{code: result.ExitCode}
 	}

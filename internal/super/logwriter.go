@@ -58,9 +58,11 @@ func (w *logWriter) Write(p []byte) (int, error) {
 }
 
 // rotate shifts the size archives (.1, .2, ...) and truncates the live file, keeping the fd the
-// process already writes through.
+// process already writes through. keep <= 0 keeps no archives: the file is truncated in place, so
+// log_max_size still bounds it.
 func (w *logWriter) rotate() {
 	if w.keep <= 0 {
+		_ = w.file.Truncate(0)
 		return
 	}
 	shiftRotatedLogs(w.path, w.keep)

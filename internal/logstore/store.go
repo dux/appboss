@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -17,11 +16,19 @@ import (
 	"sync"
 	"time"
 
+	"app-boss/internal/logx"
 	"app-boss/internal/super"
 	_ "modernc.org/sqlite"
 )
 
 const queueSize = 4096
+
+// Cap on rows kept for retry when the database is temporarily unwritable. Beyond it the oldest
+// rows are dropped so a permanently broken database cannot grow the heap without bound.
+const (
+	maxBufferedRequests = 8192
+	maxBufferedLogs     = 32768
+)
 
 // RequestEntry is one proxied request. Process is the service that answered it.
 type RequestEntry struct {
@@ -252,6 +259,20 @@ func (s *Store) RecordLogs(app string, entries []LogEntry) error {
 	}
 }
 
+// AppendLogs inserts a batch of process-log rows and waits for the commit. The file tailer and
+// sealed-segment ingester use it so they only delete a segment or advance an offset once its rows
+// are durably stored; RecordLogs is the fire-and-forget path for rows whose source can be retried.
+func (s *Store) AppendLogs(app string, entries []LogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	w, err := s.writer(app)
+	if err != nil {
+		return err
+	}
+	return w.insert(nil, entries)
+}
+
 func (s *Store) writer(app string) (*appWriter, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -279,6 +300,44 @@ func (s *Store) writer(app string) (*appWriter, error) {
 	s.apps[app] = w
 	go w.loop(s.flush)
 	return w, nil
+}
+
+// writerForPrune returns the writer for an app, opening an existing database without creating a
+// new one. The host database is always opened because its audit table outlives any log rows.
+func (s *Store) writerForPrune(app string) (*appWriter, error) {
+	s.mu.Lock()
+	w := s.apps[app]
+	s.mu.Unlock()
+	if w != nil {
+		return w, nil
+	}
+	if app != HostApp {
+		if _, err := os.Stat(filepath.Join(s.dir, app, "appboss.sqlite")); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return s.writer(app)
+}
+
+// diskApps lists every app with a database on disk, including apps that were removed from config.
+func (s *Store) diskApps() []string {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, statErr := os.Stat(filepath.Join(s.dir, entry.Name(), "appboss.sqlite")); statErr == nil {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
 }
 
 var schema = []string{
@@ -311,7 +370,20 @@ func (w *appWriter) loop(flush time.Duration) {
 			return
 		}
 		if err := w.insert(requests, logs); err != nil {
-			log.Printf("logstore insert: %v", err)
+			// Keep the batch for the next tick so a transient failure does not lose rows; cap
+			// it so a permanently broken database cannot grow the buffer without bound.
+			logx.Errorf("logstore insert: %v", err)
+			if len(requests) > maxBufferedRequests {
+				drop := len(requests) - maxBufferedRequests
+				logx.Warnf("logstore: dropping %d request rows after repeated insert failures", drop)
+				requests = requests[:copy(requests, requests[drop:])]
+			}
+			if len(logs) > maxBufferedLogs {
+				drop := len(logs) - maxBufferedLogs
+				logx.Warnf("logstore: dropping %d log rows after repeated insert failures", drop)
+				logs = logs[:copy(logs, logs[drop:])]
+			}
+			return
 		}
 		requests, logs = requests[:0], logs[:0]
 	}
@@ -430,10 +502,10 @@ func (s *Store) SearchLogs(app string, filter LogFilter) ([]LogEntry, error) {
 		args = append(args, stamp(filter.Before))
 	}
 	from := "logs"
-	if filter.Query != "" {
+	if term := ftsQuery(filter.Query); term != "" {
 		from = "logs JOIN logs_fts ON logs_fts.rowid = logs.rowid"
 		where = append(where, "logs_fts MATCH ?")
-		args = append(args, ftsQuery(filter.Query))
+		args = append(args, term)
 	}
 	query := `SELECT logs.ts, logs.source, logs.process, logs.stream, logs.level, logs.message, logs.request_id, logs.raw FROM ` + from
 	if len(where) > 0 {
@@ -730,12 +802,17 @@ func (s *Store) RemoveTailOffsets(app string, paths []string) error {
 	if err != nil {
 		return err
 	}
+	tx, err := w.db.Begin()
+	if err != nil {
+		return err
+	}
 	for _, path := range paths {
-		if _, err := w.db.Exec(`DELETE FROM tail_offsets WHERE path = ?`, path); err != nil {
+		if _, err := tx.Exec(`DELETE FROM tail_offsets WHERE path = ?`, path); err != nil {
+			_ = tx.Rollback()
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ftsQuery wraps a user phrase so each token is a prefix match and keeps FTS syntax out of the
@@ -810,20 +887,21 @@ func percentile(sorted []int64, q float64) float64 {
 // log files use retention, process stdout and the appboss daemon log use stdoutRetention. A zero
 // retention disables the whole store, matching Request/RecordLogs.
 func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetention time.Duration) error {
-	s.mu.Lock()
-	w := s.apps[app]
-	s.mu.Unlock()
+	w, err := s.writerForPrune(app)
+	if err != nil {
+		return err
+	}
+	if w == nil {
+		return nil
+	}
 	// Audit rows live in the host database and use their own retention, independent of the log
 	// retention that may be disabled for the app.
-	if app == HostApp && w != nil && s.auditRetention > 0 {
+	if app == HostApp && s.auditRetention > 0 {
 		if _, err := w.db.ExecContext(ctx, `DELETE FROM audit WHERE ts < ?`, stamp(time.Now().Add(-s.auditRetention))); err != nil {
 			return err
 		}
 	}
 	if retention <= 0 {
-		return nil
-	}
-	if w == nil {
 		return nil
 	}
 	if _, err := w.db.ExecContext(ctx, `DELETE FROM requests WHERE ts < ?`, stamp(time.Now().Add(-retention))); err != nil {
@@ -857,13 +935,25 @@ func (s *Store) pruneLoop() {
 			timer.Stop()
 			return
 		case <-timer.C:
+			known := map[string]bool{}
 			for _, snapshot := range s.snapshotter.Snapshots() {
+				known[snapshot.Name] = true
 				if err := s.Prune(s.ctx, snapshot.Name, snapshot.LogRetention, snapshot.StdoutRetention); err != nil {
-					log.Printf("log prune %s: %v", snapshot.Name, err)
+					logx.Warnf("log prune %s: %v", snapshot.Name, err)
+				}
+			}
+			// Databases left behind by apps removed from the config keep the host retention so
+			// they cannot grow forever after removal.
+			for _, app := range s.diskApps() {
+				if known[app] || app == HostApp {
+					continue
+				}
+				if err := s.Prune(s.ctx, app, s.hostRetention, s.hostRetention); err != nil {
+					logx.Warnf("log prune %s: %v", app, err)
 				}
 			}
 			if err := s.Prune(s.ctx, HostApp, s.hostRetention, s.hostRetention); err != nil {
-				log.Printf("log prune %s: %v", HostApp, err)
+				logx.Warnf("log prune %s: %v", HostApp, err)
 			}
 		}
 	}
@@ -909,13 +999,17 @@ func (s *Store) vacuumLoop() {
 			timer.Stop()
 			return
 		case <-timer.C:
-			for _, snapshot := range s.snapshotter.Snapshots() {
-				if err := s.Vacuum(s.ctx, snapshot.Name); err != nil {
-					log.Printf("log vacuum %s: %v", snapshot.Name, err)
+			// Vacuum every database on disk, including databases left by removed apps.
+			for _, app := range s.diskApps() {
+				if app == HostApp {
+					continue
+				}
+				if err := s.Vacuum(s.ctx, app); err != nil {
+					logx.Warnf("log vacuum %s: %v", app, err)
 				}
 			}
 			if err := s.Vacuum(s.ctx, HostApp); err != nil {
-				log.Printf("log vacuum %s: %v", HostApp, err)
+				logx.Warnf("log vacuum %s: %v", HostApp, err)
 			}
 		}
 	}

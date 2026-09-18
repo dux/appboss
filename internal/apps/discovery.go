@@ -33,8 +33,11 @@ type App struct {
 	Commands map[string]Command `json:"commands"`
 	Cron     map[string]CronJob `json:"cron"`
 	Hooks    map[string]Hook    `json:"hooks"`
-	Env      map[string]string  `json:"-"`
-	Config   config.App         `json:"config"`
+	// Env is the daemon environment plus mise; FileEnv is .env overlaid by .env.local. Config
+	// env sits between them at process start, so it is applied when the process env is built.
+	Env     map[string]string `json:"-"`
+	FileEnv map[string]string `json:"-"`
+	Config  config.App        `json:"config"`
 }
 
 // CronJob is one scheduled command with its schedule parsed once at load time.
@@ -233,15 +236,17 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		}
 		merge(env, mise)
 	}
-	merge(env, appCfg.Env)
+	// .env and .env.local stay separate so they can outrank the config env when the process
+	// environment is assembled (see supervisor.environment).
+	fileEnv := map[string]string{}
 	for _, filename := range []string{".env", ".env.local"} {
 		values, envErr := LoadEnv(filepath.Join(dir, filename))
 		if envErr != nil {
 			return nil, envErr
 		}
-		merge(env, values)
+		merge(fileEnv, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Env: env, Config: appCfg}, nil
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Env: env, FileEnv: fileEnv, Config: appCfg}, nil
 }
 
 // buildCron parses every schedule once so the supervisor only has to work with next run times.

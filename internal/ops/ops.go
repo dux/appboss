@@ -348,7 +348,9 @@ func (s *Service) RotateHook(name, hook string) (super.HookInfo, error) {
 }
 
 // HookSecret returns the effective secret of one hook, for verifying a ping.
-func (s *Service) HookSecret(name, hook string) (string, error) { return s.runtime.HookSecret(name, hook) }
+func (s *Service) HookSecret(name, hook string) (string, error) {
+	return s.runtime.HookSecret(name, hook)
+}
 
 // Exec runs one command in the app's environment and returns its combined output.
 func (s *Service) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {

@@ -50,6 +50,41 @@ func TestRecordSearchAndPrune(t *testing.T) {
 	}
 }
 
+func TestAppendLogsCommitsSynchronously(t *testing.T) {
+	dir := t.TempDir()
+	// A long flush interval keeps the async loop out of the picture, so the row can only be
+	// visible through the synchronous AppendLogs path.
+	store := New(dir, time.Hour, nil, "", "", time.Hour, 0)
+	defer store.Close()
+	if err := store.AppendLogs("demo", []LogEntry{{Time: time.Now(), Source: "file", Process: "production.log", Level: "info", Message: "synced", Raw: "synced"}}); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := store.SearchLogs("demo", LogFilter{Query: "synced"})
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("AppendLogs row must be visible immediately: %v %+v", err, logs)
+	}
+}
+
+func TestPruneCleansDatabaseOfRemovedApp(t *testing.T) {
+	dir := t.TempDir()
+	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	if err := store.AppendLogs("gone", []LogEntry{{Time: time.Now().Add(-2 * time.Hour), Source: "file", Process: "app.log", Level: "info", Message: "old", Raw: "old"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A later session has no snapshot for the removed app, only its database on disk.
+	reopened := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	defer reopened.Close()
+	if err := reopened.Prune(context.Background(), "gone", time.Hour, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if logs, err := reopened.SearchLogs("gone", LogFilter{}); err != nil || len(logs) != 0 {
+		t.Fatalf("orphan rows should be pruned: %v %+v", err, logs)
+	}
+}
+
 func TestChannelsFilterAndPruneBySource(t *testing.T) {
 	dir := t.TempDir()
 	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)

@@ -4,18 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"maps"
 	"net/url"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"app-boss/internal/apps"
 	"app-boss/internal/config"
+	"app-boss/internal/logx"
 	"app-boss/internal/schedule"
 )
 
@@ -89,10 +90,12 @@ type jobRun struct {
 	startedAt time.Time
 	waited    chan struct{}
 	log       *logWriter
+	timeout   *time.Timer
+	finished  atomic.Bool
 }
 
 // cronName and hookName are the log channel and file basename of a job.
-func cronName(job string) string { return "cron-" + job }
+func cronName(job string) string  { return "cron-" + job }
 func hookName(name string) string { return "hook-" + name }
 
 // syncCron reconciles the runtime's schedule with the current app spec: new jobs are added, a
@@ -154,7 +157,7 @@ func (a *appRuntime) cronTick(now time.Time) {
 		}
 		state.next = state.schedule.Next(now)
 		if err := a.startJob(state, now, false); err != nil {
-			log.Printf("%s/%s: %v", a.spec.Name, state.channel, err)
+			logx.Warnf("%s/%s: %v", a.spec.Name, state.channel, err)
 		}
 	}
 }
@@ -164,6 +167,9 @@ func (a *appRuntime) runCron(name string, now time.Time) error {
 	state := a.cron[name]
 	if state == nil {
 		return fmt.Errorf("unknown cron job %q", name)
+	}
+	if state.disabled {
+		return fmt.Errorf("cron job %q is disabled", name)
 	}
 	return a.startJob(state, now, true)
 }
@@ -189,11 +195,12 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return nil
 	}
 	command := state.command
+	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env)
 	var cmd *exec.Cmd
 	if a.spec.Config.Shell {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)
 	} else {
-		resolved, err := resolveExecutable(command.Argv[0], a.spec.Dir, a.spec.Env["PATH"])
+		resolved, err := resolveExecutable(command.Argv[0], a.spec.Dir, env["PATH"])
 		if err != nil {
 			state.lastError = err.Error()
 			return err
@@ -208,7 +215,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return err
 	}
 	cmd.Dir = a.spec.Dir
-	cmd.Env = environment(a.spec, state.name, 0, a.cfg.Socket, nil)
+	cmd.Env = envSlice(env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout, cmd.Stderr = writer, writer
 	_, _ = writer.Write(jobLine(state.kind, state.name, "start", 0, 0, nil))
@@ -223,6 +230,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 	state.lastError = ""
 	go func() {
 		err := cmd.Wait()
+		run.finished.Store(true)
 		close(run.waited)
 		exitCode := 0
 		if err != nil {
@@ -238,7 +246,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		}
 	}()
 	if state.timeout > 0 {
-		time.AfterFunc(state.timeout, func() {
+		run.timeout = time.AfterFunc(state.timeout, func() {
 			select {
 			case a.events <- processEvent{kind: "job-timeout", job: run}:
 			case <-a.ctx.Done():
@@ -253,6 +261,9 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 	if state == nil || !state.runs[run] {
 		return
 	}
+	if run.timeout != nil {
+		run.timeout.Stop()
+	}
 	delete(state.runs, run)
 	duration := time.Since(run.startedAt)
 	state.lastEnd = time.Now()
@@ -264,33 +275,25 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 	if state.kind == "hook" && exitCode != 0 {
 		a.emit("hook-failed", fmt.Sprintf("hook %s exited with code %d", state.name, exitCode))
 	}
-	// A deploy hook that finished cleanly brings the app onto the new release.
+	// A deploy hook that finished cleanly brings the app onto the new release. The restart runs
+	// through the manager so it drains first and never touches app state off the app goroutine.
 	if state.kind == "hook" && state.restart && exitCode == 0 {
 		a.emit("deploy", fmt.Sprintf("deploy hook %s succeeded", state.name))
-		a.restartApp(state)
+		if a.restart != nil {
+			name := a.spec.Name
+			go func() { _ = a.restart(name) }()
+		}
 	}
 }
 
 func (a *appRuntime) jobTimeout(run *jobRun) {
 	state := run.state
-	if state == nil || !state.runs[run] {
+	if state == nil || !state.runs[run] || run.finished.Load() {
 		return
 	}
 	state.lastError = fmt.Sprintf("timed out after %s", state.timeout)
 	_, _ = run.log.Write(jobLine(state.kind, state.name, "timeout", 0, state.timeout, nil))
 	_ = syscall.Kill(-run.cmd.Process.Pid, syscall.SIGKILL)
-}
-
-// restartApp restarts or, for a stopped app, starts it so a restart: true hook always ends on
-// the new release. Failures land in the snapshot error like any other failed start.
-func (a *appRuntime) restartApp(state *jobState) {
-	if err := a.stop(); err != nil {
-		state.lastError = err.Error()
-		return
-	}
-	if err := a.start(); err != nil {
-		state.lastError = err.Error()
-	}
 }
 
 // stopJobs kills and reaps every running job and closes the job logs. It is called when the app
@@ -308,7 +311,13 @@ func (a *appRuntime) stopJobs() {
 
 func (a *appRuntime) stopJob(state *jobState) {
 	for run := range state.runs {
-		_ = syscall.Kill(-run.cmd.Process.Pid, syscall.SIGKILL)
+		if run.timeout != nil {
+			run.timeout.Stop()
+		}
+		// Only signal while the process is unreaped; after Wait a reused pid must not be hit.
+		if !run.finished.Load() {
+			_ = syscall.Kill(-run.cmd.Process.Pid, syscall.SIGKILL)
+		}
 		<-run.waited
 		delete(state.runs, run)
 	}

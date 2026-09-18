@@ -1,6 +1,7 @@
 package super
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,9 +14,34 @@ import (
 	"testing"
 	"time"
 
+	"app-boss/internal/apps"
 	"app-boss/internal/config"
 	"app-boss/internal/ports"
 )
+
+func TestProcessEnvPriority(t *testing.T) {
+	spec := &apps.App{
+		Name:    "demo",
+		Env:     map[string]string{"A": "daemon", "B": "daemon", "PATH": "/bin"},
+		FileEnv: map[string]string{"B": "file", "C": "file"},
+	}
+	spec.Config.Env = map[string]string{"A": "config", "B": "config", "D": "config"}
+	// extra stands in for Process(name).Env: app config env plus a process override.
+	extra := map[string]string{"A": "config", "B": "config", "D": "config", "E": "override"}
+	values := processEnv(spec, "web", 123, "/run/boss.sock", extra)
+	want := map[string]string{
+		"A": "config", "B": "file", "C": "file", "D": "config", "E": "override",
+		"PATH": "/bin", "PORT": "123", "APP_NAME": "demo", "PROC_TYPE": "web", "APPBOSS_SOCKET": "/run/boss.sock",
+	}
+	for key, value := range want {
+		if values[key] != value {
+			t.Errorf("%s = %q, want %q", key, values[key], value)
+		}
+	}
+	if len(values) != len(want) {
+		t.Errorf("unexpected env keys: %v", values)
+	}
+}
 
 func TestBackoffCaps(t *testing.T) {
 	values := []any{"1s", 2.0, "5s"}
@@ -415,12 +441,57 @@ func TestSupervisorHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	defer listener.Close()
+	// First incarnation of an app started with HANG_ONCE passes readiness, then drops its
+	// listener while staying alive, so only the liveness check can notice it. The restarted
+	// incarnation finds the marker and serves normally.
+	if marker := os.Getenv("BOSS_TEST_HELPER_HANG_ONCE"); marker != "" {
+		if _, statErr := os.Stat(marker); errors.Is(statErr, os.ErrNotExist) {
+			_ = os.WriteFile(marker, []byte("1"), 0o640)
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				_ = listener.Close()
+			}()
+			select {}
+		}
+	}
 	for {
 		connection, acceptErr := listener.Accept()
 		if acceptErr != nil {
 			os.Exit(0)
 		}
 		_ = connection.Close()
+	}
+}
+
+func TestSupervisorRestartsUnhealthyWebProcess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "hang-once")
+	extra := fmt.Sprintf("env:\n  BOSS_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\n", marker)
+	cfg := supervisorTestConfigApp(t, [2]int{32200, 32220}, extra)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(invalid) != 0 {
+		t.Fatalf("invalid apps: %v", invalid)
+	}
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := manager.Snapshot("demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.State == Running && len(snapshot.Processes) == 1 && snapshot.Processes[0].Restarts >= 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("web process was not restarted after going unhealthy: %+v", snapshot)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

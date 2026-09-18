@@ -131,11 +131,17 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unit := renderUnit(cfg, "deploy", "/usr/local/bin/appboss")
-	for _, want := range []string{"User=deploy\n", "WorkingDirectory=" + dir + "\n", "ExecStart=/usr/local/bin/appboss start -c " + path + "\n", "WantedBy=multi-user.target\n"} {
+	unit := renderUnit(cfg, "deploy", "", "/usr/local/bin/appboss")
+	for _, want := range []string{"User=\"deploy\"\n", "WorkingDirectory=\"" + dir + "\"\n", "ExecStart=\"/usr/local/bin/appboss\" start -c \"" + path + "\"\n", "WantedBy=multi-user.target\n"} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
+	}
+	if strings.Contains(unit, "Group=") {
+		t.Fatalf("Group should be omitted by default:\n%s", unit)
+	}
+	if grouped := renderUnit(cfg, "deploy", "staff", "/usr/local/bin/appboss"); !strings.Contains(grouped, "Group=\"staff\"\n") {
+		t.Fatalf("explicit group missing:\n%s", grouped)
 	}
 }
 

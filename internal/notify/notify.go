@@ -5,6 +5,7 @@ package notify
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,14 +52,16 @@ type Notifier struct {
 	client  *http.Client
 	enabled map[string]bool
 
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu     sync.Mutex
+	last   map[string]time.Time
+	closed bool
 
 	sent    atomic.Int64
 	failed  atomic.Int64
 	dropped atomic.Int64
 
 	queue   chan Event
+	done    chan struct{}
 	closeMu sync.Once
 }
 
@@ -71,6 +74,7 @@ func New(cfg Config) *Notifier {
 		n.enabled[event] = true
 	}
 	n.queue = make(chan Event, queueSize)
+	n.done = make(chan struct{})
 	go n.run()
 	return n
 }
@@ -85,27 +89,37 @@ func (n *Notifier) Send(event Event) {
 	}
 	key := event.App + "/" + event.Type
 	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return
+	}
 	if n.cfg.MinInterval > 0 {
 		if last, ok := n.last[key]; ok && event.Time.Sub(last) < n.cfg.MinInterval {
-			n.mu.Unlock()
 			return
 		}
 	}
-	n.last[key] = event.Time
-	n.mu.Unlock()
 	select {
 	case n.queue <- event:
+		// Only a queued event starts the quiet period; a dropped one must not suppress the next.
+		n.last[key] = event.Time
 	default:
 		n.dropped.Add(1)
 	}
 }
 
-// Close drains the queue and stops the worker. It is safe to call more than once.
+// Close stops accepting events and waits for the worker to drain the queue. Safe to call more
+// than once.
 func (n *Notifier) Close() {
 	if n.queue == nil {
 		return
 	}
-	n.closeMu.Do(func() { close(n.queue) })
+	n.closeMu.Do(func() {
+		n.mu.Lock()
+		n.closed = true
+		close(n.queue)
+		n.mu.Unlock()
+		<-n.done
+	})
 }
 
 // Stats reports the counters since the notifier started.
@@ -114,6 +128,7 @@ func (n *Notifier) Stats() Stats {
 }
 
 func (n *Notifier) run() {
+	defer close(n.done)
 	for event := range n.queue {
 		if err := n.post(event); err != nil {
 			n.failed.Add(1)
@@ -128,16 +143,27 @@ func (n *Notifier) post(event Event) error {
 	if err != nil {
 		return err
 	}
-	// One retry covers a transient DNS or connection error without holding the queue long.
+	// One retry covers a transient DNS or connection error without holding the queue long. A
+	// client error is final: retrying a bad URL or payload only delays the next event.
 	for attempt := 0; attempt < 2; attempt++ {
 		err = n.request(body)
 		if err == nil {
 			return nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		var status httpStatusError
+		if errors.As(err, &status) && status.code >= 400 && status.code < 500 && status.code != http.StatusTooManyRequests {
+			return err
+		}
+		if attempt == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 	return err
 }
+
+type httpStatusError struct{ code int }
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("webhook returned %d", e.code) }
 
 func (n *Notifier) request(body []byte) error {
 	request, err := http.NewRequest(http.MethodPost, n.cfg.URL, bytes.NewReader(body))
@@ -155,7 +181,7 @@ func (n *Notifier) request(body []byte) error {
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned %d", response.StatusCode)
+		return httpStatusError{code: response.StatusCode}
 	}
 	return nil
 }

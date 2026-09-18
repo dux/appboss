@@ -24,6 +24,7 @@ import (
 	"app-boss/internal/ctl"
 	"app-boss/internal/ingest"
 	"app-boss/internal/logstore"
+	"app-boss/internal/logx"
 	"app-boss/internal/module"
 	"app-boss/internal/notify"
 	"app-boss/internal/ops"
@@ -50,6 +51,7 @@ type Daemon struct {
 // the console and the control socket. Listeners bind here, so a returned error leaves nothing
 // behind.
 func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
+	logx.SetLevel(cfg.Daemon.LogLevel)
 	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, err
@@ -60,7 +62,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		return nil, err
 	}
 	if len(cleared) > 0 {
-		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
+		logx.Infof("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
 	allocator, managementPort := newAllocator(cfg)
 	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: cfg.Notify.Format, Events: cfg.Notify.Events, MinInterval: cfg.Notify.MinInterval.Value(), Headers: cfg.Notify.Headers})
@@ -70,7 +72,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		return nil, err
 	}
 	for _, scanErr := range invalid {
-		log.Printf("skip invalid app: %v", scanErr)
+		logx.Warnf("skip invalid app: %v", scanErr)
 	}
 	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Daemon.VacuumAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
@@ -128,12 +130,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	if d.management != nil {
-		log.Printf("management console: http://127.0.0.1:%d (run `appboss login` for a one-time sign-in link)", d.managementPort)
+		logx.Infof("management console: http://127.0.0.1:%d (run `appboss login` for a one-time sign-in link)", d.managementPort)
 		if d.cfg.Management.URL != "" {
-			log.Printf("management console: %s (AuthCog sign-in)", d.cfg.Management.URL)
+			logx.Infof("management console: %s (AuthCog sign-in)", d.cfg.Management.URL)
 		}
 	}
-	log.Printf("appboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
+	logx.Infof("appboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
 	<-ctx.Done()
 	return nil
 }
@@ -200,7 +202,7 @@ func startHTTPServer(name, address string, handler http.Handler) (*http.Server, 
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("%s: %v", name, err)
+			logx.Errorf("%s: %v", name, err)
 		}
 	}()
 	return server, nil

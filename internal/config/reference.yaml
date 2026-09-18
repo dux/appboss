@@ -176,10 +176,15 @@ defaults:
   #   tcp          connect to PORT succeeds
   #   http:<path>  GET http://127.0.0.1:PORT<path> returns 2xx
   health: tcp
-  # Poll interval and give-up time for the readiness check. On give-up the process
-  # is killed and counts as one failed restart.
+  # Poll interval of the readiness and liveness checks, and give-up time for readiness.
+  # On readiness give-up the process is killed and counts as one failed restart.
   health_interval: 500ms
   health_timeout: 60s
+  # After the web process is ready it keeps being polled at health_interval. This many
+  # consecutive failures restart it (kill, then the restart policy, backoff and max_restarts
+  # apply); one success resets the count. 0 disables the ongoing check, so only readiness runs.
+  # Applies to web_process only; workers are covered by their exit and restart policy.
+  unhealthy_threshold: 3
 
   # Graceful stop: SIGTERM to the process group, wait, then SIGKILL.
   stop_timeout: 20s
@@ -199,7 +204,7 @@ defaults:
 
   # Process log files (stdout+stderr of each proctype).
   log_max_size: 10m         # rotate when the file exceeds this
-  log_keep: 5               # rotated files kept per proctype
+  log_keep: 5               # rotated files kept per proctype; 0 truncates the file in place
   log_tail_lines: 500       # lines kept in memory for `appboss logs` without -f
 
   # Log store (SQLite written by the proxy and the ingestion module).
@@ -222,10 +227,12 @@ defaults:
   env: {}
   #   RAILS_ENV: production
 
-  # Resource backend. auto picks cgroup on Linux when /sys/fs/cgroup/boss is writable,
-  # otherwise procgroup. Force one with cgroup | procgroup.
+  # Resource backend. auto picks cgroup on Linux when the cgroup v2 hierarchy under
+  # /sys/fs/cgroup/boss is writable, otherwise procgroup; force one with cgroup | procgroup.
+  # The cgroup backend gives every (app, process) its own cgroup and applies the limits below.
   resources: auto
-  # Limits, only enforced by the cgroup backend. Ignored with a warning on procgroup.
+  # Limits, only enforced by the cgroup backend. A host that falls back to procgroup logs a
+  # warning and ignores them.
   memory_max: 0             # 0 = unlimited. e.g. 512m
   cpu_max: 0                # 0 = unlimited. percent of one core, e.g. 150
 
@@ -315,7 +322,7 @@ notify:
   # Events to post:
   #   crash           an app entered the crashed state
   #   restart-loop    a process failed and restarted again (second failure and later)
-  #   health-timeout  the readiness check gave up on the web process
+  #   health-timeout  the readiness check gave up, or the web process failed its liveness checks
   #   wake-failed     a request tried to start a stopped app and the start failed
   #   hook-failed     a deploy hook exited non-zero
   #   deploy          a deploy hook with restart: true succeeded and the app rolled

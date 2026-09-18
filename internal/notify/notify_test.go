@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -117,6 +118,36 @@ func TestDebounceDropsRepeatedEvents(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if got := server.count(); got != 1 {
 		t.Fatalf("webhook called %d times, want 1", got)
+	}
+}
+
+func TestSendAfterCloseIsSafe(t *testing.T) {
+	server := newCapture()
+	httpServer := server.server()
+	defer httpServer.Close()
+	notifier := New(testConfig(httpServer.URL))
+	notifier.Close()
+	notifier.Send(Event{Type: "crash", App: "web"})
+	notifier.Close()
+}
+
+func TestClientErrorIsNotRetried(t *testing.T) {
+	var requests atomic.Int64
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer httpServer.Close()
+	notifier := New(testConfig(httpServer.URL))
+	defer notifier.Close()
+	notifier.Send(Event{Type: "crash", App: "web"})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && notifier.Stats().Failed == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("a 4xx must not be retried: %d requests", got)
 	}
 }
 

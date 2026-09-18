@@ -1,7 +1,7 @@
 # app-boss agent notes
 
 Single Go binary (`appboss`) that supervises, proxies and logs the apps on one host.
-Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the design before changing behavior.
+Read `./README.md` for usage and the embedded configuration reference (`./internal/config/reference.yaml`, printed by `appboss config --reference`) before changing behavior.
 
 ## Deploy and configure
 
@@ -41,6 +41,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * The proxy pipeline is an ordered `[]proxy.Filter` built in `proxy.initFilters`. A new request filter is a function of that shape, inserted before the forward stage; the built-ins live in `./internal/proxy/filter.go`.
 * `Manager.Stop`/`Restart` drain first: `requestDrain` sets the snapshot's `Draining`, new requests get 503, and `Manager.drain` waits on the per-app in-flight counter (`Manager.Enter`/`Leave`) up to the host `stop_timeout`. Draining runs off the app goroutine, so snapshots stay responsive.
 * `forward` adds `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Real-IP` only when missing, so Cloudflare's values win. `startOrder` spawns `web_process` first, then the rest by name; `assignPorts` keeps its own name order.
+* `./internal/res` is the resource backend seam. `Procgroup` (macOS and non-cgroup Linux) sums `ps` and ignores limits; `Cgroup` gives each (app, process) its own cgroup v2 directory under `/sys/fs/cgroup/boss`, writes `memory.max`/`cpu.max` and reads `memory.current`/`cpu.stat`. `selectCgroup` picks it when the hierarchy is writable and `resources` is not `procgroup`; a limit set while on procgroup logs a warning. `processEnv` in `./internal/super/supervisor.go` assembles the process environment in the documented priority order (daemon+mise, config env, `.env`/`.env.local`, injected).
 * Actions reachable from both the CLI and the console belong on `ops.Service` (`./internal/ops`), not in either transport.
 
 ## Health and metrics
@@ -48,6 +49,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * The management host serves `/healthz`, `/readyz` and `/metrics` from `./internal/console/console.go` before the session auth. `management.metrics.enabled` (default true) turns them off; `management.metrics.token` gates only `/metrics`.
 * `./internal/metrics` renders Prometheus text from `ops.Service.Apps()` snapshots, so metrics and the console can never disagree. Add a metric there, not in the handler. Request latency quantiles come from `logstore.Latency` through `ops.Service.Latency`.
 * `Web.HealthEndpoint` (default `/.well-known/appboss/health`) is answered by the `publicHealth` filter in `./internal/proxy/filter.go` before auth: 200 while running and not draining, 503 otherwise, never wakes the app. `appboss doctor` uses `super.ListenersInRange`.
+* The web process is monitored for its whole lifetime by `appRuntime.monitor` in `./internal/super/supervisor.go`: `health`/`health_interval`/`health_timeout` gate readiness, then `unhealthy_threshold` consecutive liveness failures emit `health-failed`, which kills the process so the normal exit path restarts it under `restart`/backoff/`max_restarts`. `0` disables liveness; workers are not polled.
 * `./internal/version.Version` is the release version; the release workflow does not inject it yet, so `String()` falls back to the module version or the short VCS revision.
 
 ## Audit and config history
@@ -67,9 +69,10 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * One SQLite database per app at `log_dir/<app>/appboss.sqlite`: `requests`, `logs` and the `logs_fts` FTS5 index, plus `tail_offsets` for the file tailer. `./internal/logstore` owns the schema, batching, search and prune.
 * `logs.source` is the channel: `stdout` (process output), `appboss` (appboss's own daemon log, in the reserved `_appboss` database), or `file` with `logs.process` holding the app log path. `log_retention` prunes requests and `file` rows; `stdout_retention` prunes `stdout`/`appboss`.
 * The supervisor writes through `super.logWriter`, which owns the file, rotates by size and can `Seal` a segment; `Manager.SealLogs` exposes it. Do not rename a live process log from outside the supervisor.
-* `./internal/ingest` seals stdout segments and tails every `*.log` under `<app dir>/log` on `daemon.log_ingest_interval`. App log files are app-owned: track offsets, never delete them. Parse changes belong in `ingest.ParseLine`.
+* `./internal/ingest` seals stdout segments and tails every `*.log` under `<app dir>/log` on `daemon.log_ingest_interval`. App log files are app-owned: track offsets, never delete them. Parse changes belong in `ingest.ParseLine`. It commits through `logstore.AppendLogs` (synchronous) and only deletes a sealed segment or advances an offset after that commit succeeds, so a transient database error cannot lose rows or duplicate reads.
 * `log_retention` (default `336h`) covers requests and app log files; `stdout_retention` (default `3h`) covers stdout and the appboss daemon log; `log_retention: 0` disables the whole store for the app. The `appboss.sqlite` name is fixed; there is no config key for it.
 * `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database through `Store.Vacuum`; empty disables it. It is separate from the prune loop.
+* Prune and vacuum walk every database on disk (`Store.diskApps`), not just the current snapshots, so a database left behind by a removed app is still bounded. A failed insert keeps its batch for the next flush, capped; `AppendLogs` is the synchronous path for rows that must not be re-read.
 
 ## Console frontend (fez)
 
