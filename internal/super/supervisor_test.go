@@ -67,7 +67,7 @@ func TestHealthcheckSendsAppHost(t *testing.T) {
 
 func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32100, 32120})
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range))
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 
 func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32300, 32320})
-	first, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	first, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 	if alive(pid) {
 		t.Fatalf("process %d survived manager close", pid)
 	}
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 
 func TestRestartDoesNotOrphanProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32400, 32420})
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestSpawnKillsSquatterOnPort(t *testing.T) {
 	}
 	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
 	squatter := startListenerHelperOnPort(t, 32500)
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,31 +186,29 @@ func TestSpawnKillsSquatterOnPort(t *testing.T) {
 	}
 }
 
-func TestPortsFollowConfigOrder(t *testing.T) {
+func TestPortsFollowAppNameOrder(t *testing.T) {
 	root := t.TempDir()
-	var dirs []string
 	for _, name := range []string{"zeta", "alpha"} {
 		appDir := filepath.Join(root, "apps", name)
 		if err := os.MkdirAll(appDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(appDir, "deploy-boss.yaml"), []byte("procfile:\n  web: /usr/bin/true\n  worker: /usr/bin/true\n"), 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte("procfile:\n  web: /usr/bin/true\n  worker: /usr/bin/true\n"), 0o640); err != nil {
 			t.Fatal(err)
 		}
-		dirs = append(dirs, appDir)
 	}
 	cfg := config.Default()
-	cfg.Apps = dirs
+	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "boss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range))
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	want := map[string]int{"zeta/web": 32600, "zeta/worker": 32601, "alpha/web": 32602, "alpha/worker": 32603}
+	want := map[string]int{"alpha/web": 32600, "alpha/worker": 32601, "zeta/web": 32602, "zeta/worker": 32603}
 	got := manager.Ports()
 	for key, port := range want {
 		if got[key] != port {
@@ -219,36 +217,33 @@ func TestPortsFollowConfigOrder(t *testing.T) {
 	}
 }
 
-func TestRescanReloadsAppFoldersFromConfig(t *testing.T) {
+func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"one", "two"} {
+	addApp := func(name string) {
+		t.Helper()
 		appDir := filepath.Join(root, "apps", name)
 		if err := os.MkdirAll(appDir, 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(appDir, "deploy-boss.yaml"), []byte("procfile:\n  worker: /usr/bin/true\n"), 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte("procfile:\n  worker: /usr/bin/true\n"), 0o640); err != nil {
 			t.Fatal(err)
 		}
 	}
-	configPath := filepath.Join(root, "deploy-boss.config.yaml")
-	writeConfig := func(apps string) {
-		t.Helper()
-		contents := "apps: " + apps + "\nstate_dir: ./state\nlog_dir: ./log\nsocket: ./boss.sock\n"
-		if err := os.WriteFile(configPath, []byte(contents), 0o640); err != nil {
-			t.Fatal(err)
-		}
+	addApp("one")
+	configPath := filepath.Join(root, config.FileName)
+	if err := os.WriteFile(configPath, []byte("apps: ./apps\n"), 0o640); err != nil {
+		t.Fatal(err)
 	}
-	writeConfig("[./apps/one]")
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range))
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
 	defer manager.Close()
-	writeConfig("[./apps/one, ./apps/two]")
+	addApp("two")
 	invalid, err = manager.Rescan()
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("rescan: %v, invalid: %v", err, invalid)
@@ -266,17 +261,17 @@ func supervisorTestConfig(t *testing.T, portRange [2]int) config.Config {
 		t.Fatal(err)
 	}
 	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestSupervisorHelperProcess\n", os.Args[0])
-	if err := os.WriteFile(filepath.Join(appDir, "deploy-boss.yaml"), []byte(appConfig), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte(appConfig), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("BOSS_TEST_HELPER=1\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.Apps = []string{appDir}
+	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "boss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)

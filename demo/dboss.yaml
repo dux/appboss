@@ -1,10 +1,4 @@
-apps:
-  - ./apps/sinatra
-  - ./apps/bun
-
-state_dir: ./state
-log_dir: ./log
-socket: ./deploy-boss.sock
+apps: ./apps
 
 proxy:
   listen: 127.0.0.1:8080

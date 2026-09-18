@@ -1,47 +1,54 @@
 # deploy-boss configuration reference
 #
-# Three things matter:
-#   1. /etc/boss/deploy-boss.config.yaml   global daemon config (this document, part 1)
-#   2. <app>/deploy-boss.yaml              required process and app config (part 2)
-#   3. state files under state_dir         written by boss, never hand-edited (part 3)
+# One file name, two roles:
+#   1. <host>/dboss.yaml            host config with `apps` (this document, part 1)
+#   2. <app>/dboss.yaml             app config with `procfile` (part 2)
+#   3. state files under state_dir  written by boss, never hand-edited (part 3)
+#
+# A file that has `procfile` is an app; a file that has `apps` is a host. Never both.
+# An app file may also carry host keys so `dboss start` inside the app folder runs it
+# standalone (single mode); the same file under a host must not, or the app is invalid.
+# Whenever a folder is resolved to its config, dboss.local.yaml is used when it exists,
+# dboss.yaml otherwise. The local file is server-only and gitignored.
 #
 # Rules that apply everywhere:
 #   - Durations are Go duration strings: 30s, 20m, 6h, 72h. No days suffix; use 72h.
 #   - Sizes are 10m, 512k, 1g (lowercase, powers of 1024).
 #   - Every key shown has the default value shown. Omit a key to get the default.
 #   - Unknown keys are an error at load time, not a warning. Typos must not pass silently.
-#   - Per-app values in deploy-boss.yaml override global defaults.* one key at a time.
+#   - Per-app values in an app's dboss.yaml override global defaults.* one key at a time.
 #   - Env vars in values are NOT expanded. Config is literal.
 #
-# Load order at daemon start:
-#   deploy-boss.config.yaml -> validate -> load each apps folder -> per app:
-#   deploy-boss.yaml, .env, .env.local
-#   -> validate each app (an invalid app is reported and skipped, it does not stop the daemon)
+# Load order at `dboss start`:
+#   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in
+#   single mode) -> per app: dboss.local.yaml or dboss.yaml, .env, .env.local
+#   -> validate each app (an invalid app is reported and skipped, it does not stop the session)
 #   -> terminate listeners in ports.range -> assign one fixed port per (app, proctype)
 #   -> start apps that were running before -> listen.
 
 # =============================================================================
-# PART 1: /etc/boss/deploy-boss.config.yaml
+# PART 1: <host>/dboss.yaml
 # =============================================================================
 ---
 # --- Paths -------------------------------------------------------------------
 
-# Explicit app folders. Relative paths resolve from the directory containing this file.
-# The final folder name is the app name, so every listed folder must have a unique basename.
-# Each folder must contain deploy-boss.yaml.
-apps:
-  - /apps/myapp
-  - /apps/myapp-staging
+# Directory whose entries are the apps. Relative paths resolve from the directory containing
+# this file. Each entry is a symlink to an app folder or a plain subfolder; the entry name is
+# the app name and dot entries are skipped. The entry path (not the symlink target) is the
+# process working directory. Entries are walked in name order.
+apps: ./apps
 
-# Daemon-owned runtime state. Contains process state and the console signing key.
-# Must be writable by the boss user. Created on first run.
-state_dir: /var/lib/boss
+# Session-owned runtime state. Contains process state and the console signing key.
+# Must be writable by the service user. Created on first run.
+state_dir: ./.dboss/state
 
 # Process logs and request logs. Contains <app>/<proctype>.log and <app>/requests.sqlite.
-log_dir: /var/log/boss
+log_dir: ./.dboss/log
 
-# Unix socket for the control API. The CLI talks here. Mode 0660, group = boss.
-socket: /run/boss/boss.sock
+# Unix socket for the control API. The CLI talks here. In production set it to
+# /run/dboss/dboss.sock: that is where `dboss restart` run inside an app folder looks when
+# the folder's own socket does not exist, and the generated unit creates /run/dboss.
+socket: ./.dboss/dboss.sock
 
 # --- Proxy -------------------------------------------------------------------
 
@@ -132,7 +139,7 @@ ports:
   range: [3100, 3990]
 
 # --- Per-app defaults --------------------------------------------------------
-# Every key here can be overridden per app in deploy-boss.yaml with the same name.
+# Every key here can be overridden per app in the app's dboss.yaml with the same name.
 
 defaults:
   # Stop the whole app after this long without a proxied HTTP request.
@@ -199,16 +206,16 @@ daemon:
   resume_running: true
   # Daily request-log prune at this local time.
   prune_at: "04:10"
-  # Daemon's own log. stderr means journald under systemd.
-  log: stderr               # stderr | <absolute file path>
+  # dboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
   log_level: info           # debug | info | warn | error
 
 # =============================================================================
-# PART 2: <app>/deploy-boss.yaml   (required, per app)
+# PART 2: <app>/dboss.yaml   (required, per app)
 # =============================================================================
 ---
-# Only keys listed here are allowed. Anything under defaults.* in the global config can
-# be repeated here with the same name to override it for this app.
+# Only keys listed here are allowed under a host. Anything under defaults.* in the host config
+# can be repeated here with the same name to override it for this app. When this file is the
+# one `dboss start` runs directly (single mode), part 1 keys are allowed as well.
 
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
@@ -264,10 +271,10 @@ processes:
 #     cron-style processes that never listen. Not configurable. A PORT set in
 #     .env or .env.local is overwritten and a warning is logged.
 #   - Env available to every command, in priority order (highest first):
-#       PORT, APP_NAME, PROC_TYPE, BOSS_SOCKET     injected by boss, always win
+#       PORT, APP_NAME, PROC_TYPE, DBOSS_SOCKET    injected by boss, always win
 #       .env.local                                server-only overrides
 #       .env                                      committed defaults
-#       defaults.env / deploy-boss.yaml env       boss config
+#       defaults.env / dboss.yaml env             boss config
 #       mise env (PATH and tool vars)             when mise.toml exists
 #       daemon's own environment                  minimal: HOME, LANG, TZ
 #
@@ -304,17 +311,19 @@ running.json:
 # Created with mode 0600 when the console first starts.
 
 # =============================================================================
-# CLI flags that override config (highest priority, for one-off runs)
+# CLI lookup rules
 # =============================================================================
 #
-#   dboss daemon --config /path/deploy-boss.config.yaml
-#   Default lookup: $BOSS_CONFIG, then ./deploy-boss.config.yaml,
-#   then /etc/boss/deploy-boss.config.yaml.
-#   dboss daemon --state-dir ./tmp/state --log-dir ./tmp/log --socket ./tmp/boss.sock
-#   dboss <cmd> --socket /path               CLI target when not default
-#   dboss kill --config /path/deploy-boss.config.yaml
-#   BOSS_SOCKET env var is honoured by the CLI and injected into app processes.
+#   Config, every command:   -c path, then $DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml.
+#   Socket, remote commands: --socket, then $DBOSS_SOCKET, then the socket of the config found
+#                            above if that file exists on disk, then /run/dboss/dboss.sock.
+#   App, remote commands:    the argument, or inside an app folder that folder's app.
+#
+#   dboss start [-c path]                      foreground host session
+#   dboss systemd [-c path] [--user u] [--bin p] [--install]
+#   dboss kill [-c path]                       stop every app and clear ports.range
+#   DBOSS_SOCKET is injected into app processes, so a process can always find its host.
 #
 # `dboss config` prints the fully resolved config (defaults merged) as YAML.
 # `dboss config <app>` prints the resolved per-app config after defaults merge.
-# `dboss check` validates deploy-boss.config.yaml and every app without starting anything.
+# `dboss check` validates the config and every app without starting anything.

@@ -40,19 +40,42 @@ type ScanError struct {
 
 func (e ScanError) Error() string { return e.Name + ": " + e.Err.Error() }
 
+// Discover loads every app the root config describes: the config's own folder in single mode,
+// otherwise each entry of the apps directory. Entries are walked in name order, which decides
+// port assignment and host-conflict precedence.
 func Discover(cfg config.Config) ([]*App, []error, error) {
 	var found []*App
 	var invalid []error
-	for _, dir := range cfg.Apps {
-		name := filepath.Base(filepath.Clean(dir))
-		app, err := loadApp(cfg, name, dir)
+	if cfg.App != nil {
+		name := filepath.Base(cfg.Dir)
+		app, err := loadRootApp(cfg, name)
+		if err != nil {
+			invalid = append(invalid, ScanError{Name: name, Err: err})
+		} else {
+			found = append(found, app)
+		}
+		return resolveHosts(found, invalid)
+	}
+	entries, err := os.ReadDir(cfg.Apps)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apps directory: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		app, err := loadChildApp(cfg, name, filepath.Join(cfg.Apps, name))
 		if err != nil {
 			invalid = append(invalid, ScanError{Name: name, Err: err})
 			continue
 		}
 		found = append(found, app)
 	}
-	// Config order is preserved: it decides port assignment and host-conflict precedence.
+	return resolveHosts(found, invalid)
+}
+
+func resolveHosts(found []*App, invalid []error) ([]*App, []error, error) {
 	owners := map[string]string{}
 	valid := found[:0]
 	for _, app := range found {
@@ -80,7 +103,21 @@ func Discover(cfg config.Config) ([]*App, []error, error) {
 	return valid, invalid, nil
 }
 
-func loadApp(cfg config.Config, name, dir string) (*App, error) {
+// loadRootApp re-reads the root file so a rescan in single mode picks up edits to it.
+func loadRootApp(cfg config.Config, name string) (*App, error) {
+	loaded, err := config.Load(cfg.SourcePath)
+	if err != nil {
+		return nil, err
+	}
+	if loaded.App == nil {
+		return nil, fmt.Errorf("%s no longer describes an app", cfg.SourcePath)
+	}
+	return buildApp(name, cfg.Dir, *loaded.App)
+}
+
+// loadChildApp loads one entry of the apps directory. The entry path, not its symlink target,
+// is the process working directory so a target that is itself a release symlink keeps working.
+func loadChildApp(cfg config.Config, name, dir string) (*App, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
@@ -88,10 +125,18 @@ func loadApp(cfg config.Config, name, dir string) (*App, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("app path %q is not a directory", dir)
 	}
-	appCfg, err := config.LoadApp(filepath.Join(dir, "deploy-boss.yaml"), cfg.Defaults)
+	path, err := config.FindInDir(dir)
 	if err != nil {
 		return nil, err
 	}
+	appCfg, err := config.LoadApp(path, cfg.Defaults)
+	if err != nil {
+		return nil, err
+	}
+	return buildApp(name, dir, appCfg)
+}
+
+func buildApp(name, dir string, appCfg config.App) (*App, error) {
 	commands, err := ParseProcfile(appCfg.Procfile)
 	if err != nil {
 		return nil, err

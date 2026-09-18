@@ -73,6 +73,7 @@ type Manager struct {
 	cfg        config.Config
 	ports      *ports.Allocator
 	backend    res.Backend
+	echo       *Echo
 	closeOnce  sync.Once
 	mu         sync.RWMutex
 	apps       map[string]*appRuntime
@@ -83,7 +84,9 @@ type Manager struct {
 	cancel     context.CancelFunc
 }
 
-func New(cfg config.Config, allocator *ports.Allocator) (*Manager, []error, error) {
+// New discovers the apps and starts the ones that were running before. A non-nil echo mirrors
+// every process's output to it, which the foreground session uses when attached to a terminal.
+func New(cfg config.Config, allocator *ports.Allocator, echo *Echo) (*Manager, []error, error) {
 	discovered, invalid, err := apps.Discover(cfg)
 	if err != nil {
 		return nil, invalid, err
@@ -97,7 +100,7 @@ func New(cfg config.Config, allocator *ports.Allocator) (*Manager, []error, erro
 		return nil, invalid, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, apps: map[string]*appRuntime{}, desired: desired, activities: activities, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, echo: echo, apps: map[string]*appRuntime{}, desired: desired, activities: activities, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -156,7 +159,7 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, echo: m.echo, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}}
 	runtime.lastActivity = m.activities[spec.Name]
 	m.apps[spec.Name] = runtime
 	go runtime.loop()
@@ -278,14 +281,14 @@ func (m *Manager) Rescan() ([]error, error) {
 		if err != nil {
 			return nil, err
 		}
-		scanConfig.Apps = loaded.Apps
+		scanConfig.Apps, scanConfig.App = loaded.Apps, loaded.App
 	}
 	discovered, invalid, err := apps.Discover(scanConfig)
 	if err != nil {
 		return invalid, err
 	}
 	m.mu.Lock()
-	m.cfg.Apps = append([]string(nil), scanConfig.Apps...)
+	m.cfg.Apps, m.cfg.App = scanConfig.Apps, scanConfig.App
 	seen := map[string]bool{}
 	for _, spec := range discovered {
 		seen[spec.Name] = true
@@ -484,6 +487,7 @@ type appRuntime struct {
 	spec             *apps.App
 	allocator        *ports.Allocator
 	backend          res.Backend
+	echo             *Echo
 	requests         chan request
 	events           chan processEvent
 	state            State
@@ -675,9 +679,13 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	if len(killed) > 0 {
 		log.Printf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
 	}
-	logFile, err := openProcessLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
+	var logFile io.WriteCloser
+	logFile, err = openProcessLog(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
 	if err != nil {
 		return err
+	}
+	if a.echo != nil {
+		logFile = tee{file: logFile, echo: a.echo.writer(a.spec.Name, name)}
 	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -1037,7 +1045,7 @@ func environment(spec *apps.App, processName string, port int, socket string, ex
 	values["PORT"] = strconv.Itoa(port)
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
-	values["BOSS_SOCKET"] = socket
+	values["DBOSS_SOCKET"] = socket
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

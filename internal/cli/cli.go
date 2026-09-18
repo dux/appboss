@@ -47,32 +47,21 @@ func (c CLI) Run(args []string) int {
 		return 2
 	}
 	command := args[0]
-	if command == "daemon" {
-		if err := c.daemon(args[1:]); err != nil {
-			fmt.Fprintln(c.Err, "dboss:", err)
-			return 1
-		}
-		return 0
-	}
-	if command == "config" || command == "check" || command == "kill" {
-		if err := c.local(command, args[1:]); err != nil {
-			fmt.Fprintln(c.Err, "dboss:", err)
-			return 1
-		}
-		return 0
-	}
-	jsonOutput, socket, remaining, err := commonArgs(args[1:])
-	if err != nil {
-		fmt.Fprintln(c.Err, "dboss:", err)
+	var err error
+	switch command {
+	case "start":
+		err = c.start(args[1:])
+	case "systemd":
+		err = c.systemd(args[1:])
+	case "config", "check", "kill":
+		err = c.local(command, args[1:])
+	case "run", "stop", "restart", "status", "logs", "ls", "ports", "rescan":
+		err = c.remote(command, args[1:])
+	default:
+		c.usage()
 		return 2
 	}
-	if socket == "" {
-		socket = os.Getenv("BOSS_SOCKET")
-	}
-	if socket == "" {
-		socket = "/run/boss/boss.sock"
-	}
-	if err := c.remote(command, remaining, jsonOutput, socket); err != nil {
+	if err != nil {
 		fmt.Fprintln(c.Err, "dboss:", err)
 		return 1
 	}
@@ -80,19 +69,28 @@ func (c CLI) Run(args []string) int {
 }
 
 func (c CLI) usage() {
-	fmt.Fprintln(c.Err, "usage: dboss daemon|config|check|kill|ls|status|start|stop|restart|rescan|logs|ports [options]")
+	fmt.Fprintln(c.Err, "usage: dboss start|systemd|ls|run|stop|restart|status|logs|ports|rescan|kill|config|check [options]")
 }
 
-func (c CLI) daemon(args []string) error {
-	set := flag.NewFlagSet("daemon", flag.ContinueOnError)
+// configFlag registers -c and --config on set; both write to the same variable.
+func configFlag(set *flag.FlagSet) *string {
+	var path string
+	set.StringVar(&path, "c", "", "config file (default: DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml)")
+	set.StringVar(&path, "config", "", "config file")
+	return &path
+}
+
+// start runs the host session in the foreground. Under systemd this is the service process;
+// on a terminal every app's output is echoed with an app/proc prefix.
+func (c CLI) start(args []string) error {
+	set := flag.NewFlagSet("start", flag.ContinueOnError)
 	set.SetOutput(c.Err)
-	configPath := set.String("config", "", "config file")
-	stateDir := set.String("state-dir", "", "state directory override")
-	logDir := set.String("log-dir", "", "log directory override")
-	socket := set.String("socket", "", "control socket override")
-	_ = set.Bool("json", false, "accepted for command consistency")
+	configPath := configFlag(set)
 	if err := set.Parse(args); err != nil {
 		return err
+	}
+	if set.NArg() != 0 {
+		return errors.New("usage: dboss start [-c path]")
 	}
 	path, err := findConfig(*configPath)
 	if err != nil {
@@ -102,28 +100,9 @@ func (c CLI) daemon(args []string) error {
 	if err != nil {
 		return err
 	}
-	var daemonLog *os.File
-	if cfg.Daemon.Log != "stderr" {
-		if err := os.MkdirAll(filepath.Dir(cfg.Daemon.Log), 0o750); err != nil {
-			return err
-		}
-		daemonLog, err = os.OpenFile(cfg.Daemon.Log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
-		if err != nil {
-			return err
-		}
-		defer daemonLog.Close()
-		previousLog := log.Writer()
-		defer log.SetOutput(previousLog)
-		log.SetOutput(daemonLog)
-	}
-	if *stateDir != "" {
-		cfg.StateDir = *stateDir
-	}
-	if *logDir != "" {
-		cfg.LogDir = *logDir
-	}
-	if *socket != "" {
-		cfg.Socket = *socket
+	var echo *super.Echo
+	if info, statErr := os.Stdout.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
+		echo = super.NewEcho(c.Out)
 	}
 	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -137,7 +116,7 @@ func (c CLI) daemon(args []string) error {
 	if len(cleared) > 0 {
 		log.Printf("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
 	}
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range))
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), echo)
 	if err != nil {
 		return err
 	}
@@ -167,7 +146,7 @@ func (c CLI) daemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go pruneLoop(ctx, requestLogs, manager, cfg.Daemon.PruneAt)
-	log.Printf("dboss daemon ready: socket=%s listen=%s management=%s", cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host)
+	log.Printf("dboss ready: config=%s socket=%s listen=%s management=%s", cfg.SourcePath, cfg.Socket, cfg.Proxy.Listen, cfg.Management.Host)
 	<-ctx.Done()
 	if server != nil {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -235,7 +214,7 @@ func pruneLoop(ctx context.Context, logs *reqlog.Manager, manager *super.Manager
 func (c CLI) local(command string, args []string) error {
 	set := flag.NewFlagSet(command, flag.ContinueOnError)
 	set.SetOutput(c.Err)
-	pathFlag := set.String("config", "", "config file")
+	pathFlag := configFlag(set)
 	jsonOutput := set.Bool("json", false, "JSON output")
 	if err := set.Parse(args); err != nil {
 		return err
@@ -250,7 +229,7 @@ func (c CLI) local(command string, args []string) error {
 	}
 	if command == "kill" {
 		if set.NArg() != 0 {
-			return errors.New("usage: dboss kill [--config path]")
+			return errors.New("usage: dboss kill [-c path]")
 		}
 		return c.kill(cfg, *jsonOutput)
 	}
@@ -338,49 +317,62 @@ func (c CLI) kill(cfg config.Config, jsonOutput bool) error {
 	return nil
 }
 
-func (c CLI) remote(command string, args []string, jsonOutput bool, socket string) error {
+// remote sends one command to the running host over its control socket. Commands that take an
+// app default to the current folder's app when run inside one.
+func (c CLI) remote(command string, args []string) error {
+	opts, err := commonArgs(args)
+	if err != nil {
+		return err
+	}
+	socket, err := findSocket(opts.socket, opts.config)
+	if err != nil {
+		return err
+	}
 	client := ctl.Client{Socket: socket}
 	request := ctl.Request{Method: command}
+	if command == "run" {
+		request.Method = "start"
+	}
 	switch command {
-	case "ls", "rescan":
-		if len(args) != 0 {
-			return fmt.Errorf("%s takes no arguments", command)
+	case "ls", "rescan", "ports":
+		if len(opts.rest) != 0 {
+			return fmt.Errorf("usage: dboss %s", command)
 		}
-	case "start", "stop", "restart", "status":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: dboss %s <app>", command)
+	case "run", "stop", "restart", "status":
+		if len(opts.rest) > 1 {
+			return fmt.Errorf("usage: dboss %s [app]", command)
 		}
-		request.App = args[0]
+		if request.App, err = appArgument(opts.rest, opts.config); err != nil {
+			return fmt.Errorf("usage: dboss %s <app> (%w)", command, err)
+		}
 	case "logs":
-		if len(args) == 0 {
-			return errors.New("usage: dboss logs <app> [-f] [-n 200] [--process name]")
+		var appArgs []string
+		if len(opts.rest) > 0 && !strings.HasPrefix(opts.rest[0], "-") {
+			appArgs, opts.rest = opts.rest[:1], opts.rest[1:]
 		}
-		request.App = args[0]
+		if request.App, err = appArgument(appArgs, opts.config); err != nil {
+			return fmt.Errorf("usage: dboss logs <app> [-f] [-n 200] [--process name] (%w)", err)
+		}
 		set := flag.NewFlagSet("logs", flag.ContinueOnError)
 		set.SetOutput(c.Err)
 		lines := set.Int("n", 200, "number of lines")
 		follow := set.Bool("f", false, "follow")
 		processName := set.String("process", "", "process name")
-		if err := set.Parse(args[1:]); err != nil {
+		if err := set.Parse(opts.rest); err != nil {
 			return err
 		}
 		if set.NArg() != 0 {
-			return errors.New("usage: dboss logs <app> [-f] [-n 200] [--process name]")
+			return errors.New("usage: dboss logs [app] [-f] [-n 200] [--process name]")
 		}
 		request.Lines, request.Process = *lines, *processName
-		if *follow && jsonOutput {
+		if *follow && opts.json {
 			return errors.New("--json and -f cannot be combined")
 		}
 		if *follow {
 			return c.follow(client, request)
 		}
-	case "ports":
-		if len(args) != 0 {
-			return errors.New("usage: dboss ports")
-		}
-	default:
-		return fmt.Errorf("unknown command %q", command)
 	}
+	jsonOutput := opts.json
 	var data any
 	switch request.Method {
 	case "ls":
@@ -519,38 +511,97 @@ func logOverlap(previous, current []string) int {
 	return 0
 }
 
-func commonArgs(args []string) (bool, string, []string, error) {
-	jsonOutput, socket := false, ""
-	remaining := make([]string, 0, len(args))
+type remoteOptions struct {
+	json   bool
+	socket string
+	config string
+	rest   []string
+}
+
+// commonArgs pulls the flags shared by every remote command out of args, wherever they appear.
+func commonArgs(args []string) (remoteOptions, error) {
+	var opts remoteOptions
+	opts.rest = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
-			jsonOutput = true
-		case "--socket":
+			opts.json = true
+		case "--socket", "-c", "--config":
 			if i+1 >= len(args) {
-				return false, "", nil, errors.New("--socket requires a path")
+				return remoteOptions{}, fmt.Errorf("%s requires a path", args[i])
+			}
+			if args[i] == "--socket" {
+				opts.socket = args[i+1]
+			} else {
+				opts.config = args[i+1]
 			}
 			i++
-			socket = args[i]
 		default:
-			remaining = append(remaining, args[i])
+			opts.rest = append(opts.rest, args[i])
 		}
 	}
-	return jsonOutput, socket, remaining, nil
+	return opts, nil
+}
+
+const defaultSocket = "/run/dboss/dboss.sock"
+
+// findSocket resolves the control socket: --socket, DBOSS_SOCKET, the socket of the config in
+// reach if it exists on disk, then the well-known production path. The last step is what lets
+// `dboss restart` inside a deployed app folder reach the host session started elsewhere.
+func findSocket(explicit, configPath string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	if env := os.Getenv("DBOSS_SOCKET"); env != "" {
+		return env, nil
+	}
+	path, err := findConfig(configPath)
+	if err != nil {
+		return defaultSocket, nil
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(cfg.Socket); err == nil {
+		return cfg.Socket, nil
+	}
+	return defaultSocket, nil
+}
+
+// appArgument returns the explicit app name or, inside an app folder, that folder's app.
+func appArgument(args []string, configPath string) (string, error) {
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	path, err := findConfig(configPath)
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return "", err
+	}
+	if cfg.App == nil {
+		return "", fmt.Errorf("%s is a host config, name the app", path)
+	}
+	return filepath.Base(cfg.Dir), nil
 }
 
 func findConfig(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if env := os.Getenv("BOSS_CONFIG"); env != "" {
+	if env := os.Getenv("DBOSS_CONFIG"); env != "" {
 		return env, nil
 	}
-	for _, path := range []string{"./deploy-boss.config.yaml", "/etc/boss/deploy-boss.config.yaml"} {
-		if _, err := os.Stat(path); err == nil {
-			absolute, _ := filepath.Abs(path)
-			return absolute, nil
-		}
+	path, err := config.FindInDir(".")
+	if err != nil {
+		return "", fmt.Errorf("%w (use -c or DBOSS_CONFIG)", err)
 	}
-	return "", errors.New("no config found (use --config or BOSS_CONFIG)")
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return absolute, nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/mail"
 	"net/netip"
@@ -88,9 +89,30 @@ func (s Size) String() string {
 	return strconv.FormatInt(value, 10)
 }
 
+// FileName and LocalFileName are the two config file names looked up in a folder.
+// The local file is server-only and, when present, replaces the committed one entirely.
+const (
+	FileName      = "dboss.yaml"
+	LocalFileName = "dboss.local.yaml"
+)
+
+// FindInDir returns the config file to use for dir: dboss.local.yaml when it exists, else dboss.yaml.
+func FindInDir(dir string) (string, error) {
+	for _, name := range []string{LocalFileName, FileName} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no %s in %s", FileName, dir)
+}
+
+// Config is the root dboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
 type Config struct {
 	SourcePath string     `yaml:"-" json:"-"`
-	Apps       []string   `yaml:"apps" json:"apps"`
+	Dir        string     `yaml:"-" json:"-"`
+	App        *App       `yaml:"-" json:"-"`
+	Apps       string     `yaml:"apps" json:"apps"`
 	StateDir   string     `yaml:"state_dir" json:"state_dir"`
 	LogDir     string     `yaml:"log_dir" json:"log_dir"`
 	Socket     string     `yaml:"socket" json:"socket"`
@@ -168,68 +190,93 @@ type Daemon struct {
 	IdleTick      Duration `yaml:"idle_tick" json:"idle_tick"`
 	ResumeRunning bool     `yaml:"resume_running" json:"resume_running"`
 	PruneAt       string   `yaml:"prune_at" json:"prune_at"`
-	Log           string   `yaml:"log" json:"log"`
 	LogLevel      string   `yaml:"log_level" json:"log_level"`
 }
 
 func Default() Config {
 	return Config{
-		StateDir: "/var/lib/boss", LogDir: "/var/log/boss", Socket: "/run/boss/boss.sock",
+		StateDir: ".dboss/state", LogDir: ".dboss/log", Socket: ".dboss/dboss.sock",
 		Proxy:      Proxy{Listen: "127.0.0.1:8080", ClientIPHeaders: []string{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
 		Defaults:   Defaults{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(720 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"},
-		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", Log: "stderr", LogLevel: "info"},
+		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", LogLevel: "info"},
 	}
 }
 
-func Load(path string) (Config, error) {
-	cfg := Default()
+// file is the full dboss.yaml schema: host keys plus app keys. Which role the file plays
+// is decided after decoding from whether procfile or apps is present.
+type file struct {
+	Config  `yaml:",inline"`
+	appFile `yaml:",inline"`
+}
+
+var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon"}
+
+// readFile decodes path into raw and reports every top-level key present in the document.
+func readFile(path string, raw *file) (map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		return nil, err
+	}
+	var top map[string]any
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
-		return Config{}, fmt.Errorf("decode %s: %w", path, err)
+	if err := decoder.Decode(raw); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
+	keys := make(map[string]bool, len(top))
+	for key := range top {
+		keys[key] = true
+	}
+	return keys, nil
+}
+
+func Load(path string) (Config, error) {
+	raw := file{Config: Default()}
+	keys, err := readFile(path, &raw)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := raw.Config
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		return Config{}, err
 	}
-	baseDir := filepath.Dir(absolutePath)
 	cfg.SourcePath = absolutePath
-	for index, appPath := range cfg.Apps {
-		cfg.Apps[index] = resolvePath(baseDir, appPath)
+	cfg.Dir = filepath.Dir(absolutePath)
+	hasApp := keys["procfile"]
+	if hasApp && cfg.Apps != "" {
+		return Config{}, fmt.Errorf("%s is either an app (procfile) or a host (apps), not both", path)
 	}
-	cfg.StateDir = resolvePath(baseDir, cfg.StateDir)
-	cfg.LogDir = resolvePath(baseDir, cfg.LogDir)
-	cfg.Socket = resolvePath(baseDir, cfg.Socket)
-	if err := cfg.Validate(); err != nil {
+	if !hasApp && cfg.Apps == "" {
+		return Config{}, fmt.Errorf("%s needs procfile (app) or apps (host)", path)
+	}
+	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
+	cfg.StateDir = resolvePath(cfg.Dir, cfg.StateDir)
+	cfg.LogDir = resolvePath(cfg.Dir, cfg.LogDir)
+	cfg.Socket = resolvePath(cfg.Dir, cfg.Socket)
+	if err := cfg.validate(hasApp); err != nil {
 		return Config{}, err
+	}
+	if hasApp {
+		app, err := buildApp(raw.appFile, cfg.Defaults)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", path, err)
+		}
+		cfg.App = &app
 	}
 	return cfg, nil
 }
 
-func (c Config) Validate() error {
-	if len(c.Apps) == 0 {
-		return errors.New("apps must contain at least one folder")
-	}
-	paths, names := map[string]bool{}, map[string]bool{}
-	for _, appPath := range c.Apps {
-		if appPath == "" {
-			return errors.New("apps cannot contain an empty folder")
-		}
-		cleanPath := filepath.Clean(appPath)
-		name := filepath.Base(cleanPath)
-		if paths[cleanPath] {
-			return fmt.Errorf("duplicate app folder %q", appPath)
-		}
-		if names[name] {
-			return fmt.Errorf("duplicate app name %q", name)
-		}
-		paths[cleanPath], names[name] = true, true
+func (c Config) Validate() error { return c.validate(c.App != nil) }
+
+func (c Config) validate(hasApp bool) error {
+	if c.Apps == "" && !hasApp {
+		return errors.New("apps directory or procfile is required")
 	}
 	if c.StateDir == "" || c.LogDir == "" || c.Socket == "" {
 		return errors.New("state_dir, log_dir, and socket are required")
@@ -269,9 +316,6 @@ func (c Config) Validate() error {
 	}
 	if c.Daemon.IdleTick <= 0 {
 		return errors.New("daemon.idle_tick must be positive")
-	}
-	if c.Daemon.Log != "stderr" && !filepath.IsAbs(c.Daemon.Log) {
-		return errors.New("daemon.log must be stderr or an absolute path")
 	}
 	if c.Daemon.LogLevel != "debug" && c.Daemon.LogLevel != "info" && c.Daemon.LogLevel != "warn" && c.Daemon.LogLevel != "error" {
 		return fmt.Errorf("invalid daemon.log_level %q", c.Daemon.LogLevel)
@@ -442,18 +486,24 @@ type appFile struct {
 	Processes      map[string]ProcessOverrides `yaml:"processes"`
 }
 
+// LoadApp reads an app's dboss.yaml under a host. Host keys are rejected here because only the
+// root file dboss start was pointed at owns the proxy, ports and runtime directories.
 func LoadApp(path string, defaults Defaults) (App, error) {
-	app := App{WebProcess: "web", Defaults: defaults, Processes: map[string]ProcessOverrides{}}
-	data, err := os.ReadFile(path)
+	raw := file{Config: Default()}
+	keys, err := readFile(path, &raw)
 	if err != nil {
 		return App{}, err
 	}
-	var raw appFile
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&raw); err != nil {
-		return App{}, fmt.Errorf("decode %s: %w", path, err)
+	for _, key := range hostKeys {
+		if keys[key] {
+			return App{}, fmt.Errorf("%s: %s is only valid in the root %s", path, key, FileName)
+		}
 	}
+	return buildApp(raw.appFile, defaults)
+}
+
+func buildApp(raw appFile, defaults Defaults) (App, error) {
+	app := App{WebProcess: "web", Defaults: defaults, Processes: map[string]ProcessOverrides{}}
 	if len(raw.Procfile) == 0 {
 		return App{}, errors.New("procfile must contain at least one process")
 	}

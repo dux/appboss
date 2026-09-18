@@ -32,7 +32,7 @@ demo: build ## Run the local demo daemon
 		'Apps:' \
 		'  http://sinatra.lvh.me:8080' \
 		'  http://bun.lvh.me:8080'
-	$(BINARY) daemon --config ./demo/deploy-boss.config.yaml
+	$(BINARY) start -c ./demo/dboss.yaml
 
 demo-watch: build ## Rebuild and restart the demo on changes
 	$(WATCH) --restart --clear \
@@ -42,13 +42,11 @@ demo-watch: build ## Rebuild and restart the demo on changes
 		--watch ./web \
 		--watch ./go.mod \
 		--watch ./go.sum \
-		--ignore './demo/state/**' \
-		--ignore './demo/log/**' \
-		--ignore './demo/deploy-boss.sock' \
+		--ignore './demo/.dboss/**' \
 		-- $(MAKE) demo
 
 kill: build ## Kill all demo apps and listeners in the app port range
-	$(BINARY) kill --config ./demo/deploy-boss.config.yaml
+	$(BINARY) kill -c ./demo/dboss.yaml
 
 clean: ## Remove generated binaries
 	rm -rf $(BIN_DIR)

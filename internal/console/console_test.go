@@ -154,7 +154,7 @@ func TestConsoleServesAuthenticatedRoot(t *testing.T) {
 func newTestHandler(t *testing.T, manager AppManager, rates RateReader) *Handler {
 	t.Helper()
 	cfg := config.Default()
-	cfg.Apps = []string{"/apps/demo"}
+	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = "boss.lvh.me"
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}

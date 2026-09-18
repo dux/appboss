@@ -35,18 +35,18 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\n", os.Args[0])
-	writeProxyFixture(t, filepath.Join(appDir, "deploy-boss.yaml"), appConfig)
+	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
 	cfg := config.Default()
-	cfg.Apps = []string{appDir}
+	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "boss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32200, 32220}
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range))
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,5 +12,5 @@ vendor/bundle/
 *.log
 *.pid
 *.sock
-/demo/state/
-/demo/log/
+.dboss/
+dboss.local.yaml
