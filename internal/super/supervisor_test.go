@@ -17,17 +17,6 @@ import (
 	"app-boss/internal/ports"
 )
 
-func TestHostMatch(t *testing.T) {
-	for _, test := range []struct {
-		host, pattern string
-		match         bool
-	}{{"app.test", "app.test", true}, {"a.dev.test", "*.dev.test", true}, {"dev.test", "*.dev.test", false}} {
-		if _, got := hostMatch(test.host, test.pattern); got != test.match {
-			t.Errorf("hostMatch(%q, %q) = %v", test.host, test.pattern, got)
-		}
-	}
-}
-
 func TestBackoffCaps(t *testing.T) {
 	values := []any{"1s", 2.0, "5s"}
 	if got := backoff(values, 1); got != time.Second {

@@ -31,6 +31,17 @@ func TestLoadEnv(t *testing.T) {
 	}
 }
 
+func TestValidateAppAcceptsShorthandHost(t *testing.T) {
+	app := config.App{Procfile: map[string]string{"web": "./server"}, WebProcess: "web", Hosts: []string{".demo.test"}}
+	if _, err := validateApp(app); err != nil {
+		t.Fatalf("shorthand host rejected: %v", err)
+	}
+	app.Hosts = []string{"demo..test"}
+	if _, err := validateApp(app); err == nil {
+		t.Fatal("malformed host was accepted")
+	}
+}
+
 func TestDiscoverWalksAppsDirectory(t *testing.T) {
 	root := t.TempDir()
 	appsDir := filepath.Join(root, "apps")

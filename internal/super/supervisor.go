@@ -322,7 +322,7 @@ func (m *Manager) ResolveHost(host string) (Snapshot, bool) {
 	var best Snapshot
 	for _, snapshot := range m.Snapshots() {
 		for _, pattern := range snapshot.Hosts {
-			score, match := hostMatch(host, strings.ToLower(pattern))
+			score, match := config.MatchHost(host, strings.ToLower(pattern))
 			if match && score > bestScore {
 				best, bestScore = snapshot, score
 			}
@@ -486,17 +486,6 @@ func (m *Manager) saveActivities() error {
 		}
 	}
 	return writeStateFile(filepath.Join(m.cfg.StateDir, "last_activity.json"), activities)
-}
-
-func hostMatch(host, pattern string) (int, bool) {
-	if host == pattern {
-		return len(pattern) + 10000, true
-	}
-	if strings.HasPrefix(pattern, "*.") {
-		suffix := pattern[1:]
-		return len(suffix), strings.HasSuffix(host, suffix) && len(host) > len(suffix)
-	}
-	return 0, false
 }
 
 type requestKind int
@@ -825,7 +814,7 @@ func (a *appRuntime) readiness(p *process) {
 	defer ticker.Stop()
 	host := ""
 	if len(a.spec.Config.Hosts) > 0 {
-		host = a.spec.Config.Hosts[0]
+		host = config.BaseHost(a.spec.Config.Hosts[0])
 	}
 	lastError := errors.New("healthcheck timed out")
 	for {

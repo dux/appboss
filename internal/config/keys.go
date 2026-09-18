@@ -67,7 +67,7 @@ var keyDocs = map[string]keyDoc{
 	"daemon.log_ingest_interval":             {description: "how often process log segments are sealed and ingested into the log store"},
 
 	"procfile":       {description: "process commands by name; names match [a-z][a-z0-9_-]*", example: "{web: bundle exec puma -C config/puma.rb}"},
-	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains", example: "[myapp.com, \"*.myapp.com\"]"},
+	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains, a leading . matches the domain and its subdomains", example: "[\".myapp.com\"]"},
 	"web_process":    {description: "process that receives proxied traffic", def: "web"},
 	"canonical_host": {description: "301 every other host of this app to this one; must be in hosts", example: "myapp.com"},
 	"autostart":      {description: "start this app when the host starts; false waits for run or a request", def: "true"},

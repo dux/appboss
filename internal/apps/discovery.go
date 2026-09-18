@@ -17,7 +17,7 @@ import (
 )
 
 var processName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
-var hostName = regexp.MustCompile(`^(\*\.)?([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$`)
+var hostName = regexp.MustCompile(`^(\*\.|\.)?([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$`)
 
 type Command struct {
 	Name string   `json:"name"`

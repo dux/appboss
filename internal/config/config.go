@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -672,7 +671,7 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)
-	if app.CanonicalHost != "" && !slices.Contains(app.Hosts, app.CanonicalHost) {
+	if app.CanonicalHost != "" && !hostAllowed(app.CanonicalHost, app.Hosts) {
 		return App{}, keyErr("canonical_host", "%q is not one of hosts %v", app.CanonicalHost, app.Hosts)
 	}
 	for name := range app.Processes {
@@ -690,4 +689,40 @@ func (a App) Process(name string) Process {
 		apply(&p, o)
 	}
 	return p
+}
+
+// MatchHost scores a concrete host against a hosts pattern. A leading "*." matches subdomains
+// only, a leading "." matches the bare domain and every subdomain, and a plain pattern must be an
+// exact match. The score is the pattern length, so a longer, more specific match wins.
+func MatchHost(host, pattern string) (int, bool) {
+	if host == pattern {
+		return len(pattern) + 10000, true
+	}
+	if strings.HasPrefix(pattern, ".") {
+		if host == pattern[1:] {
+			return len(pattern) + 10000, true
+		}
+		return len(pattern), strings.HasSuffix(host, pattern) && len(host) > len(pattern)
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:]
+		return len(suffix), strings.HasSuffix(host, suffix) && len(host) > len(suffix)
+	}
+	return 0, false
+}
+
+// BaseHost strips a leading "*." or "." from a hosts pattern so it can be used as a concrete
+// hostname in a Host header or a link.
+func BaseHost(pattern string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(pattern, "*"), ".")
+}
+
+func hostAllowed(host string, patterns []string) bool {
+	host = strings.ToLower(host)
+	for _, pattern := range patterns {
+		if _, ok := MatchHost(host, strings.ToLower(pattern)); ok {
+			return true
+		}
+	}
+	return false
 }

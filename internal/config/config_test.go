@@ -17,6 +17,38 @@ func writeConfigFile(t *testing.T, path, contents string) {
 	}
 }
 
+func TestMatchHost(t *testing.T) {
+	for _, test := range []struct {
+		host, pattern string
+		match         bool
+	}{
+		{"app.test", "app.test", true},
+		{"a.dev.test", "*.dev.test", true},
+		{"dev.test", "*.dev.test", false},
+		{"dev.test", ".dev.test", true},
+		{"a.dev.test", ".dev.test", true},
+		{"a.b.dev.test", ".dev.test", true},
+		{"dev.test.evil", ".dev.test", false},
+		{"notdev.test", ".dev.test", false},
+	} {
+		if _, got := MatchHost(test.host, test.pattern); got != test.match {
+			t.Errorf("MatchHost(%q, %q) = %v, want %v", test.host, test.pattern, got, test.match)
+		}
+	}
+}
+
+func TestCanonicalHostAcceptsAShorthandPattern(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [\".demo.test\"]\ncanonical_host: demo.test\n"), path, defaults); err != nil {
+		t.Fatalf("canonical host covered by shorthand: %v", err)
+	}
+	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [\".demo.test\"]\ncanonical_host: other.test\n"), path, defaults); err == nil {
+		t.Fatal("canonical host outside hosts was accepted")
+	}
+}
+
 func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)

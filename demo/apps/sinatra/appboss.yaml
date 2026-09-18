@@ -2,8 +2,7 @@ procfile:
   web: ./start.sh
 
 hosts:
-  - sinatra.lvh.me
-  - www.sinatra.lvh.me
+  - .sinatra.lvh.me
 
 canonical_host: sinatra.lvh.me
 static: ./public

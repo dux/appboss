@@ -292,11 +292,10 @@ procfile:
 # Hostnames the proxy routes to this app's `web` process. Required for any app
 # that should receive HTTP. An app without hosts is background-only.
 # Exact match on the Host header, case-insensitive, port stripped.
-# A leading "*." matches one or more subdomain levels. Longest match wins.
+# A leading "*." matches subdomains only; a leading "." matches the bare domain and every
+# subdomain, so ".myapp.com" means "myapp.com" and "*.myapp.com". Longest match wins.
 hosts:
-  - myapp.com
-  - www.myapp.com
-  - "*.myapp.com"
+  - ".myapp.com"
 
 # Which proctype receives proxied traffic. Only one. Default: web.
 web_process: web
