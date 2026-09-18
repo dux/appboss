@@ -51,8 +51,12 @@
       return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`
     }
 
+    hasTime(value) {
+      return Boolean(value) && !String(value).startsWith('0001-')
+    }
+
     activity(value) {
-      if (!value || value.startsWith('0001-')) return 'No traffic'
+      if (!this.hasTime(value)) return 'No traffic'
       const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000)
       if (seconds < 10) return 'Just now'
       if (seconds < 60) return `${seconds}s ago`
@@ -66,7 +70,7 @@
     }
 
     clock(value) {
-      if (!value) return '-'
+      if (!this.hasTime(value)) return '-'
       const date = new Date(value)
       if (isNaN(date.getTime())) return '-'
       const seconds = Math.round((date.getTime() - Date.now()) / 1000)
@@ -87,7 +91,7 @@
     lastRun(job) {
       if (job.running) return 'running'
       if (job.last_error) return job.last_error
-      if (job.last_end) return `exit ${job.last_exit} ${this.clock(job.last_end)}`
+      if (this.hasTime(job.last_end)) return `exit ${job.last_exit} ${this.clock(job.last_end)}`
       return '-'
     }
 
