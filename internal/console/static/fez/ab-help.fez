@@ -1,0 +1,185 @@
+<script>
+  const TOPICS = [
+    { id: 'how', title: 'How it works' },
+    { id: 'config', title: 'Config files' },
+    { id: 'processes', title: 'Processes' },
+    { id: 'routing', title: 'Routing' },
+    { id: 'logs', title: 'Logs' },
+    { id: 'cron', title: 'Scheduled jobs' },
+    { id: 'cli', title: 'CLI' },
+    { id: 'keys', title: 'Keys' },
+  ]
+
+  class {
+    init() {
+      this.state.topic = 'how'
+      this.state.topics = TOPICS
+    }
+
+    select(id) {
+      this.state.topic = id
+      if (this.state.pane) this.state.pane.scrollTop = 0
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Help</p>
+    <h1 class="page-title">Operator guide</h1>
+  </div>
+  <div class="page-actions">
+    <button class="btn" type="button" onclick="Drawer.showReference()">
+      <svg class="icon"><use href="#i-book"></use></svg>
+      Annotated reference
+    </button>
+  </div>
+</div>
+
+<div class="card help">
+  <nav class="list-group help-nav" aria-label="Help topics">
+    {#each state.topics as topic}
+      <button class="list-group-item" class:active={topic.id === state.topic} type="button" onclick="fez.select('{topic.id}')">
+        <strong>{topic.title}</strong>
+      </button>
+    {/each}
+  </nav>
+
+  <div class="help-body" fez:this="pane">
+    {#if state.topic === 'how'}
+      <section>
+        <h2>How it works</h2>
+        <p>One <code>appboss</code> process owns the ports, the proxy and the console. Each app is a folder with an <code>appboss.yaml</code>; its <code>procfile</code> maps a process name to a command. Boss gives every process a fixed <code>PORT</code> and routes each request to the app whose <code>hosts</code> match.</p>
+        <ul>
+          <li>A stopped app starts on the first request and answers with a starting page that refreshes.</li>
+          <li>An idle app stops after <code>idle_stop</code> and wakes the same way.</li>
+          <li>Cloudflare is the edge: TLS, caching, compression and WAF live there. appboss is the origin and trusts only Cloudflare's ranges.</li>
+        </ul>
+        <pre>browser -> Cloudflare -> appboss :80
+                          | Host shop.example.com -> shop (PORT 3101)
+                          | Host api.example.com  -> api  (PORT 3102)</pre>
+      </section>
+    {/if}
+
+    {#if state.topic === 'config'}
+      <section>
+        <h2>Config files</h2>
+        <p><code>appboss.yaml</code> has two roles. A file with <code>apps:</code> is a host; a file with <code>procfile:</code> is an app. Never both. <code>appboss.local.yaml</code> next to a host file wins over it, is gitignored, and is where server-only values (secrets, admin emails, absolute paths) live.</p>
+        <p><code>defaults:</code> in the host file applies to every app. An app's top-level key overrides it key by key, and <code>processes.&lt;name&gt;</code> overrides it once more for a single process.</p>
+        <h3>Host</h3>
+        <pre>apps: ./apps
+proxy:
+  listen: ":80"
+ports:
+  range: [3100, 3199]
+defaults:
+  idle_stop: 30m</pre>
+        <h3>App</h3>
+        <pre>procfile:
+  web: ./start.sh
+hosts: [shop.example.com]
+health: http:/up</pre>
+      </section>
+    {/if}
+
+    {#if state.topic === 'processes'}
+      <section>
+        <h2>Processes</h2>
+        <p>Each key under <code>procfile</code> is a process type. All of them run at once; only <code>web</code> gets proxied traffic. Boss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>APPBOSS_SOCKET</code> into every process.</p>
+        <ul>
+          <li><code>autostart: false</code> keeps an app down until <code>appboss run</code>, the console, or a request starts it.</li>
+          <li><code>health</code> is the readiness check: <code>tcp</code>, or <code>http:&lt;path&gt;</code> expecting a 2xx. A process that never passes it is restarted.</li>
+          <li><code>idle_stop</code> stops an app with no traffic; <code>0s</code> disables it.</li>
+        </ul>
+        <pre>procfile:
+  web: bundle exec puma -p $PORT
+  worker: bundle exec sidekiq
+autostart: false
+health: http:/up
+health_interval: 500ms
+idle_stop: 0s</pre>
+      </section>
+    {/if}
+
+    {#if state.topic === 'routing'}
+      <section>
+        <h2>Routing</h2>
+        <p>Every app lists the hostnames it answers in <code>hosts</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to its <code>web</code> process. Non-web processes never get traffic.</p>
+        <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy.</p>
+        <pre>hosts:
+  - shop.example.com
+  - www.shop.example.com
+
+proxy:
+  client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]
+  trusted_cidrs:
+    - 173.245.48.0/20</pre>
+      </section>
+    {/if}
+
+    {#if state.topic === 'logs'}
+      <section>
+        <h2>Logs</h2>
+        <p>Each app has one SQLite store at <code>log_dir/&lt;app&gt;/appboss.sqlite</code>. The full-screen viewer at <code>/logs</code> and <code>appboss logs</code> read the same data.</p>
+        <ul>
+          <li><code>REQUEST</code> - one row per proxied request.</li>
+          <li><code>STDOUT</code> - the stdout and stderr of each process.</li>
+          <li><code>appboss</code> - the daemon's own log.</li>
+          <li>one channel per <code>*.log</code> file under the app's <code>log/</code> folder.</li>
+        </ul>
+        <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app.</p>
+        <pre>appboss logs -f shop
+appboss logs shop --process worker -n 500</pre>
+      </section>
+    {/if}
+
+    {#if state.topic === 'cron'}
+      <section>
+        <h2>Scheduled jobs</h2>
+        <p><code>cron:</code> declares one-shot commands that run even while the app is stopped. <code>schedule</code> is <code>every &lt;n&gt;&lt;s|m|h|d&gt;</code> or a five-field cron expression. Jobs run in the app folder with the app environment and log to their own <code>cron-&lt;job&gt;</code> channel.</p>
+        <pre>cron:
+  cleanup:
+    schedule: every 6h
+    command: bundle exec rake cleanup
+    timeout: 30m
+    overlap: false</pre>
+        <p><code>appboss cron shop</code> lists jobs and the next run; <code>appboss cron run shop cleanup</code> starts one now. The app card in the console has a Run button.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'cli'}
+      <section>
+        <h2>CLI</h2>
+        <p>Remote commands talk to the running host over its control socket and accept <code>--json</code>. Inside an app folder the app argument defaults to that app. Run <code>appboss help &lt;command&gt;</code> for one command.</p>
+        <h3>Host session</h3>
+        <div class="help-cmd"><code>start</code><span>run the host in the foreground; Ctrl-C stops every app</span></div>
+        <div class="help-cmd"><code>systemd</code><span>print the systemd unit, or install and enable it</span></div>
+        <div class="help-cmd"><code>kill</code><span>stop every app and clear every listener in ports.range</span></div>
+        <div class="help-cmd"><code>login</code><span>print a one-time console URL that signs you in as cli@localhost</span></div>
+        <h3>Apps</h3>
+        <div class="help-cmd"><code>ls</code><span>list apps with state, ports, uptime, activity and memory</span></div>
+        <div class="help-cmd"><code>run</code><span>start an app, rescanning first when it is not known yet</span></div>
+        <div class="help-cmd"><code>stop</code><span>stop an app and keep it stopped until run or the next request</span></div>
+        <div class="help-cmd"><code>restart</code><span>stop and start an app on the same ports</span></div>
+        <div class="help-cmd"><code>status</code><span>processes, restarts, resources and request rates for one app</span></div>
+        <div class="help-cmd"><code>logs</code><span>print or follow the process logs; <code>-f</code> follows</span></div>
+        <div class="help-cmd"><code>maintenance</code><span>serve the maintenance page while the app keeps running</span></div>
+        <div class="help-cmd"><code>cron</code><span>list an app's scheduled jobs, or run one now</span></div>
+        <h3>Config</h3>
+        <div class="help-cmd"><code>config</code><span>validate and print a config, the resolved config, or keys</span></div>
+        <div class="help-cmd"><code>check</code><span>validate the config and every app without starting anything</span></div>
+        <div class="help-cmd"><code>rescan</code><span>re-read the apps directory and every appboss.yaml</span></div>
+        <div class="help-cmd"><code>ports</code><span>show the live port table, one fixed port per process</span></div>
+        <div class="help-cmd"><code>password</code><span>print a bcrypt hash for basic_auth</span></div>
+      </section>
+    {/if}
+
+    {#if state.topic === 'keys'}
+      <section class="help-keys">
+        <h2>Keys</h2>
+        <p>Every key, its type, its default (or an example) and where it applies. Use the filter to narrow by name or description; the annotated reference has the long form.</p>
+        <ab-config-keys />
+      </section>
+    {/if}
+  </div>
+</div>

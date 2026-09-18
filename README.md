@@ -246,6 +246,7 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 * `fez/ab-app-card.fez` - one service: status badge, stats datagrid, actions.
 * `fez/ab-config.fez` - config file list and editor.
 * `fez/ab-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
+* `fez/ab-help.fez` - the Help tab: a topic list with the operator guide and the live key reference.
 * `fez/ab-toast.fez` and `fez/ab-drawer.fez` - self-mounting singletons exposed as `Toast` and `Drawer`.
 * `app.css` - the whole stylesheet, a light Tabler-style theme; components carry no `<style>` blocks.
 
