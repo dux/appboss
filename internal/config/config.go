@@ -283,10 +283,16 @@ func decode(data []byte, path string, raw *file) (map[string]bool, *yaml.Node, e
 	if err := checkKeys(&root, reflect.TypeOf(file{}), ""); err != nil {
 		return nil, nil, located(err, path, &root)
 	}
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(raw); err != nil && !errors.Is(err, io.EOF) {
-		return nil, nil, located(err, path, &root)
+	if expandEnv(&root, "") && len(root.Content) > 0 {
+		if err := root.Content[0].Decode(raw); err != nil && !errors.Is(err, io.EOF) {
+			return nil, nil, located(err, path, &root)
+		}
+	} else {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(raw); err != nil && !errors.Is(err, io.EOF) {
+			return nil, nil, located(err, path, &root)
+		}
 	}
 	keys := map[string]bool{}
 	if len(root.Content) > 0 && root.Content[0].Kind == yaml.MappingNode {
@@ -295,6 +301,49 @@ func decode(data []byte, path string, raw *file) (map[string]bool, *yaml.Node, e
 		}
 	}
 	return keys, &root, nil
+}
+
+// envRef matches $NAME in a config value. Only all-uppercase names are eligible, so a bcrypt
+// hash ($2a$10$...), a shell positional ($1) and lowercase shell vars are not touched.
+var envRef = regexp.MustCompile(`\$[A-Z_][A-Z0-9_]*`)
+
+// expandEnv replaces $NAME in every string value with the matching process environment
+// variable, leaving the text as written when NAME is unset. procfile values and
+// cron.*.command are runtime shell lines, so they are skipped. It reports whether any value
+// changed, which tells decode to read the mutated tree instead of the original bytes.
+func expandEnv(node *yaml.Node, path string) bool {
+	changed := false
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range node.Content {
+			changed = expandEnv(child, path) || changed
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, value := node.Content[i], node.Content[i+1]
+			child := path + key.Value + "."
+			if strings.HasPrefix(child, "procfile.") || strings.HasPrefix(child, "cron.") && strings.HasSuffix(child, ".command.") {
+				continue
+			}
+			changed = expandEnv(value, child) || changed
+		}
+	case yaml.ScalarNode:
+		if node.Tag != "!!str" || !strings.Contains(node.Value, "$") {
+			return false
+		}
+		value := envRef.ReplaceAllStringFunc(node.Value, func(match string) string {
+			if env, ok := os.LookupEnv(match[1:]); ok {
+				return env
+			}
+			return match
+		})
+		if value == node.Value {
+			return false
+		}
+		node.Value, node.Tag, node.Style = value, "", 0
+		return true
+	}
+	return changed
 }
 
 func Load(path string) (Config, error) {

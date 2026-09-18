@@ -375,6 +375,79 @@ func TestParseRootValidatesWithoutDisk(t *testing.T) {
 	}
 }
 
+func TestEnvExpansion(t *testing.T) {
+	t.Setenv("APPBOSS_TEST_HOST", "myapp.com")
+	t.Setenv("APPBOSS_TEST_COUNT", "2")
+	t.Setenv("APPBOSS_TEST_IDLE", "90s")
+	t.Setenv("APPBOSS_TEST_MAX", "512m")
+
+	const hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+	cfg, err := Parse([]byte(`apps: ./apps
+state_dir: /var/lib/$APPBOSS_TEST_HOST
+proxy:
+  listen: [":8080"]
+  wake:
+    retry_after: $APPBOSS_TEST_COUNT
+management:
+  host: [$APPBOSS_TEST_HOST]
+  auth:
+    admin_emails: [admin@example.com]
+defaults:
+  idle_stop: $APPBOSS_TEST_IDLE
+  memory_max: $APPBOSS_TEST_MAX
+  headers:
+    X-Test: $lower $1 $APPBOSS_TEST_UNSET
+  env:
+    MALLOC_ARENA_MAX: $APPBOSS_TEST_COUNT
+  basic_auth:
+    ops: `+hash+`
+`), "/srv/appboss.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StateDir != "/var/lib/myapp.com" {
+		t.Errorf("state_dir = %q", cfg.StateDir)
+	}
+	if cfg.Proxy.Wake.RetryAfter != 2 {
+		t.Errorf("retry_after = %d, want 2", cfg.Proxy.Wake.RetryAfter)
+	}
+	if cfg.Management.Host[0] != "myapp.com" {
+		t.Errorf("management.host = %v", cfg.Management.Host)
+	}
+	if cfg.Defaults.IdleStop.Value() != 90*time.Second || cfg.Defaults.MemoryMax != Size(512<<20) {
+		t.Errorf("idle_stop/memory_max = %v/%v", cfg.Defaults.IdleStop, cfg.Defaults.MemoryMax)
+	}
+	if cfg.Defaults.Headers["X-Test"] != "$lower $1 $APPBOSS_TEST_UNSET" {
+		t.Errorf("unset/lowercase must stay literal, got %q", cfg.Defaults.Headers["X-Test"])
+	}
+	if cfg.Defaults.Env["MALLOC_ARENA_MAX"] != "2" {
+		t.Errorf("numeric env into a string map = %q, want \"2\"", cfg.Defaults.Env["MALLOC_ARENA_MAX"])
+	}
+	if cfg.Defaults.BasicAuth["ops"] != hash {
+		t.Errorf("bcrypt hash was rewritten: %q", cfg.Defaults.BasicAuth["ops"])
+	}
+}
+
+func TestEnvExpansionSkipsCommands(t *testing.T) {
+	t.Setenv("APPBOSS_TEST_PORT", "7777")
+	app, err := ParseApp([]byte(`procfile:
+  web: run --port $APPBOSS_TEST_PORT
+cron:
+  tick:
+    schedule: every 5m
+    command: run $APPBOSS_TEST_PORT
+`), "/srv/apps/demo/appboss.yaml", Default().Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Procfile["web"] != "run --port $APPBOSS_TEST_PORT" {
+		t.Errorf("procfile expanded: %q", app.Procfile["web"])
+	}
+	if app.Cron["tick"].Command != "run $APPBOSS_TEST_PORT" {
+		t.Errorf("cron command expanded: %q", app.Cron["tick"].Command)
+	}
+}
+
 func TestStdoutRetentionDefaultsAndValidates(t *testing.T) {
 	if got := Default().Defaults.StdoutRetention.Value(); got != 3*time.Hour {
 		t.Fatalf("stdout_retention default = %v, want 3h", got)

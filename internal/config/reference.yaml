@@ -23,7 +23,9 @@
 #   - App-level changes (defaults.* and app files) apply on rescan without a restart. Changing
 #     apps, state_dir, log_dir, socket, proxy, management, ports or daemon needs a restart;
 #     rescan and the console report which keys are waiting.
-#   - Env vars in values are NOT expanded. Config is literal.
+#   - $NAME in a value is replaced with that variable from the appboss process environment.
+#     Only all-uppercase names are expanded; an unset name is left as written.
+#     procfile commands and cron commands are never expanded; they are runtime shell lines.
 #
 # Load order at `appboss start`:
 #   root appboss.yaml -> validate -> walk the apps directory (or use the root file itself in
@@ -201,7 +203,8 @@ defaults:
 
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
   # Needed for lines with &&, pipes, or $VAR. Off by default so signals reach
-  # the real process, not a shell.
+  # the real process, not a shell. Command strings are never env-expanded, so
+  # $VAR here reaches the shell at run time.
   shell: false
 
   # Extra environment injected into every process of every app, lowest priority
@@ -284,6 +287,7 @@ daemon:
 
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
+# Command strings are not env-expanded; $VAR is passed to the shell at run time.
 procfile:
   web: bundle exec puma -C config/puma.rb
   worker: bundle exec lux jobs:work
