@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,7 @@ import (
 	"app-boss/internal/ports"
 	"app-boss/internal/proxy"
 	"app-boss/internal/super"
+	"app-boss/internal/sysinfo"
 )
 
 // Daemon is one running host session. New builds and binds it; Run serves until the context is
@@ -75,10 +77,16 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
 	ingester := ingest.New(manager, manager, logs, cfg.Daemon.LogIngestInterval.Value())
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester), notifier: notifier, managementPort: managementPort}
+	sysInfo := sysinfo.New([]sysinfo.DirSpec{
+		{Name: "config", Path: cfg.Dir},
+		{Name: "state_dir", Path: cfg.StateDir},
+		{Name: "log_dir", Path: cfg.LogDir},
+		{Name: "socket", Path: filepath.Dir(cfg.Socket)},
+	})
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, sysInfo), notifier: notifier, managementPort: managementPort}
 	service := ops.New(manager, logs, logs, notifier)
 	if len(cfg.Proxy.Listen) > 0 {
-		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier)
+		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier, sysInfo.Inspector())
 		if err != nil {
 			d.Close()
 			return nil, err
@@ -163,7 +171,7 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
 // The console handler is returned as well so it can be served on its own port and mint
 // login links; it is nil when the console is not enabled.
-func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder, notifier *notify.Notifier) (http.Handler, *console.Handler, error) {
+func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder, notifier *notify.Notifier, sys console.SysReader) (http.Handler, *console.Handler, error) {
 	appProxy, err := proxy.New(cfg, manager, logs)
 	if err != nil {
 		return nil, nil, err
@@ -171,7 +179,7 @@ func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager
 	var handler http.Handler = appProxy
 	var management *console.Handler
 	if cfg.Management.Enabled() {
-		management, err = console.New(cfg, service, apps.NewStore(cfg), notifier.Stats)
+		management, err = console.New(cfg, service, apps.NewStore(cfg), notifier.Stats, sys)
 		if err != nil {
 			return nil, nil, fmt.Errorf("management console: %w", err)
 		}

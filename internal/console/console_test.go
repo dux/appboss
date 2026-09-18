@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,7 +19,22 @@ import (
 	"app-boss/internal/logstore"
 	"app-boss/internal/ops"
 	"app-boss/internal/super"
+	"app-boss/internal/sysinfo"
 )
+
+// fakeSys is a SysReader whose refresh is observable.
+type fakeSys struct {
+	snapshot  sysinfo.Snapshot
+	refreshes int
+}
+
+func (f *fakeSys) Snapshot() sysinfo.Snapshot { return f.snapshot }
+
+func (f *fakeSys) Refresh(context.Context) sysinfo.Snapshot {
+	f.refreshes++
+	f.snapshot.Host.Hostname = "refreshed"
+	return f.snapshot
+}
 
 type fakeManager struct {
 	snapshots   []super.Snapshot
@@ -418,11 +434,25 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handle
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}), newFakeStore(), nil)
+	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func TestConsoleServesSystemInspection(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, session := sessionCookie(t, handler)
+
+	snapshot := call(t, handler, cookie, session, http.MethodGet, "/api/sys", "")
+	if snapshot.Code != http.StatusOK || !strings.Contains(snapshot.Body.String(), `"hostname":"box"`) {
+		t.Fatalf("unexpected sys snapshot: %d %s", snapshot.Code, snapshot.Body.String())
+	}
+	refresh := call(t, handler, cookie, session, http.MethodPost, "/api/sys/refresh", "{}")
+	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"hostname":"refreshed"`) {
+		t.Fatalf("unexpected sys refresh: %d %s", refresh.Code, refresh.Body.String())
+	}
 }
 
 func TestConsoleAnswersForEveryManagementHost(t *testing.T) {

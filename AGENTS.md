@@ -36,7 +36,8 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 ## Modules and the request pipeline
 
 * `./internal/daemon` is the only place a session is assembled: supervisor, `module.Manager`, proxy, console and control socket. `cli.start` loads the config and calls `daemon.Build`/`Run`. Register a new module there, not in the CLI.
-* A long-running feature implements `module.Module` (`Name`, `Start`, `Close`) in `./internal/module`. `logstore.Store` and `./internal/ingest` are the current modules.
+* A long-running feature implements `module.Module` (`Name`, `Start`, `Close`) in `./internal/module`. `logstore.Store`, `./internal/ingest` and `./internal/sysinfo` are the current modules.
+* `./internal/sysinfo` is the read-only host inspector behind the console's Sys tab: OS, kernel, load, memory, disks and a fixed toolchain probe list. `daemon.Build` registers its `Module` and hands `Inspector()` to `console.New` as a `SysReader`. It never mutates appboss state and writes no audit row; add a tool by adding a `probe` to `defaultProbes`.
 * The proxy pipeline is an ordered `[]proxy.Filter` built in `proxy.initFilters`. A new request filter is a function of that shape, inserted before the forward stage; the built-ins live in `./internal/proxy/filter.go`.
 * `Manager.Stop`/`Restart` drain first: `requestDrain` sets the snapshot's `Draining`, new requests get 503, and `Manager.drain` waits on the per-app in-flight counter (`Manager.Enter`/`Leave`) up to the host `stop_timeout`. Draining runs off the app goroutine, so snapshots stay responsive.
 * `forward` adds `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Real-IP` only when missing, so Cloudflare's values win. `startOrder` spawns `web_process` first, then the rest by name; `assignPorts` keeps its own name order.
@@ -80,6 +81,7 @@ Read `./README.md` for usage and `./doc/plan.md` plus `./doc/plan-v2.md` for the
 * No external assets: the CSP allows only the console's own origin. `fez.min.js` is vendored; update it by copying https://dux.github.io/fez/dist/fez.min.js.
 * Cross-component calls go through the globals `Boss` (shell: `api`, `reload`, `runAction`, `rescan`, `logout`), `Toast.show(message, error)` and `Drawer.open(title, text)`. Shared data lives in `globalState` (`apps`, `loaded`, `busy`, `status`, `restartRequired`).
 * Console views are hash-routed in `viewFromHash` in `ab-shell.fez`; a new nav tab needs its own `location.hash === '#<view>'` case or its section never renders. `./internal/console/static_test.go` guards this.
+* The Sys tab (`ab-sys.fez`) is read-only: it renders `sysinfo.Snapshot` from `GET /api/sys` and re-probes through `POST /api/sys/refresh`. Neither route audits; see `./internal/sysinfo` for the snapshot shape.
 * The config editor keeps the textarea and gutter under `fez:keep` and drives them with direct DOM writes; typing must never re-render the component.
 * Check components with `bun ~/dev/gems/fez/bin/fez compile 'internal/console/static/fez/*.fez'` and then look at the real page in a browser.
 

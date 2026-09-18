@@ -531,6 +531,10 @@ code {
   content: "";
 }
 
+.badge-success {
+  --state-color: var(--success);
+}
+
 .badge-warning {
   --state-color: var(--warning);
 }
@@ -825,6 +829,97 @@ code {
   border-radius: 50%;
   animation: spin 800ms linear infinite;
 }
+
+/* --- System view ----------------------------------------------------------- */
+
+.section-title {
+  margin: 0;
+  font-size: var(--text-size-normal);
+  font-weight: 600;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.card-actions input {
+  min-width: 140px;
+}
+
+.sys-tools,
+.sys-dirs {
+  padding: 4px 20px 12px;
+  overflow-x: auto;
+}
+
+.sys-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sys-row:first-child {
+  border-top: 0;
+}
+
+.sys-tools .sys-row {
+  grid-template-columns: 140px 100px minmax(0, 1.1fr) minmax(0, 1.8fr);
+}
+
+.sys-dirs .sys-row {
+  grid-template-columns: 130px minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.sys-badge {
+  justify-self: start;
+}
+
+.sys-tool-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sys-tool-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.sys-version {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sys-empty {
+  display: block;
+}
+
+.meter {
+  display: block;
+  height: 6px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.meter[data-level="warn"] > span { background: var(--warning); }
+.meter[data-level="danger"] > span { background: var(--danger); }
 
 /* --- Config editor --------------------------------------------------------- */
 

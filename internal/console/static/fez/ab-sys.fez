@@ -1,0 +1,255 @@
+<script>
+  class {
+    init() {
+      this.state.snapshot = null
+      this.state.host = {}
+      this.state.runtime = {}
+      this.state.config = {}
+      this.state.loading = false
+      this.state.error = ''
+      this.state.filter = ''
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    beforeRender() {
+      const snapshot = this.state.snapshot
+      this.state.host = snapshot ? snapshot.host : {}
+      this.state.runtime = snapshot ? snapshot.runtime : {}
+      this.state.config = this.dir('config')
+    }
+
+    async load(refresh = false) {
+      this.state.loading = true
+      try {
+        const data = refresh
+          ? await Boss.api('/api/sys/refresh', { method: 'POST', body: '{}' })
+          : await Boss.api('/api/sys')
+        this.state.snapshot = data.snapshot
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    setFilter(value) {
+      this.state.filter = value
+    }
+
+    dir(name) {
+      const dirs = (this.state.snapshot && this.state.snapshot.dirs) || []
+      return dirs.find((item) => item.name === name) || {}
+    }
+
+    tools() {
+      const tools = (this.state.snapshot && this.state.snapshot.tools) || []
+      const filter = this.state.filter.trim().toLowerCase()
+      if (!filter) return tools
+      return tools.filter((tool) => tool.name.toLowerCase().includes(filter) || (tool.version || '').toLowerCase().includes(filter))
+    }
+
+    stamp(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return '-'
+      return date.toLocaleString()
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Number(value || 0))
+    }
+
+    bytes(value) {
+      const amount = Number(value || 0)
+      if (!amount) return '-'
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']
+      let index = 0
+      let size = amount
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024
+        index++
+      }
+      return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+    }
+
+    duration(seconds) {
+      const total = Number(seconds || 0)
+      if (!total) return '-'
+      const days = Math.floor(total / 86400)
+      const hours = Math.floor((total % 86400) / 3600)
+      const minutes = Math.floor((total % 3600) / 60)
+      if (days) return `${days}d ${hours}h`
+      if (hours) return `${hours}h ${minutes}m`
+      return `${minutes}m`
+    }
+
+    load1() {
+      const host = this.state.host || {}
+      if (host.load1 === undefined) return '-'
+      return `${host.load1.toFixed(2)} ${host.load5.toFixed(2)} ${host.load15.toFixed(2)}`
+    }
+
+    memPercent() {
+      const host = this.state.host || {}
+      const total = Number(host.mem_total || 0)
+      if (!total) return 0
+      return Math.min(100, Math.round((Number(host.mem_used || 0) / total) * 100))
+    }
+
+    dirPercent(name) {
+      const dir = this.dir(name)
+      return Math.min(100, Math.round(Number(dir.percent || 0)))
+    }
+
+    meterStyle(percent) {
+      return `width: ${percent}%`
+    }
+
+    level(percent) {
+      if (percent >= 90) return 'danger'
+      if (percent >= 75) return 'warn'
+      return 'ok'
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">System</p>
+    <h1 class="page-title">Host &amp; toolchains</h1>
+  </div>
+  <div class="page-actions">
+    {#if state.snapshot}
+      <span class="refresh-status">Collected {stamp(state.snapshot.collected_at)}</span>
+    {/if}
+    <button class="btn" type="button" onclick="fez.load(true)" disabled={state.loading}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      {state.loading ? 'Inspecting' : 'Re-inspect'}
+    </button>
+  </div>
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#if !state.snapshot}
+  <div class="card empty-state">
+    <span class="spinner" aria-hidden="true"></span>
+    <strong>Reading host facts</strong>
+    <span>Probing the toolchains installed on this box.</span>
+  </div>
+{:else}
+  <section class="stat-row" aria-label="Host summary">
+    <article class="card stat-card">
+      <span class="subheader">Host</span>
+      <strong class="stat-value">{state.host.hostname || '-'}</strong>
+      <span class="text-muted">{state.host.os_name || state.host.os} {state.host.arch}</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Load average</span>
+      <strong class="stat-value">{load1()}</strong>
+      <span class="text-muted">{state.host.cpus} CPUs · up {duration(state.host.uptime_seconds)}</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Memory</span>
+      <strong class="stat-value">{bytes(state.host.mem_used)}</strong>
+      <span class="text-muted">of {bytes(state.host.mem_total)} · {memPercent()}%</span>
+      <span class="meter" data-level={level(memPercent())}><span style={meterStyle(memPercent())}></span></span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Config disk</span>
+      <strong class="stat-value">{bytes(state.config.used_bytes)}</strong>
+      <span class="text-muted">of {bytes(state.config.total_bytes)} · {dirPercent('config')}%</span>
+      <span class="meter" data-level={level(dirPercent('config'))}><span style={meterStyle(dirPercent('config'))}></span></span>
+    </article>
+  </section>
+
+  <div class="section-head">
+    <h2>Host &amp; runtime</h2>
+  </div>
+  <section class="card">
+    <div class="datagrid">
+      <div class="datagrid-item"><span class="subheader">Operating system</span><span class="datagrid-content">{state.host.os_name || state.host.os} {state.host.arch}</span></div>
+      <div class="datagrid-item"><span class="subheader">Kernel</span><span class="datagrid-content">{state.host.kernel || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Uptime</span><span class="datagrid-content">{duration(state.host.uptime_seconds)}</span></div>
+      <div class="datagrid-item"><span class="subheader">CPUs</span><span class="datagrid-content">{state.host.cpus}</span></div>
+      <div class="datagrid-item"><span class="subheader">appboss</span><span class="datagrid-content">{state.runtime.appboss || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Go</span><span class="datagrid-content">{state.runtime.go_version || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">PID</span><span class="datagrid-content">{state.runtime.pid || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Goroutines</span><span class="datagrid-content">{state.runtime.goroutines || '-'}</span></div>
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Toolchains</h2>
+    <span class="text-muted">{tools().length} probes</span>
+  </div>
+  <section class="card">
+    <div class="card-header">
+      <h3 class="section-title">Installed tools</h3>
+      <div class="card-actions">
+        <input type="text" placeholder="Filter" value={state.filter} oninput="fez.setFilter(this.value)" />
+      </div>
+    </div>
+    <div class="sys-tools">
+      <div class="sys-row sys-head">
+        <span class="subheader">Tool</span>
+        <span class="subheader">Status</span>
+        <span class="subheader">Path</span>
+        <span class="subheader">Version</span>
+      </div>
+      {#each tools() as tool}
+        <div class="sys-row">
+          {#if tool.home}
+            <a class="service-name sys-tool-link" href={tool.home} target="_blank" rel="noopener noreferrer">{tool.name}</a>
+          {:else}
+            <span class="service-name">{tool.name}</span>
+          {/if}
+          <span class="badge sys-badge" class:badge-success={tool.found}>{tool.found ? 'installed' : 'missing'}</span>
+          <span class="sys-version">{tool.path || '-'}</span>
+          <span class="sys-version">{tool.version || tool.error || '-'}</span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No tool matches the filter.</div>
+      {/each}
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Environment</h2>
+  </div>
+  <section class="card">
+    <div class="datagrid">
+      {#for name, value in state.runtime.env}
+        <div class="datagrid-item"><span class="subheader">{name}</span><span class="datagrid-content">{value}</span></div>
+      {/for}
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Directories</h2>
+  </div>
+  <section class="card">
+    <div class="sys-dirs">
+      <div class="sys-row sys-head">
+        <span class="subheader">Name</span>
+        <span class="subheader">Path</span>
+        <span class="subheader">Used</span>
+        <span class="subheader">Free</span>
+      </div>
+      {#each state.snapshot.dirs as dir}
+        <div class="sys-row">
+          <span class="service-name">{dir.name}</span>
+          <span class="sys-version">{dir.path}</span>
+          <span class="service-value">{dir.error ? dir.error : bytes(dir.used_bytes) + ' / ' + bytes(dir.total_bytes)}</span>
+          <span class="service-value">{dir.error ? '-' : bytes(dir.free_bytes) + ' free'}</span>
+        </div>
+      {/each}
+    </div>
+  </section>
+{/if}

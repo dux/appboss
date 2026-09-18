@@ -116,6 +116,7 @@
         <h3><a class="help-jump" onclick="fez.select('cli')">Console &amp; CLI</a></h3>
         <ul>
           <li>Management console with live state, start, stop, restart and maintenance controls, a validated config editor, logs, audit and help.</li>
+          <li>The Sys tab inspects the host read-only: OS, kernel, load, memory, disks and the installed toolchains (Node, npm, Bun, Ruby, Python and more) with their versions.</li>
           <li>AuthCog sign-in for admins, plus one-time <code>appboss login</code> links over the control socket for local work.</li>
           <li>Full CLI over the control socket, with <code>--json</code> on every command.</li>
         </ul>

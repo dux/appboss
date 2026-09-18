@@ -28,6 +28,7 @@
       if (location.hash === '#config') return 'config'
       if (location.hash === '#logs') return 'logs'
       if (location.hash === '#audit') return 'audit'
+      if (location.hash === '#sys') return 'sys'
       if (location.hash === '#help') return 'help'
       return 'overview'
     }
@@ -178,6 +179,7 @@
       <li><a class="nav-link" class:active={state.view === 'overview'} href="#overview"><svg class="icon"><use href="#i-home"></use></svg>Overview</a></li>
       <li><a class="nav-link" class:active={state.view === 'logs'} href="#logs"><svg class="icon"><use href="#i-list"></use></svg>Logs</a></li>
       <li><a class="nav-link" class:active={state.view === 'audit'} href="#audit"><svg class="icon"><use href="#i-file-text"></use></svg>Audit</a></li>
+      <li><a class="nav-link" class:active={state.view === 'sys'} href="#sys"><svg class="icon"><use href="#i-server"></use></svg>Sys</a></li>
       <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Configuration</a></li>
       <li><a class="nav-link" class:active={state.view === 'help'} href="#help"><svg class="icon"><use href="#i-help"></use></svg>Help</a></li>
     </ul>
@@ -194,6 +196,9 @@
     </section>
     <section class="view" class:d-none={state.view !== 'audit'}>
       <ab-audit />
+    </section>
+    <section class="view" class:d-none={state.view !== 'sys'}>
+      <ab-sys />
     </section>
     <section class="view" class:d-none={state.view !== 'config'}>
       <ab-config />

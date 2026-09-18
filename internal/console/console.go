@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -26,6 +27,7 @@ import (
 	"app-boss/internal/metrics"
 	"app-boss/internal/ops"
 	"app-boss/internal/super"
+	"app-boss/internal/sysinfo"
 )
 
 const maxRequestBody = 1 << 20
@@ -33,6 +35,13 @@ const maxHookBody = 1 << 20
 
 //go:embed static/*
 var assets embed.FS
+
+// SysReader is the read-only host inspection behind the Sys tab. sysinfo.Inspector is the real
+// one; both methods return the current snapshot, and Refresh re-samples the host.
+type SysReader interface {
+	Snapshot() sysinfo.Snapshot
+	Refresh(context.Context) sysinfo.Snapshot
+}
 
 // ConfigStore edits the config files appboss reads; apps.Store is the real one.
 type ConfigStore interface {
@@ -56,6 +65,7 @@ type Handler struct {
 	metricsEnabled bool
 	metricsToken   string
 	notifyStats    func() metrics.NotifyStats
+	sys            SysReader
 }
 
 type dashboard struct {
@@ -90,7 +100,7 @@ type actionRequest struct {
 	Job    string `json:"job,omitempty"`
 }
 
-func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats func() metrics.NotifyStats) (*Handler, error) {
+func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats func() metrics.NotifyStats, sys SysReader) (*Handler, error) {
 	auth, err := newAuthenticator(cfg)
 	if err != nil {
 		return nil, err
@@ -100,7 +110,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats}, nil
+	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats, sys: sys}, nil
 }
 
 // LoginURL mints a one-time link for `appboss login`. It points at the console's loopback
@@ -211,6 +221,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.hookRotate(w, r, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/audit":
 		h.audit(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/sys":
+		h.writeSys(w)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/sys/refresh":
+		h.sysRefresh(w, r, session)
 	default:
 		http.NotFound(w, r)
 	}
@@ -596,6 +610,28 @@ func (h *Handler) audit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
+}
+
+// writeSys returns the cached host inspection for the console's Sys tab.
+func (h *Handler) writeSys(w http.ResponseWriter) {
+	if h.sys == nil {
+		writeError(w, http.StatusNotFound, "system inspection is not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": h.sys.Snapshot(), "updated_at": time.Now().UTC()})
+}
+
+// sysRefresh re-samples the host and re-probes the toolchains on demand. It is read-only, so it
+// writes no audit row.
+func (h *Handler) sysRefresh(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	if h.sys == nil {
+		writeError(w, http.StatusNotFound, "system inspection is not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": h.sys.Refresh(r.Context()), "updated_at": time.Now().UTC()})
 }
 
 var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
