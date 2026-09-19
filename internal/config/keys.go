@@ -75,6 +75,27 @@ var keyDocs = map[string]keyDoc{
 	"notify.min_interval":                    {description: "quiet period per app and event, so a crash loop does not spam"},
 	"notify.headers":                         {description: "extra headers sent with every webhook request", example: "{Authorization: \"Bearer $TOKEN\"}"},
 
+	"postgres.enabled":             {description: "inspect the host PostgreSQL and run scheduled backups; false hides the console tab"},
+	"postgres.dsn":                 {description: "libpq connection string or URL; empty auto-detects the local socket then 127.0.0.1 using the PG* environment", example: "$DATABASE_URL"},
+	"postgres.backup.dir":          {description: "local directory for database dumps; empty disables local copies"},
+	"postgres.backup.s3":           {description: "default destination: copy every dump to the global s3 bucket"},
+	"postgres.backup.every":        {description: "interval between scheduled backups; 0 makes them manual only"},
+	"postgres.backup.timeout":      {description: "kill a dump that runs longer than this; 0 means no limit"},
+	"postgres.backup.globals":      {description: "also dump roles and tablespaces with pg_dumpall --globals-only"},
+	"postgres.backup.keep.hourly":  {description: "most recent dumps kept, one per hour; 0 disables the bucket"},
+	"postgres.backup.keep.daily":   {description: "most recent dumps kept, one per day; 0 disables the bucket"},
+	"postgres.backup.keep.weekly":  {description: "most recent dumps kept, one per week; 0 disables the bucket"},
+	"postgres.backup.keep.monthly": {description: "most recent dumps kept, one per month; 0 disables the bucket"},
+	"postgres.backup.databases":    {description: "databases to back up, keyed by name; the presence of a key selects it, and local/s3 override the default destinations", example: "{myapp_production: {}, reports: {local: false}}"},
+	"s3.endpoint":                  {description: "S3-compatible endpoint; empty disables object storage", example: "https://<account>.r2.cloudflarestorage.com"},
+	"s3.region":                    {description: "bucket region; auto is the R2 default"},
+	"s3.bucket":                    {description: "bucket that receives backup objects", example: "appboss-backups"},
+	"s3.prefix":                    {description: "key prefix prepended to every object", example: "pg/"},
+	"s3.access_key":                {description: "S3 access key id", example: "$S3_ACCESS_KEY"},
+	"s3.secret_key":                {description: "S3 secret access key", example: "$S3_SECRET_KEY"},
+	"s3.path_style":                {description: "use path-style addressing, required by MinIO and some other S3 servers"},
+	"s3.sse":                       {description: "server-side encryption algorithm for uploads; empty uses the bucket default", example: "AES256"},
+
 	"procfile":       {description: "process commands by name; names match [a-z][a-z0-9_-]*", example: "{web: bundle exec puma -C config/puma.rb}"},
 	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains, a leading . matches the domain and its subdomains", example: "[\".myapp.com\"]"},
 	"web_process":    {description: "process that receives proxied traffic", def: "web"},
@@ -83,6 +104,14 @@ var keyDocs = map[string]keyDoc{
 	"processes":      {description: "per-process overrides of the process keys, by process name", example: "{worker: {stop_timeout: 120s}}"},
 	"cron":           {description: "scheduled one-shot commands by name, run on an every interval or a cron expression", example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
 	"hooks":          {description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>", example: "{deploy: {command: git pull, restart: true}}"},
+
+	"pubsub.path":             {description: "URL prefix that serves realtime channels on the app hosts; empty disables the feature", example: "/socketio"},
+	"pubsub.secret":           {description: "bearer token HTTP publishers must present; empty generates one per app under state_dir", example: "$PUBSUB_SECRET"},
+	"pubsub.replay":           {description: "messages kept per channel and replayed to a subscriber that connects late"},
+	"pubsub.max_clients":      {description: "subscriber limit per app; further connections are refused with 503"},
+	"pubsub.max_message_size": {description: "largest accepted publish body; 0 means unlimited"},
+	"pubsub.client_events":    {description: "allow a subscribed WebSocket client to publish back to its channel"},
+	"pubsub.test":             {description: "serve an interactive self-test page at <path>/_test"},
 
 	"idle_stop":           {description: "stop the app after this long without proxied requests; 0 never"},
 	"health":              {description: "readiness check: tcp, or http:<path> expecting 2xx"},
@@ -148,6 +177,9 @@ func KeyPaths() []string {
 }
 
 func isSharedKey(path string) bool {
+	if strings.HasPrefix(path, "pubsub.") {
+		return true
+	}
 	for _, group := range []reflect.Type{reflect.TypeOf(Process{}), reflect.TypeOf(Web{})} {
 		for i := 0; i < group.NumField(); i++ {
 			if yamlName(group.Field(i)) == path {

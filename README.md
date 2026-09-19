@@ -228,6 +228,53 @@ With no `secret` in the config, appboss generates a 64-character secret under `s
 
 `appboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes appboss's exit code.
 
+## Realtime channels
+
+An app can serve a pub/sub hub on its own hosts. Set a path and appboss answers it instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it:
+
+```yaml
+pubsub:
+  path: /socketio        # empty disables the feature
+  # secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per app under state_dir
+  replay: 10             # messages kept per channel and replayed to a late subscriber
+  max_clients: 500       # subscriber cap per app; 0 means unlimited
+  max_message_size: 64k  # largest publish body; 0 means unlimited
+  client_events: true    # a WebSocket client may publish to its own channel
+  test: false            # serve the browser self-test at <path>/_test
+```
+
+`pubsub` is a shared key: put it under `defaults:` in the host file to turn it on for every app, or in one app's `appboss.yaml` to override key by key.
+
+**Subscribe.** A `GET <path>/<channel>` upgrades to a WebSocket, or streams SSE when the request carries no `Upgrade` header. Messages are `{"event","data","ts"}`; the last `replay` are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher.
+
+The bundled client, served at `GET <path>/client.js`, needs no dependency and picks WebSocket with an SSE fallback:
+
+```html
+<script src="/socketio/client.js"></script>
+<script>
+  const chat = Pubsub.connect({ path: '/socketio' }).channel('chat');
+  chat.on('message', (envelope) => console.log(envelope.event, envelope.data));
+  chat.on('open', () => chat.send('typing', { user: 'a' })); // WebSocket only
+  chat.on('close', () => {});
+  chat.on('error', (err) => {});
+</script>
+```
+
+**Publish.** A `POST <path>/<channel>` with the app's secret publishes to every subscriber. A body shaped like `{"event","data"}` is sent as written; any other body becomes the data of a `message` event:
+
+```bash
+curl -X POST https://myapp.example.com/socketio/chat \
+  -H "Authorization: Bearer $PUBSUB_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"event":"message","data":{"text":"hello"}}'
+```
+
+The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`, and satisfies a publish even when the app sets `basic_auth`. With no `secret` in the config, appboss generates a 64-character one per app under `state_dir/pubsub-secrets.json` on first use; `appboss pubsub` prints it, and `appboss pubsub rotate [app]` replaces it.
+
+**Self-test.** With `test: true`, `GET <path>/_test` serves a page that opens a WebSocket and an SSE connection and reports PASS or FAIL in the browser.
+
+`appboss pubsub [app]` lists channels and subscriber counts, `appboss pubsub secret [app]` prints the credential and example URLs, `appboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `appboss pubsub help` prints the integration guide. The console's **Realtime** tab (when any app sets a path) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `appboss_pubsub_clients`, `appboss_pubsub_channels` and `appboss_pubsub_messages_total`, each labeled by app.
+
 ## Health and metrics
 
 The management host also serves three endpoints, enabled by `management.metrics.enabled` (default `true`):
@@ -252,12 +299,62 @@ A host can post runtime events to one operator webhook:
 notify:
   url: $ALERT_WEBHOOK_URL
   format: generic       # generic | slack | discord | ntfy
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed]
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed]
   min_interval: 5m       # per app and event, so a crash loop does not spam
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, and `config-changed` a config write that changed a host key and needs a restart. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, and `backup-failed` a PostgreSQL dump or upload that failed. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `appboss_notifications_total`. `url: ""` (the default) disables notifications.
+
+## PostgreSQL inspection and backups
+
+When a PostgreSQL server is reachable, the console gains a **PostgreSQL** tab and the daemon can back up selected databases on a schedule.
+
+Configuration is two host-level blocks:
+
+```yaml
+postgres:
+  enabled: true
+  dsn: $DATABASE_URL            # empty auto-detects the local socket, then 127.0.0.1:5432
+  backup:
+    dir: ./.appboss/pg-backups  # local destination; empty disables local copies
+    s3: true                    # default: also upload to the s3 block
+    every: 6h                   # 0 makes backups manual only
+    timeout: 1h
+    globals: true               # also pg_dumpall --globals-only (roles and tablespaces)
+    keep: {hourly: 24, daily: 7, weekly: 8, monthly: 6}
+    databases:
+      myapp_production: {}          # local + s3
+      reports: {local: false}       # s3 only
+      legacy: {s3: false}           # local only
+
+s3:
+  endpoint: https://<account>.r2.cloudflarestorage.com
+  region: auto
+  bucket: appboss-backups
+  prefix: pg/
+  access_key: $S3_ACCESS_KEY
+  secret_key: $S3_SECRET_KEY
+  path_style: false
+  sse: ""
+```
+
+The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, every database with its size and owner, and the backup history.
+
+Backups are per-database logical dumps (`pg_dump -Fc`), optional cluster globals (`pg_dumpall --globals-only`), and copy to the local directory and/or the `s3` bucket. Retention is grandfather-father-son: each bucket keeps the newest N dumps for its hour, day, ISO week and month, and prunes the rest from disk, S3 and the catalog. The catalog lives at `state_dir/pg-backups.json`.
+
+The console's checkboxes write the selection to `appboss.local.yaml` (the host override is created from the base when missing) and hot-reload the daemon, so no restart is needed. Restore verifies the checksum and dump listing, then loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation.
+
+On the box this feature needs `pg_dump`, `pg_dumpall` and `pg_restore` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:
+
+```bash
+appboss pg                      # server summary and databases
+appboss pg backups              # recorded dumps
+appboss pg backup [database]    # dump one or every selected database
+appboss pg restore <id> [--target name] [--force]
+```
+
+The metrics endpoint exports `appboss_pg_up`, `appboss_pg_database_size_bytes`, `appboss_pg_backup_last_success_timestamp_seconds` and `appboss_pg_backup_count`.
 
 ## Containers
 
@@ -372,6 +469,7 @@ internal/logstore/    per-app SQLite log store: requests, channels, FTS search, 
 internal/ingest/      seals stdout, tails app log files and the appboss daemon log into the store
 internal/logx/        leveled logger for appboss's own output (daemon.log_level)
 internal/sysinfo/     read-only host inspection: OS, load, memory, disks and installed toolchains
+internal/pg/          PostgreSQL inspection, scheduled dumps, S3 upload, retention and restore
 internal/metrics/     Prometheus text rendered from the app snapshots
 internal/notify/      debounced operator webhook for crash and failure events
 internal/version/     release version, overridden at build time

@@ -135,6 +135,35 @@ func TestStoreCreatesServerOverride(t *testing.T) {
 	}
 }
 
+func TestStoreCreatesHostOverride(t *testing.T) {
+	store, root := storeFixture(t)
+	file, err := store.CreateHostLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Source != config.LocalFileName || !file.HasLocal {
+		t.Fatalf("host override = %+v", file)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.LocalFileName)); err != nil {
+		t.Fatalf("local file missing: %v", err)
+	}
+	// The active host file is now the override, so writes target it.
+	updated, err := store.Write("host", file.Contents+"\npostgres:\n  enabled: false\n", file.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Source != config.LocalFileName {
+		t.Fatalf("write targeted %s, want %s", updated.Source, config.LocalFileName)
+	}
+	cfg, err := store.HostConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Postgres.Enabled {
+		t.Fatal("HostConfig did not see the override")
+	}
+}
+
 func TestStoreSingleModeHasOneEntry(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, config.FileName), "procfile:\n  web: ./server\n")

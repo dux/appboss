@@ -28,8 +28,10 @@ import (
 	"app-boss/internal/module"
 	"app-boss/internal/notify"
 	"app-boss/internal/ops"
+	"app-boss/internal/pg"
 	"app-boss/internal/ports"
 	"app-boss/internal/proxy"
+	"app-boss/internal/pubsub"
 	"app-boss/internal/super"
 	"app-boss/internal/sysinfo"
 )
@@ -85,10 +87,17 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		{Name: "log_dir", Path: cfg.LogDir},
 		{Name: "socket", Path: filepath.Dir(cfg.Socket)},
 	})
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, sysInfo), notifier: notifier, managementPort: managementPort}
-	service := ops.New(manager, logs, logs, notifier)
+	postgres := pg.New(cfg, notifier)
+	channels, err := pubsub.New(cfg.StateDir)
+	if err != nil {
+		notifier.Close()
+		manager.Close()
+		return nil, err
+	}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, sysInfo, postgres, channels), notifier: notifier, managementPort: managementPort}
+	service := ops.New(manager, logs, logs, postgres, channels, notifier)
 	if len(cfg.Proxy.Listen) > 0 {
-		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier, sysInfo.Inspector())
+		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier, sysInfo.Inspector(), channels)
 		if err != nil {
 			d.Close()
 			return nil, err
@@ -173,8 +182,8 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
 // The console handler is returned as well so it can be served on its own port and mint
 // login links; it is nil when the console is not enabled.
-func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder, notifier *notify.Notifier, sys console.SysReader) (http.Handler, *console.Handler, error) {
-	appProxy, err := proxy.New(cfg, manager, logs)
+func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager, logs proxy.Recorder, notifier *notify.Notifier, sys console.SysReader, channels *pubsub.Service) (http.Handler, *console.Handler, error) {
+	appProxy, err := proxy.New(cfg, manager, logs, channels, channels.Filter)
 	if err != nil {
 		return nil, nil, err
 	}

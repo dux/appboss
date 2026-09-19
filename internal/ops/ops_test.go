@@ -1,11 +1,14 @@
 package ops
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"app-boss/internal/config"
 	"app-boss/internal/logstore"
+	"app-boss/internal/pg"
 	"app-boss/internal/super"
 )
 
@@ -104,7 +107,7 @@ func (r fakeRates) Rates(app string) (logstore.Rates, error) {
 
 func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}}
-	service := New(runtime, nil, nil)
+	service := New(runtime, nil, nil, nil, nil)
 	cases := []struct {
 		request Request
 		action  string
@@ -129,14 +132,14 @@ func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 }
 
 func TestDoRejectsAnUnknownAction(t *testing.T) {
-	if _, err := New(&fakeRuntime{}, nil, nil).Do(Request{Method: "nope"}); !errors.Is(err, ErrUnknownAction) {
+	if _, err := New(&fakeRuntime{}, nil, nil, nil, nil).Do(Request{Method: "nope"}); !errors.Is(err, ErrUnknownAction) {
 		t.Fatalf("got %v, want ErrUnknownAction", err)
 	}
 }
 
 func TestAppsAttachRequestRates(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
-	service := New(runtime, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}}, nil)
+	service := New(runtime, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}}, nil, nil, nil)
 	apps := service.Apps()
 	if apps[0].RequestRates.LastHour != 7 {
 		t.Fatalf("sinatra rates = %+v", apps[0].RequestRates)
@@ -148,7 +151,7 @@ func TestAppsAttachRequestRates(t *testing.T) {
 
 func TestCronReturnsScheduledJobs(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra", Cron: []super.CronSnapshot{{Name: "cleanup"}}}}}
-	jobs, err := New(runtime, nil, nil).Cron("sinatra")
+	jobs, err := New(runtime, nil, nil, nil, nil).Cron("sinatra")
 	if err != nil || len(jobs) != 1 || jobs[0].Name != "cleanup" {
 		t.Fatalf("jobs = %+v, err = %v", jobs, err)
 	}
@@ -156,7 +159,7 @@ func TestCronReturnsScheduledJobs(t *testing.T) {
 
 func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
 	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}, invalid: []error{errors.New("bun: bad procfile")}, restart: []string{"proxy"}}
-	result, err := New(runtime, nil, nil).Rescan()
+	result, err := New(runtime, nil, nil, nil, nil).Rescan()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,5 +168,65 @@ func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
 	}
 	if len(result.Apps) != 1 || result.Apps[0].Name != "sinatra" {
 		t.Fatalf("rescan should return the fleet: %+v", result.Apps)
+	}
+}
+
+type fakePG struct {
+	enabled   bool
+	available bool
+	backups   []pg.Backup
+	applied   int
+}
+
+func (f *fakePG) Enabled() bool   { return f.enabled }
+func (f *fakePG) Available() bool { return f.available }
+func (f *fakePG) Snapshot() pg.Snapshot {
+	return pg.Snapshot{Available: f.available}
+}
+func (f *fakePG) Refresh(context.Context) pg.Snapshot { return pg.Snapshot{Available: f.available} }
+func (f *fakePG) BackupAll(context.Context) error     { return nil }
+func (f *fakePG) BackupDatabase(context.Context, string) (pg.Backup, error) {
+	return pg.Backup{Database: "app", Status: "ok"}, nil
+}
+func (f *fakePG) Backups() []pg.Backup { return f.backups }
+func (f *fakePG) Restore(context.Context, pg.RestoreRequest) (pg.RestoreResult, error) {
+	return pg.RestoreResult{Target: "app_restore"}, nil
+}
+func (f *fakePG) BackupConfig() config.PostgresBackup { return config.PostgresBackup{} }
+func (f *fakePG) S3Configured() bool                  { return false }
+func (f *fakePG) Apply(config.Config)                 { f.applied++ }
+
+func TestPGActionsDispatch(t *testing.T) {
+	postgres := &fakePG{enabled: true, available: true, backups: []pg.Backup{{ID: "b1", Database: "app"}}}
+	service := New(&fakeRuntime{}, nil, nil, postgres, nil)
+
+	if !service.PGAvailable() {
+		t.Fatal("PGAvailable should be true")
+	}
+	if _, err := service.Do(Request{Method: ActionPGBackup, Database: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Do(Request{Method: ActionPGRestore, BackupID: "b1", Target: "app_restore"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Do(Request{Method: ActionPG}); err != nil {
+		t.Fatal(err)
+	}
+	if entries := service.Backups(); len(entries) != 1 {
+		t.Fatalf("backups = %+v", entries)
+	}
+	service.ApplyPGConfig(config.Default())
+	if postgres.applied != 1 {
+		t.Fatalf("apply count = %d", postgres.applied)
+	}
+}
+
+func TestPGActionsDisabledWithoutService(t *testing.T) {
+	service := New(&fakeRuntime{}, nil, nil, nil, nil)
+	if service.PGAvailable() {
+		t.Fatal("PGAvailable should be false without a service")
+	}
+	if _, err := service.Do(Request{Method: ActionPG}); err == nil {
+		t.Fatal("pg action should fail without a service")
 	}
 }

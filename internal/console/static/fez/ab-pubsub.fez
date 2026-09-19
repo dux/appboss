@@ -1,0 +1,227 @@
+<script>
+  class {
+    init() {
+      this.state.apps = []
+      this.state.guide = ''
+      this.state.credential = null
+      this.state.publishApp = ''
+      this.state.loading = false
+      this.state.busy = false
+      this.state.error = ''
+      this.state.message = ''
+      this.state.messageError = false
+      this.state.needsSelectSync = false
+    }
+
+    onMount() {
+      this.subscribe('config:changed', () => this.load())
+      this.load()
+    }
+
+    // The app select is a fez:this ref: set its live value after the options render, never on
+    // every pass, so choosing an app or typing never fights a re-render.
+    afterRender() {
+      if (this.state.needsSelectSync) {
+        this.state.needsSelectSync = false
+        if (this.state.appSelect) this.state.appSelect.value = this.state.publishApp
+      }
+    }
+
+    async load() {
+      this.state.loading = true
+      try {
+        const data = await Boss.api('/api/pubsub')
+        this.state.apps = data.apps || []
+        this.state.guide = data.guide || ''
+        if (!this.state.apps.some((app) => app.name === this.state.publishApp)) {
+          this.state.publishApp = this.state.apps.length ? this.state.apps[0].name : ''
+        }
+        this.state.needsSelectSync = true
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    setApp(name) {
+      this.state.publishApp = name
+    }
+
+    async reveal(name) {
+      if (this.state.busy) return
+      try {
+        this.state.busy = true
+        this.state.credential = await Boss.api(`/api/pubsub/secret?app=${encodeURIComponent(name)}`)
+      } catch (error) {
+        this.message(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async rotate(name) {
+      if (this.state.busy) return
+      if (!window.confirm(`Rotate the publish secret for ${name}? The old secret stops working.`)) return
+      try {
+        this.state.busy = true
+        this.state.credential = await Boss.api('/api/pubsub/rotate', { method: 'POST', body: JSON.stringify({ app: name }) })
+        this.message(`Rotated the secret for ${name}.`)
+        Toast.show(`${name}: publish secret rotated`)
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async publish() {
+      if (this.state.busy) return
+      const app = this.state.publishApp
+      if (!app) {
+        this.message('Choose an app first.', true)
+        return
+      }
+      const channel = (this.state.channelInput?.value || '').trim()
+      if (!channel) {
+        this.message('A channel name is required.', true)
+        return
+      }
+      const event = (this.state.eventInput?.value || '').trim() || 'message'
+      const raw = (this.state.dataInput?.value || '').trim()
+      let data = null
+      if (raw) {
+        try {
+          data = JSON.parse(raw)
+        } catch (error) {
+          this.message('Data must be valid JSON.', true)
+          return
+        }
+      }
+      try {
+        this.state.busy = true
+        const result = await Boss.api('/api/pubsub/publish', { method: 'POST', body: JSON.stringify({ app, channel, event, data }) })
+        this.message(`Published ${event} to ${app}/${result.channel} (${result.subscribers} subscribers).`)
+        Toast.show(`${app}/${result.channel}: message sent`)
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    message(text, error = false) {
+      this.state.message = text
+      this.state.messageError = error
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Realtime</p>
+    <h1 class="page-title">Realtime channels</h1>
+  </div>
+  <div class="page-actions">
+    <button class="btn" type="button" onclick="fez.load()" disabled={state.loading}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      {state.loading ? 'Loading' : 'Refresh'}
+    </button>
+  </div>
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#each state.apps as app}
+  <div class="section-head">
+    <h2>{app.name}</h2>
+    <span class="text-muted">{app.path} · {app.clients} subscribers</span>
+  </div>
+  <section class="card">
+    <div class="card-header">
+      <h3 class="section-title">Channels</h3>
+      <div class="card-actions">
+        <button class="btn btn-sm" type="button" onclick="fez.reveal('{app.name}')" disabled={state.busy}>Show secret</button>
+        <button class="btn btn-sm" type="button" onclick="fez.rotate('{app.name}')" disabled={state.busy}>Rotate secret</button>
+      </div>
+    </div>
+    <div class="sys-tools">
+      <div class="sys-row sys-head pubsub-row">
+        <span class="subheader">Channel</span>
+        <span class="subheader">Subscribers</span>
+        <span class="subheader">Messages</span>
+      </div>
+      {#each app.channels as channel}
+        <div class="sys-row pubsub-row">
+          <span class="service-name">{app.path}/{channel.name}</span>
+          <span class="service-value">{channel.subscribers}</span>
+          <span class="service-value">{channel.messages}</span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No subscriber yet. Publish or connect to {app.path}/&lt;channel&gt;.</div>
+      {/each}
+    </div>
+  </section>
+{:else}
+  {#if !state.loading}
+    <div class="card empty-state">
+      <strong>No app serves realtime channels</strong>
+      <span>Set <code>pubsub.path</code> in an app's appboss.yaml, then rescan.</span>
+    </div>
+  {/if}
+{/each}
+
+{#if state.apps.length}
+  <div class="section-head">
+    <h2>Publish a message</h2>
+    <span class="text-muted">sent through the control socket, no secret needed</span>
+  </div>
+  <section class="card">
+    <div class="datagrid pubsub-form">
+      <div class="datagrid-item">
+        <span class="subheader">App</span>
+        <select fez:this="appSelect" onchange="fez.setApp(this.value)">
+          {#each state.apps as app}
+            <option value="{app.name}">{app.name}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="datagrid-item"><span class="subheader">Channel</span><input type="text" fez:this="channelInput" placeholder="chat" /></div>
+      <div class="datagrid-item"><span class="subheader">Event</span><input type="text" fez:this="eventInput" placeholder="message" /></div>
+    </div>
+    <div class="pubsub-data">
+      <span class="subheader">Data (JSON)</span>
+      <textarea fez:this="dataInput" rows="3" placeholder='{"text":"hello"}'></textarea>
+    </div>
+    {#if state.credential}
+      <div class="pubsub-credential">
+        <div class="datagrid-item"><span class="subheader">Publish secret</span><code>{state.credential.secret}</code></div>
+        <div class="datagrid-item"><span class="subheader">Subscribe URL</span><code>{state.credential.subscribe_url}</code></div>
+        <div class="datagrid-item"><span class="subheader">Publish URL</span><code>{state.credential.publish_url}</code></div>
+      </div>
+    {/if}
+    {#if state.message}
+      <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+    {/if}
+    <div class="card-actions pubsub-actions">
+      <button class="btn btn-primary" type="button" onclick="fez.publish()" disabled={state.busy}>
+        <svg class="icon"><use href="#i-play"></use></svg>
+        Publish
+      </button>
+    </div>
+  </section>
+{/if}
+
+{#if state.guide}
+  <div class="section-head">
+    <h2>Integration</h2>
+  </div>
+  <section class="card">
+    <pre class="pubsub-guide">{state.guide}</pre>
+  </section>
+{/if}

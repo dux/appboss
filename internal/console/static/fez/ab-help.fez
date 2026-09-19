@@ -8,6 +8,7 @@
     { id: 'logs', title: 'Logs' },
     { id: 'cron', title: 'Scheduled jobs' },
     { id: 'hooks', title: 'Deploy hooks' },
+    { id: 'pubsub', title: 'Realtime channels' },
     { id: 'audit', title: 'Audit & history' },
     { id: 'health', title: 'Health & alerts' },
     { id: 'cli', title: 'CLI' },
@@ -97,6 +98,13 @@
           <li><code>hooks:</code> one-shot commands triggered by a signed ping to <code>/hooks/&lt;app&gt;/&lt;hook&gt;</code>.</li>
           <li>Auth by a generated or configured secret: query token, bearer, GitLab token or GitHub HMAC.</li>
           <li><code>restart: true</code> rolls the app after a clean run; <code>appboss exec</code> runs one-off commands in the same environment.</li>
+        </ul>
+
+        <h3><a class="help-jump" onclick="fez.select('pubsub')">Realtime channels</a></h3>
+        <ul>
+          <li><code>pubsub.path</code> serves realtime channels on the app's own hosts: subscribers connect over a WebSocket or SSE, publishers POST with a secret.</li>
+          <li>The last <code>pubsub.replay</code> messages are replayed to a late subscriber; the bundled <code>&lt;path&gt;/client.js</code> needs no dependency.</li>
+          <li>A generated per-app publish secret, a browser self-test at <code>&lt;path&gt;/_test</code>, and <code>appboss pubsub</code> for the secret, channels and publishing.</li>
         </ul>
 
         <h3><a class="help-jump" onclick="fez.select('audit')">Audit &amp; history</a></h3>
@@ -251,6 +259,33 @@ appboss logs shop --search timeout --level error --channel stdout</pre>
     restart: true
     overlap: false</pre>
         <p><code>appboss exec shop bundle exec rails runner ...</code> runs a one-off command in the same environment and prints its combined output; options like <code>--timeout</code> come before the command. Both hooks and cron write to their own log channel.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'pubsub'}
+      <section>
+        <h2>Realtime channels</h2>
+        <p><code>pubsub.path</code> turns a URL prefix on the app's own hosts into a pub/sub hub. It is served by appboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
+        <pre>pubsub:
+  path: /socketio
+  replay: 10
+  client_events: true
+  test: false</pre>
+        <h3>Subscribe</h3>
+        <p>A GET to <code>&lt;path&gt;/&lt;channel&gt;</code> upgrades to a WebSocket, or streams SSE when the request carries no <code>Upgrade</code> header. The bundled client at <code>&lt;path&gt;/client.js</code> picks the transport for you, reconnects and falls back to SSE:</p>
+        <pre>&lt;script src="/socketio/client.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  const chat = Pubsub.connect(&#123; path: '/socketio' &#125;).channel('chat');
+  chat.on('message', (envelope) =&gt; console.log(envelope.event, envelope.data));
+  chat.on('open', () =&gt; chat.send('typing', &#123; user: 'a' &#125;));
+&lt;/script&gt;</pre>
+        <h3>Publish</h3>
+        <p>A POST to the same URL publishes with the app's secret. A body shaped like <code>&#123;"event","data"&#125;</code> is sent as written; any other body becomes the data of a <code>message</code> event.</p>
+        <pre>curl -X POST https://myapp.example.com/socketio/chat \
+  -H "Authorization: Bearer $PUBSUB_SECRET" \
+  -d '&#123;"event":"message","data":&#123;"text":"hello"&#125;&#125;'</pre>
+        <p>Each message is <code>&#123;"event","data","ts"&#125;</code>; the last <code>replay</code> messages are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher. <code>client_events: true</code> lets a WebSocket client publish to its own channel with the same envelope.</p>
+        <p>With no <code>secret</code> in the config, appboss generates one per app under <code>state_dir</code>; the Realtime tab and <code>appboss pubsub</code> print it and <code>appboss pubsub rotate</code> replaces it. The self-test at <code>&lt;path&gt;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
       </section>
     {/if}
 

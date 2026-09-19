@@ -108,7 +108,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	}
 	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer requestLogs.Close()
-	handler, err := New(cfg, manager, requestLogs)
+	handler, err := New(cfg, manager, requestLogs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	}
 	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer requestLogs.Close()
-	handler, err := New(cfg, manager, requestLogs)
+	handler, err := New(cfg, manager, requestLogs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,5 +329,50 @@ func writeProxyFixture(t *testing.T, path, contents string) {
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o640); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type fakeAuthorizer struct {
+	allow  bool
+	called bool
+}
+
+func (f *fakeAuthorizer) AuthorizesPublish(*http.Request, super.Snapshot) bool {
+	f.called = true
+	return f.allow
+}
+
+// A pubsub publisher presents its own secret, so basic_auth must not reject it before the
+// publisher filter runs.
+func TestAuthorizeHonorsPublishAuthorizer(t *testing.T) {
+	app := super.Snapshot{Name: "web", Web: config.Web{BasicAuth: map[string]string{"alice": "$2a$10$abcdefghijklmnopqrstuv"}}}
+
+	authorizer := &fakeAuthorizer{allow: true}
+	handler := &Handler{pubsub: authorizer}
+	next := false
+	recorder := httptest.NewRecorder()
+	handler.authorize(recorder, httptest.NewRequest(http.MethodPost, "/socketio/chat", nil), app, func() { next = true })
+	if !next || !authorizer.called {
+		t.Fatalf("publish authorizer was not consulted: next=%v called=%v", next, authorizer.called)
+	}
+
+	denied := &fakeAuthorizer{allow: false}
+	handler = &Handler{pubsub: denied}
+	recorder = httptest.NewRecorder()
+	next = false
+	handler.authorize(recorder, httptest.NewRequest(http.MethodPost, "/socketio/chat", nil), app, func() { next = true })
+	if next {
+		t.Fatal("an unauthorized publish must not reach the next filter")
+	}
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+}
+
+func TestSuppressRecordSkipsRequestLog(t *testing.T) {
+	recorder := &responseRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+	recorder.SuppressRecord()
+	if !recorder.suppressed {
+		t.Fatal("SuppressRecord did not mark the recorder")
 	}
 }

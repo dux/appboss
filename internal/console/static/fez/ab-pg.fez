@@ -1,0 +1,488 @@
+<script>
+  class {
+    init() {
+      this.state.snapshot = null
+      this.state.backups = []
+      this.state.backup = {}
+      this.state.s3 = false
+      this.state.selection = {}
+      this.state.policy = {}
+      this.state.loading = false
+      this.state.busy = false
+      this.state.error = ''
+      this.state.dirty = false
+      this.state.message = ''
+      this.state.messageError = false
+      this.state.filter = ''
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    // Policy inputs are fez:this refs, so they only exist after the settings card renders.
+    // Fill them once per load, after that render, never on every pass.
+    afterRender() {
+      if (this.state.needsSync) {
+        this.state.needsSync = false
+        this.syncInputs()
+      }
+    }
+
+    async load(refresh = false) {
+      this.state.loading = true
+      try {
+        const data = refresh
+          ? await Boss.api('/api/pg/refresh', { method: 'POST', body: '{}' })
+          : await Boss.api('/api/pg')
+        this.apply(data)
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    apply(data) {
+      const snapshot = data.snapshot
+      if (snapshot) {
+        snapshot.server = snapshot.server || {}
+        snapshot.server.replicas = snapshot.server.replicas || []
+        snapshot.activity = snapshot.activity || {}
+        snapshot.databases = snapshot.databases || []
+        snapshot.tablespaces = snapshot.tablespaces || []
+      }
+      this.state.snapshot = snapshot
+      this.state.backups = data.backups || []
+      this.state.backup = data.backup || {}
+      this.state.s3 = Boolean(data.s3)
+      const selection = {}
+      for (const database of (data.snapshot && data.snapshot.databases) || []) {
+        selection[database.name] = {
+          selected: database.backup_selected,
+          local: database.backup_local,
+          s3: database.backup_s3,
+        }
+      }
+      this.state.selection = selection
+      const backup = data.backup || {}
+      this.state.policy = {
+        dir: backup.dir || '',
+        s3: backup.s3 !== false,
+        every: backup.every || '',
+        timeout: backup.timeout || '',
+        globals: backup.globals !== false,
+        keep: backup.keep || { hourly: 0, daily: 0, weekly: 0, monthly: 0 },
+      }
+      this.state.dirty = false
+      this.state.needsSync = true
+    }
+
+    syncInputs() {
+      const policy = this.state.policy
+      if (this.state.dirInput) this.state.dirInput.value = policy.dir
+      if (this.state.everyInput) this.state.everyInput.value = policy.every
+      if (this.state.timeoutInput) this.state.timeoutInput.value = policy.timeout
+      if (this.state.s3Input) this.state.s3Input.checked = policy.s3
+      if (this.state.globalsInput) this.state.globalsInput.checked = policy.globals
+      const keep = policy.keep || {}
+      if (this.state.hourlyInput) this.state.hourlyInput.value = keep.hourly
+      if (this.state.dailyInput) this.state.dailyInput.value = keep.daily
+      if (this.state.weeklyInput) this.state.weeklyInput.value = keep.weekly
+      if (this.state.monthlyInput) this.state.monthlyInput.value = keep.monthly
+    }
+
+    setFilter(value) {
+      this.state.filter = value
+    }
+
+    databases() {
+      const rows = (this.state.snapshot && this.state.snapshot.databases) || []
+      const filter = this.state.filter.trim().toLowerCase()
+      if (!filter) return rows
+      return rows.filter((row) => row.name.toLowerCase().includes(filter))
+    }
+
+    selected(name) {
+      return Boolean(this.state.selection[name] && this.state.selection[name].selected)
+    }
+
+    destination(name, kind) {
+      const entry = this.state.selection[name]
+      return entry ? Boolean(entry[kind]) : false
+    }
+
+    toggleDatabase(name, checked) {
+      this.state.selection[name] = { ...this.state.selection[name], selected: checked }
+      this.state.dirty = true
+    }
+
+    toggleDestination(name, kind, checked) {
+      this.state.selection[name] = { ...this.state.selection[name], [kind]: checked }
+      this.state.dirty = true
+    }
+
+    markDirty() {
+      this.state.dirty = true
+    }
+
+    async save() {
+      if (this.state.busy) return
+      const selection = this.state.selection
+      const databases = {}
+      for (const [name, entry] of Object.entries(selection)) {
+        if (!entry.selected) continue
+        const target = {}
+        if (!entry.local) target.local = false
+        if (!entry.s3) target.s3 = false
+        databases[name] = target
+      }
+      const keep = {
+        hourly: Number(this.state.hourlyInput.value) || 0,
+        daily: Number(this.state.dailyInput.value) || 0,
+        weekly: Number(this.state.weeklyInput.value) || 0,
+        monthly: Number(this.state.monthlyInput.value) || 0,
+      }
+      const backup = {
+        dir: this.state.dirInput.value.trim(),
+        s3: this.state.s3Input.checked,
+        every: this.state.everyInput.value.trim(),
+        timeout: this.state.timeoutInput.value.trim(),
+        globals: this.state.globalsInput.checked,
+        keep,
+        databases,
+      }
+      try {
+        this.state.busy = true
+        const data = await Boss.api('/api/pg/config', { method: 'POST', body: JSON.stringify({ backup }) })
+        this.apply(data)
+        this.message('Backup settings saved.')
+        Toast.show('PostgreSQL backup settings saved')
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async backupNow(name = '') {
+      if (this.state.busy) return
+      if (name && !this.selected(name)) {
+        this.message(`Select ${name} before backing it up.`, true)
+        return
+      }
+      try {
+        this.state.busy = true
+        const data = await Boss.api('/api/pg/backup', { method: 'POST', body: JSON.stringify({ database: name }) })
+        this.state.backups = data.backups || []
+        this.message(name ? `Backup finished for ${name}.` : 'Backup finished.')
+        Toast.show(name ? `${name}: backup finished` : 'Backup finished')
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async restoreById(id) {
+      const entry = this.state.backups.find((candidate) => candidate.id === id)
+      if (!entry || this.state.busy) return
+      const target = window.prompt(`Restore ${entry.database} into which database?`, `${entry.database}_restore`)
+      if (!target) return
+      if (!window.confirm(`Restore backup ${entry.id} into ${target}?`)) return
+      try {
+        this.state.busy = true
+        const result = await Boss.api('/api/pg/restore', { method: 'POST', body: JSON.stringify({ id: entry.id, target }) })
+        Toast.show(`Restored into ${result.target}`)
+        this.message(`Restored into ${result.target}.`)
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    message(text, error = false) {
+      this.state.message = text
+      this.state.messageError = error
+    }
+
+    stamp(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return value
+      return date.toLocaleString()
+    }
+
+    bytes(value) {
+      const amount = Number(value || 0)
+      if (!amount) return '-'
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']
+      let index = 0
+      let size = amount
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024
+        index++
+      }
+      return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Number(value || 0))
+    }
+
+    duration(seconds) {
+      const total = Number(seconds || 0)
+      if (!total) return '-'
+      const days = Math.floor(total / 86400)
+      const hours = Math.floor((total % 86400) / 3600)
+      const minutes = Math.floor((total % 3600) / 60)
+      if (days) return `${days}d ${hours}h`
+      if (hours) return `${hours}h ${minutes}m`
+      return `${minutes}m`
+    }
+
+    percent(value) {
+      return `${Math.round(Number(value || 0) * 1000) / 10}%`
+    }
+
+    seconds(value) {
+      return (Number(value || 0)).toFixed(1)
+    }
+
+    statusClass(status) {
+      return status === 'ok' ? 'badge-success' : 'badge-danger'
+    }
+
+    location(entry) {
+      const places = []
+      if (entry.local_path) places.push('local')
+      if (entry.s3_key) places.push('s3')
+      return places.length ? places.join(' + ') : '-'
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">PG SQL</p>
+    <h1 class="page-title">{state.snapshot && state.snapshot.available ? state.snapshot.server.version : 'Server &amp; backups'}</h1>
+  </div>
+  <div class="page-actions">
+    {#if state.snapshot}
+      <span class="refresh-status">Collected {stamp(state.snapshot.collected_at)}</span>
+    {/if}
+    <button class="btn" type="button" onclick="fez.load(true)" disabled={state.loading}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      {state.loading ? 'Inspecting' : 'Re-inspect'}
+    </button>
+    <button class="btn btn-primary" type="button" onclick="fez.backupNow()" disabled={state.busy}>
+      <svg class="icon"><use href="#i-save"></use></svg>
+      Back up now
+    </button>
+  </div>
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#if !state.snapshot}
+  <div class="card empty-state">
+    <span class="spinner" aria-hidden="true"></span>
+    <strong>Reading PostgreSQL facts</strong>
+    <span>Connecting to the local server and listing its databases.</span>
+  </div>
+{:else}
+  <section class="stat-row" aria-label="PostgreSQL summary">
+    <article class="card stat-card">
+      <span class="subheader">Version</span>
+      <strong class="stat-value">{state.snapshot.server.version_num || '-'}</strong>
+      <span class="text-muted">{state.snapshot.server.description || '-'}</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Uptime</span>
+      <strong class="stat-value">{duration(state.snapshot.server.uptime_seconds)}</strong>
+      <span class="text-muted">since {stamp(state.snapshot.server.started_at)}</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Connections</span>
+      <strong class="stat-value">{state.snapshot.server.current_connections}</strong>
+      <span class="text-muted">of {state.snapshot.server.max_connections} allowed</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Cache hit</span>
+      <strong class="stat-value">{percent(state.snapshot.server.cache_hit_ratio)}</strong>
+      <span class="text-muted">{state.snapshot.server.in_recovery ? 'standby' : 'primary'} · {number((state.snapshot.databases || []).length)} databases</span>
+    </article>
+  </section>
+
+  <div class="section-head">
+    <h2>Activity</h2>
+  </div>
+  <section class="card">
+    <div class="datagrid">
+      <div class="datagrid-item"><span class="subheader">Active</span><span class="datagrid-content">{state.snapshot.activity.active}</span></div>
+      <div class="datagrid-item"><span class="subheader">Idle</span><span class="datagrid-content">{state.snapshot.activity.idle}</span></div>
+      <div class="datagrid-item"><span class="subheader">Idle in transaction</span><span class="datagrid-content">{state.snapshot.activity.idle_in_transaction}</span></div>
+      <div class="datagrid-item"><span class="subheader">Waiting on lock</span><span class="datagrid-content">{state.snapshot.activity.blocked}</span></div>
+      <div class="datagrid-item"><span class="subheader">Longest query</span><span class="datagrid-content">{seconds(state.snapshot.activity.longest_seconds)}s</span></div>
+      <div class="datagrid-item"><span class="subheader">WAL LSN</span><span class="datagrid-content">{state.snapshot.server.wal_lsn || '-'}</span></div>
+    </div>
+  </section>
+
+  {#if state.snapshot.server.replicas.length}
+    <div class="section-head">
+      <h2>Replication</h2>
+    </div>
+    <section class="card">
+      <div class="sys-tools">
+        <div class="sys-row sys-head pg-replica-row">
+          <span class="subheader">Client</span>
+          <span class="subheader">State</span>
+          <span class="subheader">Sync</span>
+          <span class="subheader">Lag</span>
+        </div>
+        {#each state.snapshot.server.replicas as replica}
+          <div class="sys-row pg-replica-row">
+            <span class="service-name">{replica.client_addr}</span>
+            <span class="sys-version">{replica.state}</span>
+            <span class="sys-version">{replica.sync_state}</span>
+            <span class="service-value">{bytes(replica.lag_bytes)}</span>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
+  {#if state.snapshot.tablespaces.length}
+    <div class="section-head">
+      <h2>Tablespaces</h2>
+    </div>
+    <section class="card">
+      <div class="sys-tools">
+        <div class="sys-row sys-head pg-tablespace-row">
+          <span class="subheader">Name</span>
+          <span class="subheader">Location</span>
+          <span class="subheader">Size</span>
+        </div>
+        {#each state.snapshot.tablespaces as tablespace}
+          <div class="sys-row pg-tablespace-row">
+            <span class="service-name">{tablespace.name}</span>
+            <span class="sys-version">{tablespace.location || '-'}</span>
+            <span class="service-value">{bytes(tablespace.size_bytes)}</span>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
+  <div class="section-head">
+    <h2>Databases</h2>
+    <span class="text-muted">Select what to back up and where</span>
+  </div>
+  <section class="card">
+    <div class="card-header">
+      <h3 class="section-title">Backup selection</h3>
+      <div class="card-actions">
+        <input type="text" placeholder="Filter" value={state.filter} oninput="fez.setFilter(this.value)" />
+      </div>
+    </div>
+    <div class="sys-tools pg-databases">
+      <div class="sys-row sys-head pg-row">
+        <span class="subheader">Database</span>
+        <span class="subheader">Size</span>
+        <span class="subheader">Owner</span>
+        <span class="subheader">Conns</span>
+        <span class="subheader">Back up</span>
+        <span class="subheader">Local</span>
+        <span class="subheader">S3</span>
+        <span class="subheader"></span>
+      </div>
+      {#each databases() as database}
+        <div class="sys-row pg-row">
+          <span class="service-name">{database.name}</span>
+          <span class="service-value">{bytes(database.size_bytes)}</span>
+          <span class="sys-version">{database.owner}</span>
+          <span class="service-value">{database.connections}</span>
+          <span><input type="checkbox" checked={state.selection[database.name].selected} onchange="fez.toggleDatabase('{database.name}', this.checked)" /></span>
+          <span><input type="checkbox" checked={state.selection[database.name].local} disabled={!state.selection[database.name].selected} onchange="fez.toggleDestination('{database.name}', 'local', this.checked)" /></span>
+          <span><input type="checkbox" checked={state.selection[database.name].s3} disabled={!state.selection[database.name].selected} onchange="fez.toggleDestination('{database.name}', 's3', this.checked)" /></span>
+          <span><button class="btn btn-sm" type="button" onclick="fez.backupNow('{database.name}')" disabled={state.busy}>Back up</button></span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No database matches the filter.</div>
+      {/each}
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Backup policy</h2>
+    <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={state.busy}>
+      <svg class="icon"><use href="#i-save"></use></svg>
+      Save changes
+    </button>
+  </div>
+  <section class="card">
+    <div class="datagrid pg-settings">
+      <div class="datagrid-item"><span class="subheader">Local directory</span><input type="text" fez:this="dirInput" oninput="fez.markDirty()" /></div>
+      <div class="datagrid-item"><span class="subheader">Interval</span><input type="text" fez:this="everyInput" oninput="fez.markDirty()" placeholder="6h" /></div>
+      <div class="datagrid-item"><span class="subheader">Timeout</span><input type="text" fez:this="timeoutInput" oninput="fez.markDirty()" placeholder="1h" /></div>
+      <div class="datagrid-item"><span class="subheader">S3 destination</span><label class="pg-check"><input type="checkbox" fez:this="s3Input" onchange="fez.markDirty()" /> copy to S3</label></div>
+      <div class="datagrid-item"><span class="subheader">Globals</span><label class="pg-check"><input type="checkbox" fez:this="globalsInput" onchange="fez.markDirty()" /> roles &amp; tablespaces</label></div>
+    </div>
+    <div class="datagrid pg-settings pg-keep">
+      <div class="datagrid-item"><span class="subheader">Keep hourly</span><input type="number" min="0" fez:this="hourlyInput" oninput="fez.markDirty()" /></div>
+      <div class="datagrid-item"><span class="subheader">Keep daily</span><input type="number" min="0" fez:this="dailyInput" oninput="fez.markDirty()" /></div>
+      <div class="datagrid-item"><span class="subheader">Keep weekly</span><input type="number" min="0" fez:this="weeklyInput" oninput="fez.markDirty()" /></div>
+      <div class="datagrid-item"><span class="subheader">Keep monthly</span><input type="number" min="0" fez:this="monthlyInput" oninput="fez.markDirty()" /></div>
+    </div>
+    <div class="text-muted pg-note">
+      {state.s3 ? 'S3 is configured; dumps marked s3 are uploaded.' : 'S3 is not configured. Set the s3 block in the host config to enable off-host copies.'}
+    </div>
+    {#if state.message}
+      <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+    {/if}
+  </section>
+
+  <div class="section-head">
+    <h2>Backups</h2>
+    <span class="text-muted">{state.backups.length} recorded</span>
+  </div>
+  <section class="card">
+    <div class="sys-tools">
+      <div class="sys-row sys-head pg-backup-row">
+        <span class="subheader">Database</span>
+        <span class="subheader">Time</span>
+        <span class="subheader">Size</span>
+        <span class="subheader">Where</span>
+        <span class="subheader">Status</span>
+        <span class="subheader">Duration</span>
+        <span class="subheader"></span>
+      </div>
+      {#each state.backups as entry}
+        <div class="sys-row pg-backup-row">
+          <span class="service-name">{entry.globals ? 'globals' : entry.database}</span>
+          <span class="sys-version">{stamp(entry.time)}</span>
+          <span class="service-value">{bytes(entry.bytes)}</span>
+          <span class="sys-version">{location(entry)}</span>
+          <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
+          <span class="service-value">{entry.duration_ms}ms</span>
+          <span>
+            {#if entry.status === 'ok'}
+              <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
+            {:else}
+              <span class="text-muted">{entry.error || '-'}</span>
+            {/if}
+          </span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No backups recorded yet.</div>
+      {/each}
+    </div>
+  </section>
+{/if}

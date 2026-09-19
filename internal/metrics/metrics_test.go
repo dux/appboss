@@ -25,7 +25,7 @@ func TestRenderIncludesCoreMetrics(t *testing.T) {
 		Cron:  []super.CronSnapshot{{Name: "cleanup", LastEnd: now, LastExit: 1}},
 		Hooks: []super.HookSnapshot{{Name: "deploy", LastEnd: now, LastExit: 0}},
 	}}
-	out := Render(apps, now, NotifyStats{Sent: 4, Failed: 1, Dropped: 2}, map[string]Latency{"web": {Count: 10, P50: 5, P95: 40, P99: 90}})
+	out := Render(apps, now, NotifyStats{Sent: 4, Failed: 1, Dropped: 2}, map[string]Latency{"web": {Count: 10, P50: 5, P95: 40, P99: 90}}, PGStats{}, map[string]PubsubStats{"web": {Clients: 3, Channels: 2, Messages: 11}})
 	for _, want := range []string{
 		"# TYPE appboss_app_up gauge",
 		`appboss_app_up{app="web"} 1`,
@@ -48,6 +48,9 @@ func TestRenderIncludesCoreMetrics(t *testing.T) {
 		`appboss_notifications_total{result="sent"} 4`,
 		`appboss_notifications_total{result="failed"} 1`,
 		`appboss_notifications_total{result="dropped"} 2`,
+		`appboss_pubsub_clients{app="web"} 3`,
+		`appboss_pubsub_channels{app="web"} 2`,
+		`appboss_pubsub_messages_total{app="web"} 11`,
 		`appboss_build_info{version="`,
 	} {
 		if !strings.Contains(out, want) {
@@ -62,7 +65,7 @@ func TestRenderOmitsUnstartedJobsAndEscapesLabels(t *testing.T) {
 		State: super.Stopped,
 		Cron:  []super.CronSnapshot{{Name: "never"}},
 		Hooks: []super.HookSnapshot{{Name: "never"}},
-	}}, time.Now(), NotifyStats{}, nil)
+	}}, time.Now(), NotifyStats{}, nil, PGStats{}, nil)
 	if strings.Contains(out, "appboss_cron_last_exit{") || strings.Contains(out, "appboss_hook_last_exit{") {
 		t.Fatalf("a job that never ran should have no sample:\n%s", out)
 	}

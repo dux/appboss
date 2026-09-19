@@ -34,10 +34,17 @@ type Recorder interface {
 	Record(app string, retention time.Duration, entry logstore.RequestEntry) error
 }
 
+// PublishAuthorizer lets a module vouch for a request that basic_auth would otherwise reject, so
+// a pubsub publisher needs only its own publish secret. A nil authorizer disables the check.
+type PublishAuthorizer interface {
+	AuthorizesPublish(r *http.Request, app super.Snapshot) bool
+}
+
 type Handler struct {
 	cfg         config.Config
 	manager     *super.Manager
 	recorder    Recorder
+	pubsub      PublishAuthorizer
 	transport   *http.Transport
 	starting    []byte
 	crashed     []byte
@@ -49,7 +56,7 @@ type Handler struct {
 
 // New builds the proxy. extra stages are inserted before the forward stage, which is where a
 // module hooks its own filter into the pipeline.
-func New(cfg config.Config, manager *super.Manager, recorder Recorder, extra ...Filter) (*Handler, error) {
+func New(cfg config.Config, manager *super.Manager, recorder Recorder, authorizer PublishAuthorizer, extra ...Filter) (*Handler, error) {
 	starting, err := readPage(cfg.Proxy.Wake.StartingPage)
 	if err != nil {
 		return nil, err
@@ -71,7 +78,7 @@ func New(cfg config.Config, manager *super.Manager, recorder Recorder, extra ...
 		return nil, err
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance}
 	h.initFilters(extra...)
 	return h, nil
 }
@@ -89,6 +96,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := ensureRequestID(r)
 	recorder := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 	h.serve(recorder, r, snapshot)
+	if recorder.suppressed {
+		return
+	}
 	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: snapshot.WebProcess})
 }
 
@@ -123,20 +133,18 @@ func allowed(ip string, prefixes []netip.Prefix) bool {
 	return false
 }
 
-// authorized enforces basic_auth. The user lookup is a plain map hit because the user list is
-// not secret; the password comparison is bcrypt's own constant-time compare.
-func authorized(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) bool {
+// authorized checks basic_auth. The user lookup is a plain map hit because the user list is not
+// secret; the password comparison is bcrypt's own constant-time compare.
+func authorized(r *http.Request, snapshot super.Snapshot) bool {
 	if len(snapshot.Web.BasicAuth) == 0 {
 		return true
 	}
-	if user, password, ok := r.BasicAuth(); ok {
-		if hash, found := snapshot.Web.BasicAuth[user]; found && bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
-			return true
-		}
+	user, password, ok := r.BasicAuth()
+	if !ok {
+		return false
 	}
-	w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q", snapshot.Name))
-	http.Error(w, "authentication required", http.StatusUnauthorized)
-	return false
+	hash, found := snapshot.Web.BasicAuth[user]
+	return found && bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
 // serveStatic answers GET and HEAD for files under the static directory. Missing files and
@@ -505,9 +513,14 @@ type responseRecorder struct {
 	status      int
 	bytes       int64
 	wroteHeader bool
+	suppressed  bool
 }
 
 func (r *responseRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// SuppressRecord keeps a long-lived response out of the request log. The pubsub filter calls it
+// once a WebSocket or SSE stream is established, so its lifetime cannot skew request latency.
+func (r *responseRecorder) SuppressRecord() { r.suppressed = true }
 
 func (r *responseRecorder) WriteHeader(status int) {
 	if r.wroteHeader {

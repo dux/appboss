@@ -11,6 +11,8 @@
       this.globalState.busy = false
       this.globalState.status = 'Waiting for daemon'
       this.globalState.restartRequired = []
+      this.globalState.pgAvailable = false
+      this.globalState.pubsubAvailable = false
     }
 
     onMount() {
@@ -29,6 +31,8 @@
       if (location.hash === '#logs') return 'logs'
       if (location.hash === '#audit') return 'audit'
       if (location.hash === '#sys') return 'sys'
+      if (location.hash === '#pg') return 'pg'
+      if (location.hash === '#pubsub') return 'pubsub'
       if (location.hash === '#help') return 'help'
       return 'overview'
     }
@@ -66,12 +70,16 @@
       return response.text()
     }
 
-    applyApps(apps, updatedAt = new Date().toISOString()) {
+    applyApps(apps, updatedAt = new Date().toISOString(), capabilities = null) {
       const fleet = Array.isArray(apps) ? [...apps].sort((a, b) => a.name.localeCompare(b.name)) : []
       const time = new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       this.globalState.apps = fleet
       this.globalState.loaded = true
       this.globalState.status = `Updated ${time}`
+      if (capabilities) {
+        this.globalState.pgAvailable = Boolean(capabilities.postgres)
+        this.globalState.pubsubAvailable = Boolean(capabilities.pubsub)
+      }
     }
 
     setBusy(busy) {
@@ -83,7 +91,7 @@
         const data = await this.api('/api/bootstrap')
         this.state.csrf = data.csrf
         this.state.viewer = data.viewer
-        this.applyApps(data.apps, data.updated_at)
+        this.applyApps(data.apps, data.updated_at, data.capabilities)
         this.globalState.restartRequired = data.restart_required || []
       } catch (error) {
         Toast.show(error.message, true)
@@ -95,7 +103,7 @@
       try {
         if (!quiet) this.setBusy(true)
         const data = await this.api('/api/apps')
-        this.applyApps(data.apps, data.updated_at)
+        this.applyApps(data.apps, data.updated_at, data.capabilities)
       } catch (error) {
         this.globalState.status = 'Daemon unavailable'
         if (!quiet) Toast.show(error.message, true)
@@ -180,7 +188,13 @@
       <li><a class="nav-link" class:active={state.view === 'logs'} href="#logs"><svg class="icon"><use href="#i-list"></use></svg>Logs</a></li>
       <li><a class="nav-link" class:active={state.view === 'audit'} href="#audit"><svg class="icon"><use href="#i-file-text"></use></svg>Audit</a></li>
       <li><a class="nav-link" class:active={state.view === 'sys'} href="#sys"><svg class="icon"><use href="#i-server"></use></svg>Sys</a></li>
-      <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Configuration</a></li>
+      {#if globalState.pgAvailable}
+        <li><a class="nav-link" class:active={state.view === 'pg'} href="#pg"><svg class="icon"><use href="#i-database"></use></svg>PG SQL</a></li>
+      {/if}
+      {#if globalState.pubsubAvailable}
+        <li><a class="nav-link" class:active={state.view === 'pubsub'} href="#pubsub"><svg class="icon"><use href="#i-broadcast"></use></svg>Realtime</a></li>
+      {/if}
+      <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Config</a></li>
       <li><a class="nav-link" class:active={state.view === 'help'} href="#help"><svg class="icon"><use href="#i-help"></use></svg>Help</a></li>
     </ul>
   </div>
@@ -199,6 +213,12 @@
     </section>
     <section class="view" class:d-none={state.view !== 'sys'}>
       <ab-sys />
+    </section>
+    <section class="view" class:d-none={state.view !== 'pg'}>
+      <ab-pg />
+    </section>
+    <section class="view" class:d-none={state.view !== 'pubsub'}>
+      <ab-pubsub />
     </section>
     <section class="view" class:d-none={state.view !== 'config'}>
       <ab-config />

@@ -26,7 +26,7 @@ func (s *auditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, e
 
 func TestDoAuditsMutatingActions(t *testing.T) {
 	store := &auditStore{}
-	service := New(&fakeRuntime{}, nil, store)
+	service := New(&fakeRuntime{}, nil, store, nil, nil)
 	if _, err := service.Do(Request{Method: ActionRestart, App: "web", Actor: "admin@example.com"}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestDoAuditsMutatingActions(t *testing.T) {
 }
 
 func TestAuditDisabledWithoutAuditor(t *testing.T) {
-	service := New(&fakeRuntime{}, nil, nil)
+	service := New(&fakeRuntime{}, nil, nil, nil, nil)
 	if _, err := service.SearchAudit(logstore.AuditFilter{}); err == nil {
 		t.Fatal("SearchAudit should fail without an auditor")
 	}
@@ -59,7 +59,7 @@ func (s *sinkRecorder) Send(event notify.Event) { s.events = append(s.events, ev
 
 func TestNotifyForwardsToSink(t *testing.T) {
 	sink := &sinkRecorder{}
-	service := New(&fakeRuntime{}, nil, nil, sink)
+	service := New(&fakeRuntime{}, nil, nil, nil, nil, sink)
 	service.Notify("config-changed", "web", "restart required: management")
 	if len(sink.events) != 1 || sink.events[0].Type != "config-changed" || sink.events[0].App != "web" {
 		t.Fatalf("events = %+v", sink.events)

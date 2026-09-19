@@ -25,6 +25,8 @@ import (
 	"app-boss/internal/daemon"
 	"app-boss/internal/logstore"
 	"app-boss/internal/ops"
+	"app-boss/internal/pg"
+	"app-boss/internal/pubsub"
 	"app-boss/internal/super"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
@@ -606,6 +608,90 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		request.App, request.Actor, request.Action, request.Lines = *app, *actor, *action, *lines
+	case "pg":
+		pgArgs := opts.rest
+		switch {
+		case len(pgArgs) == 0:
+			request.Method = ops.ActionPG
+		case pgArgs[0] == "backups":
+			if len(pgArgs) != 1 {
+				return errors.New("usage: appboss pg backups")
+			}
+			request.Method = ops.ActionPGBackups
+		case pgArgs[0] == "backup":
+			if len(pgArgs) > 2 {
+				return errors.New("usage: appboss pg backup [database]")
+			}
+			request.Method = ops.ActionPGBackup
+			if len(pgArgs) == 2 {
+				request.Database = pgArgs[1]
+			}
+		case pgArgs[0] == "restore":
+			set := flag.NewFlagSet("pg restore", flag.ContinueOnError)
+			set.SetOutput(c.Err)
+			target := set.String("target", "", "target database (default: <source>_restore)")
+			force := set.Bool("force", false, "replace an existing target database")
+			if err := set.Parse(pgArgs[1:]); err != nil {
+				return err
+			}
+			if set.NArg() != 1 {
+				return errors.New("usage: appboss pg restore <backup-id> [--target name] [--force]")
+			}
+			request.Method = ops.ActionPGRestore
+			request.BackupID = set.Arg(0)
+			request.Target, request.Replace = *target, *force
+			if *force {
+				request.Confirm = *target
+			}
+		default:
+			return errors.New("usage: appboss pg [backups | backup [database] | restore <backup-id>]")
+		}
+	case "pubsub":
+		pub := opts.rest
+		switch {
+		case len(pub) > 0 && pub[0] == "help":
+			fmt.Fprintln(c.Out, pubsub.Help)
+			return nil
+		case len(pub) > 0 && pub[0] == "rotate":
+			request.Method = ops.ActionPubsubRotate
+			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
+				return fmt.Errorf("usage: appboss pubsub rotate [app] (%w)", err)
+			}
+		case len(pub) > 0 && pub[0] == "secret":
+			request.Method = ops.ActionPubsubSecret
+			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
+				return fmt.Errorf("usage: appboss pubsub secret [app] (%w)", err)
+			}
+		case len(pub) > 0 && pub[0] == "publish":
+			request.Method = ops.ActionPubsubPublish
+			set := flag.NewFlagSet("pubsub publish", flag.ContinueOnError)
+			set.SetOutput(c.Err)
+			event := set.String("event", "message", "event name")
+			data := set.String("data", "", `JSON payload, or - to read stdin`)
+			flags, positionals := splitFlags(pub[1:], "--event", "-event", "--data", "-data")
+			if err := set.Parse(flags); err != nil {
+				return err
+			}
+			if len(positionals) == 0 {
+				return errors.New("usage: appboss pubsub publish [app] <channel> [--event name] [--data json|-]")
+			}
+			request.Channel = positionals[len(positionals)-1]
+			if request.App, err = appArgument(positionals[:len(positionals)-1], opts.config); err != nil {
+				return fmt.Errorf("usage: appboss pubsub publish <app> <channel> (%w)", err)
+			}
+			request.Event = *event
+			request.Data, err = pubsubData(*data, c.In)
+			if err != nil {
+				return err
+			}
+		default:
+			request.Method = ops.ActionPubsub
+			if len(pub) > 0 {
+				if request.App, err = appArgument(pub, opts.config); err != nil {
+					return fmt.Errorf("usage: appboss pubsub [app] (%w)", err)
+				}
+			}
+		}
 	}
 	jsonOutput := opts.json
 	var data any
@@ -672,6 +758,48 @@ func (c CLI) remote(command string, args []string) error {
 		data = result
 	case "login":
 		var result map[string]string
+		if err := client.Call(request, &result); err != nil {
+			return err
+		}
+		data = result
+	case ops.ActionPG:
+		var snapshot pg.Snapshot
+		if err := client.Call(request, &snapshot); err != nil {
+			return err
+		}
+		data = snapshot
+	case ops.ActionPGBackups:
+		var backups []pg.Backup
+		if err := client.Call(request, &backups); err != nil {
+			return err
+		}
+		data = backups
+	case ops.ActionPGBackup:
+		var backups []pg.Backup
+		if err := client.Call(request, &backups); err != nil {
+			return err
+		}
+		data = backups
+	case ops.ActionPGRestore:
+		var result pg.RestoreResult
+		if err := client.Call(request, &result); err != nil {
+			return err
+		}
+		data = result
+	case ops.ActionPubsub:
+		var apps []pubsub.App
+		if err := client.Call(request, &apps); err != nil {
+			return err
+		}
+		data = apps
+	case ops.ActionPubsubSecret, ops.ActionPubsubRotate:
+		var secret ops.PubsubSecret
+		if err := client.Call(request, &secret); err != nil {
+			return err
+		}
+		data = secret
+	case ops.ActionPubsubPublish:
+		var result ops.PubsubPublished
 		if err := client.Call(request, &result); err != nil {
 			return err
 		}
@@ -995,6 +1123,95 @@ func (c CLI) printHuman(method string, data any) error {
 	case "login":
 		fmt.Fprintln(c.Out, data.(map[string]string)["url"])
 		fmt.Fprintln(c.Out, "Opens the console as cli@localhost. Valid for 3 minutes, one use.")
+	case ops.ActionPG:
+		snapshot := data.(pg.Snapshot)
+		summary := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(summary, "server\t%s\n", snapshot.Server.Version)
+		fmt.Fprintf(summary, "connection\t%s\n", snapshot.Server.Description)
+		fmt.Fprintf(summary, "uptime\t%d seconds\n", snapshot.Server.UptimeSeconds)
+		fmt.Fprintf(summary, "connections\t%d of %d\n", snapshot.Server.CurrentConnections, snapshot.Server.MaxConnections)
+		fmt.Fprintf(summary, "activity\t%d active, %d idle, %d blocked\n", snapshot.Activity.Active, snapshot.Activity.Idle, snapshot.Activity.Blocked)
+		if err := summary.Flush(); err != nil {
+			return err
+		}
+		fmt.Fprintln(c.Out)
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "DATABASE\tSIZE\tOWNER\tCONNS\tBACKUP\tLOCAL\tS3")
+		for _, database := range snapshot.Databases {
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%d\t%t\t%t\t%t\n", database.Name, database.SizeBytes, database.Owner, database.Connections, database.BackupSelected, database.BackupLocal, database.BackupS3)
+		}
+		return writer.Flush()
+	case ops.ActionPGBackups:
+		backups := data.([]pg.Backup)
+		if len(backups) == 0 {
+			fmt.Fprintln(c.Out, "no backups recorded")
+			return nil
+		}
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "DATABASE\tTIME\tSIZE\tWHERE\tSTATUS\tID")
+		for _, entry := range backups {
+			places := ""
+			if entry.LocalPath != "" {
+				places = "local"
+			}
+			if entry.S3Key != "" {
+				if places != "" {
+					places += "+"
+				}
+				places += "s3"
+			}
+			name := entry.Database
+			if entry.Globals {
+				name = "globals"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\t%s\n", name, entry.Time, entry.Bytes, places, entry.Status, entry.ID)
+		}
+		return writer.Flush()
+	case ops.ActionPGBackup:
+		backups := data.([]pg.Backup)
+		for _, entry := range backups {
+			if entry.Error != "" {
+				fmt.Fprintf(c.Out, "%s: failed: %s\n", entry.Database, entry.Error)
+				continue
+			}
+			fmt.Fprintf(c.Out, "%s: %d bytes in %dms\n", entry.Database, entry.Bytes, entry.DurationMS)
+		}
+	case ops.ActionPGRestore:
+		result := data.(pg.RestoreResult)
+		fmt.Fprintf(c.Out, "restored %d bytes into %s\n", result.Bytes, result.Target)
+	case ops.ActionPubsub:
+		apps := data.([]pubsub.App)
+		if len(apps) == 0 {
+			fmt.Fprintln(c.Out, "no app serves realtime channels (set pubsub.path in appboss.yaml)")
+			return nil
+		}
+		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "APP\tPATH\tCLIENTS\tCHANNELS")
+		for _, app := range apps {
+			channels := "-"
+			if len(app.Channels) > 0 {
+				parts := make([]string, len(app.Channels))
+				for i, channel := range app.Channels {
+					parts[i] = fmt.Sprintf("%s(%d)", channel.Name, channel.Subscribers)
+				}
+				channels = strings.Join(parts, ",")
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", app.Name, app.Path, app.Clients, channels)
+		}
+		return writer.Flush()
+	case ops.ActionPubsubSecret, ops.ActionPubsubRotate:
+		info := data.(ops.PubsubSecret)
+		if method == ops.ActionPubsubRotate {
+			fmt.Fprintln(c.Out, "rotated; new publish secret:")
+		}
+		fmt.Fprintf(c.Out, "app:       %s\n", info.App)
+		fmt.Fprintf(c.Out, "path:      %s\n", info.Path)
+		fmt.Fprintf(c.Out, "secret:    %s\n", info.Secret)
+		fmt.Fprintf(c.Out, "subscribe: %s\n", info.Subscribe)
+		fmt.Fprintf(c.Out, "publish:   %s\n", info.Publish)
+	case ops.ActionPubsubPublish:
+		result := data.(ops.PubsubPublished)
+		fmt.Fprintf(c.Out, "published to %s (%d subscribers)\n", result.Channel, result.Subscribers)
 	default:
 		fmt.Fprintln(c.Out, "ok")
 	}
@@ -1007,6 +1224,57 @@ func joinAny(values []any) string {
 		parts[i] = fmt.Sprint(value)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// splitFlags separates flags from positional arguments so a value flag may appear after an
+// app or channel argument, which Go's flag package does not allow. valued names the flags that
+// take a following value.
+func splitFlags(args []string, valued ...string) (flags, positionals []string) {
+	set := map[string]bool{}
+	for _, name := range valued {
+		set[name] = true
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name := arg
+		if index := strings.IndexByte(arg, '='); index >= 0 {
+			name = arg[:index]
+		}
+		if set[name] {
+			flags = append(flags, arg)
+			if !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			flags = append(flags, arg)
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return flags, positionals
+}
+
+// pubsubData turns the --data flag into a JSON payload. "-" reads stdin, valid JSON passes
+// through, and anything else becomes a JSON string.
+func pubsubData(value string, in io.Reader) (json.RawMessage, error) {
+	if value == "-" {
+		data, err := io.ReadAll(in)
+		if err != nil {
+			return nil, err
+		}
+		value = string(data)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return json.RawMessage("null"), nil
+	}
+	if json.Valid([]byte(value)) {
+		return json.RawMessage(value), nil
+	}
+	return json.Marshal(value)
 }
 
 func (c CLI) follow(client ctl.Client, request ctl.Request) error {

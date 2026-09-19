@@ -298,7 +298,9 @@ func TestOverridesMirrorDefaults(t *testing.T) {
 				expected = reflect.PointerTo(expected)
 			}
 			if override.Type != expected || override.Name != field.Name {
-				t.Errorf("%s: %s override is %s %s, want %s %s", pair.name, key, override.Name, override.Type, field.Name, expected)
+				if !sameStructShape(override.Type, expected) {
+					t.Errorf("%s: %s override is %s %s, want %s %s", pair.name, key, override.Name, override.Type, field.Name, expected)
+				}
 			}
 			delete(got, key)
 		}
@@ -306,6 +308,30 @@ func TestOverridesMirrorDefaults(t *testing.T) {
 			t.Errorf("%s: override %s has no defaults field", pair.name, key)
 		}
 	}
+}
+
+// sameStructShape reports whether two types are pointers to structs with the same YAML keys, so a
+// nested shared block can use a dedicated pointer-field override type.
+func sameStructShape(a, b reflect.Type) bool {
+	for a.Kind() == reflect.Pointer {
+		a = a.Elem()
+	}
+	for b.Kind() == reflect.Pointer {
+		b = b.Elem()
+	}
+	if a.Kind() != reflect.Struct || b.Kind() != reflect.Struct {
+		return false
+	}
+	left, right := yamlFields(a), yamlFields(b)
+	if len(left) != len(right) {
+		return false
+	}
+	for key := range left {
+		if _, ok := right[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // yamlFields flattens inline embedded structs the way the YAML decoder does, keyed by YAML name.
@@ -527,5 +553,39 @@ func TestErrorsPointAtLineAndKey(t *testing.T) {
 	var cfgErr *Error
 	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/appboss.yaml" {
 		t.Errorf("structured error = %+v", cfgErr)
+	}
+}
+
+func TestPubsubConfig(t *testing.T) {
+	defaults := Default().Defaults
+	if defaults.Pubsub.Replay != 10 || defaults.Pubsub.MaxClients != 500 || !defaults.Pubsub.ClientEvents {
+		t.Fatalf("unexpected pubsub defaults: %+v", defaults.Pubsub)
+	}
+
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\npubsub:\n  path: /socketio\n  replay: 0\n"), "appboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Pubsub.Path != "/socketio" || app.Pubsub.Replay != 0 {
+		t.Fatalf("unexpected pubsub: %+v", app.Pubsub)
+	}
+	// An absent key in the app block keeps the value from defaults:.
+	if app.Pubsub.MaxClients != 500 || !app.Pubsub.ClientEvents || app.Pubsub.MaxMessageSize != Size(64<<10) {
+		t.Fatalf("override did not merge with defaults: %+v", app.Pubsub)
+	}
+
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  pubsub:\n    path: /events\n    client_events: false\n"), "/srv/appboss.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Defaults.Pubsub.Path != "/events" || cfg.Defaults.Pubsub.ClientEvents || cfg.Defaults.Pubsub.Replay != 10 {
+		t.Fatalf("unexpected host defaults: %+v", cfg.Defaults.Pubsub)
+	}
+
+	for _, path := range []string{"/", "socketio", "/socketio/", "/socket io", "/a//b", "/a$b"} {
+		data := "procfile:\n  web: ./server\npubsub:\n  path: \"" + path + "\"\n"
+		if _, err := ParseApp([]byte(data), "appboss.yaml", defaults); err == nil {
+			t.Errorf("path %q should be invalid", path)
+		}
 	}
 }

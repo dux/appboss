@@ -327,12 +327,75 @@ notify:
   #   hook-failed     a deploy hook exited non-zero
   #   deploy          a deploy hook with restart: true succeeded and the app rolled
   #   config-changed  a config write needs a restart (host keys changed on disk)
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed]
+  #   backup-failed   a PostgreSQL backup dump or upload failed
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed]
   # Quiet period per app and event. 0 posts every event.
   min_interval: 5m
   # Extra headers sent with every request.
   headers: {}
   #   Authorization: "Bearer $TOKEN"
+
+# --- PostgreSQL --------------------------------------------------------------
+# Optional. When a server is reachable the management console gains a PostgreSQL tab with server
+# facts, database sizes, activity and the backup history. With backup.databases empty nothing is
+# scheduled, so the block is read-only until you select databases (the console writes the
+# selection to appboss.local.yaml). This feature needs pg_dump, pg_dumpall and pg_restore on the
+# service user's PATH.
+
+postgres:
+  # false hides the tab and stops all inspection and backups.
+  enabled: true
+  # libpq connection string or URL. Keep a password out of the committed file with $DATABASE_URL.
+  # Empty means: try /var/run/postgresql, then 127.0.0.1:5432, with the PG* environment merged in.
+  dsn: ""
+  backup:
+    # Local directory that receives dumps, one subfolder per database. Empty disables local
+    # copies, so a database with s3: false and no dir has nowhere to go and is rejected.
+    dir: ./.appboss/pg-backups
+    # Default destination for every selected database. A database can override it per entry.
+    s3: true
+    # Interval between scheduled backups, a Go duration. 0 makes backups manual only.
+    every: 6h
+    # Kill a dump that is still running after this long. 0 means no limit.
+    timeout: 1h
+    # Also dump roles and tablespaces with pg_dumpall --globals-only, as one _globals entry.
+    globals: true
+    # Grandfather-father-son retention. Each bucket keeps the newest N dumps for its period
+    # (hour, day, ISO week, month) and the rest are removed from disk and S3. 0 disables a bucket.
+    keep:
+      hourly: 24
+      daily: 7
+      weekly: 8
+      monthly: 6
+    # Databases to back up. A key being present selects the database; the value overrides the
+    # destinations above. {} selects it for both local and s3.
+    databases: {}
+    #   myapp_production: {}            # local + s3
+    #   reports: {local: false}         # s3 only
+    #   legacy: {s3: false}             # local only
+
+# --- Object storage ----------------------------------------------------------
+# Optional S3-compatible storage for off-host backup copies. Cloudflare R2, AWS S3 and MinIO all
+# work. Empty endpoint or bucket disables it. Keep the keys out of the committed file with $VARS.
+
+s3:
+  # Full endpoint URL. Empty disables object storage.
+  endpoint: ""
+  #   https://<account>.r2.cloudflarestorage.com
+  # Bucket region. auto is the R2 default.
+  region: auto
+  # Bucket that receives the objects. Empty disables object storage.
+  bucket: ""
+  #   appboss-backups
+  # Key prefix prepended to every object (a trailing / is added).
+  prefix: ""
+  #   pg/
+  access_key: $S3_ACCESS_KEY
+  secret_key: $S3_SECRET_KEY
+  # Path-style addressing. Required by MinIO and some other S3 servers.
+  path_style: false
+  # Server-side encryption algorithm for uploads, e.g. AES256. Empty uses the bucket default.
+  sse: ""
 
 # =============================================================================
 # PART 2: <app>/appboss.yaml   (required, per app)
@@ -452,6 +515,43 @@ hooks:
     # leave it empty and let appboss generate one under state_dir (rotate it with
     # `appboss hooks rotate`). A secret set here wins over the generated one.
     secret: $DEPLOY_SECRET
+
+# Realtime channels (pub/sub). When path is set, boss serves a small hub on this app's own
+# hosts. It is independent of the app process: a subscriber can connect while the app is
+# stopped, and realtime traffic never wakes it.
+#
+#   Subscribe   GET <path>/<channel>            Upgrade: websocket  -> WebSocket
+#                                               Accept: text/event-stream -> SSE
+#   Publish     POST <path>/<channel>           Authorization: Bearer <secret>
+#                                               body {"event": "...", "data": ...}
+#   Client lib  GET <path>/client.js
+#   Self-test   GET <path>/_test                only when test: true
+#
+# Messages are fanned out to every subscriber of the same app and channel. The last `replay`
+# are replayed to a subscriber that joins late. A slow client is dropped, never blocking the
+# publisher. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved.
+# `appboss pubsub help` prints the same guide with copy-paste examples.
+pubsub:
+  # URL prefix on the app's hosts. Empty disables the whole feature. Must start with /.
+  path: ""
+  #   /socketio
+  # Bearer token a publisher presents. Empty generates a 64-character secret per app under
+  # state_dir on first use; `appboss pubsub` prints it and `appboss pubsub rotate` replaces it.
+  # A secret set here wins and cannot be rotated from the console.
+  secret: ""
+  #   $PUBSUB_SECRET
+  # Messages kept per channel and replayed to a late subscriber, oldest first.
+  replay: 10
+  # Subscriber limit per app across all channels. 0 means unlimited. Further connects get 503.
+  max_clients: 500
+  # Largest accepted publish body. 0 means unlimited.
+  max_message_size: 64k
+  # When true, a subscribed WebSocket client may publish to its own channel by sending the
+  # same {"event","data"} envelope. SSE is one-way, so client events are WebSocket only.
+  client_events: true
+  # Serve the interactive self-test page at <path>/_test. It opens a WebSocket and an SSE
+  # connection and reports PASS/FAIL, so a browser can confirm the hub end to end.
+  test: false
 
 # Procfile behavior:
 #   - Each command is split on whitespace and exec'd directly unless shell: true.

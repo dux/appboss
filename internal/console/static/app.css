@@ -875,6 +875,105 @@ code {
   grid-template-columns: 130px minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.pg-databases .pg-row {
+  grid-template-columns: minmax(0, 1.4fr) 80px minmax(0, 1fr) 60px 80px 60px 60px minmax(0, 1fr);
+}
+
+.pg-backup-row {
+  grid-template-columns: minmax(0, 1.2fr) 170px 90px 100px 90px 90px minmax(0, 1fr);
+}
+
+.pg-replica-row {
+  grid-template-columns: minmax(0, 1.4fr) 120px 100px 120px;
+}
+
+.pg-tablespace-row {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.8fr) 120px;
+}
+
+.pg-settings {
+  padding: 16px 20px 4px;
+}
+
+.pg-settings input[type='text'],
+.pg-settings input[type='number'] {
+  width: 100%;
+}
+
+.pg-settings .pg-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.pg-keep {
+  padding-top: 4px;
+}
+
+.pg-databases input[type='checkbox'],
+.pg-settings input[type='checkbox'],
+.pg-backup-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.pg-note {
+  padding: 0 20px 16px;
+}
+
+.pubsub-row {
+  grid-template-columns: minmax(0, 1.8fr) 120px 120px;
+}
+
+.pubsub-form {
+  padding: 16px 20px 4px;
+}
+
+.pubsub-form input[type='text'],
+.pubsub-form select {
+  width: 100%;
+}
+
+.pubsub-data {
+  display: grid;
+  gap: 6px;
+  padding: 8px 20px 0;
+}
+
+.pubsub-data textarea {
+  width: 100%;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
+.pubsub-credential {
+  display: grid;
+  gap: 8px;
+  padding: 12px 20px 0;
+}
+
+.pubsub-credential code {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.pubsub-actions {
+  padding: 16px 20px;
+}
+
+.pubsub-guide {
+  margin: 0;
+  padding: 16px 20px;
+  overflow-x: auto;
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+}
+
 .sys-badge {
   justify-self: start;
 }

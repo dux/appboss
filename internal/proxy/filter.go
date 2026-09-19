@@ -52,10 +52,18 @@ func (h *Handler) allow(w http.ResponseWriter, r *http.Request, app super.Snapsh
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
-	if !authorized(w, r, app) {
+	if authorized(r, app) {
+		next()
 		return
 	}
-	next()
+	// A module can vouch for a request, e.g. a pubsub publisher presenting its own secret instead
+	// of the app's basic-auth credentials.
+	if h.pubsub != nil && h.pubsub.AuthorizesPublish(r, app) {
+		next()
+		return
+	}
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q", app.Name))
+	http.Error(w, "authentication required", http.StatusUnauthorized)
 }
 
 // publicHealth answers the app's own status path without auth, so a Cloudflare health check or

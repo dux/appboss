@@ -48,6 +48,53 @@ type WebOverrides struct {
 	AllowIPs        List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
 	Headers         map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	MaintenancePage *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
+	Pubsub          *PubsubOverrides  `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
+}
+
+// PubsubOverrides is the pubsub block as pointers, so an app can override one key and keep the
+// host defaults for the rest.
+type PubsubOverrides struct {
+	Path           *string `yaml:"path,omitempty" json:"path,omitempty"`
+	Secret         *string `yaml:"secret,omitempty" json:"secret,omitempty"`
+	Replay         *int    `yaml:"replay,omitempty" json:"replay,omitempty"`
+	MaxClients     *int    `yaml:"max_clients,omitempty" json:"max_clients,omitempty"`
+	MaxMessageSize *Size   `yaml:"max_message_size,omitempty" json:"max_message_size,omitempty"`
+	ClientEvents   *bool   `yaml:"client_events,omitempty" json:"client_events,omitempty"`
+	Test           *bool   `yaml:"test,omitempty" json:"test,omitempty"`
+}
+
+func (o *PubsubOverrides) applyOverride(target reflect.Value) {
+	pubsub, ok := target.Addr().Interface().(*Pubsub)
+	if !ok {
+		return
+	}
+	if o.Path != nil {
+		pubsub.Path = *o.Path
+	}
+	if o.Secret != nil {
+		pubsub.Secret = *o.Secret
+	}
+	if o.Replay != nil {
+		pubsub.Replay = *o.Replay
+	}
+	if o.MaxClients != nil {
+		pubsub.MaxClients = *o.MaxClients
+	}
+	if o.MaxMessageSize != nil {
+		pubsub.MaxMessageSize = *o.MaxMessageSize
+	}
+	if o.ClientEvents != nil {
+		pubsub.ClientEvents = *o.ClientEvents
+	}
+	if o.Test != nil {
+		pubsub.Test = *o.Test
+	}
+}
+
+// overrideApplier is a nested shared block that merges itself field by field, so an absent key
+// keeps the value from defaults:.
+type overrideApplier interface {
+	applyOverride(target reflect.Value)
 }
 
 // apply copies every non-nil field of overrides onto the field of the same name in target.
@@ -71,6 +118,10 @@ func applyValue(target, overrides reflect.Value) {
 		dest := target.FieldByName(field.Name)
 		if !dest.IsValid() {
 			panic(fmt.Sprintf("config: %s has no field %s", target.Type(), field.Name))
+		}
+		if applier, ok := value.Interface().(overrideApplier); ok {
+			applier.applyOverride(dest)
+			continue
 		}
 		switch value.Kind() {
 		case reflect.Pointer:

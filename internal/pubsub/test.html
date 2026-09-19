@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>appboss pubsub self-test</title>
+<style>
+  body { background: #111; color: #eee; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 2rem; }
+  h1 { font: 600 1.1rem system-ui; }
+  #status { font: 600 1.2rem system-ui; margin: 1rem 0; }
+  .pass { color: #4ade80; }
+  .fail { color: #f87171; }
+  #log { white-space: pre-wrap; color: #9ca3af; }
+</style>
+<h1>appboss pubsub self-test</h1>
+<div id="status">connecting...</div>
+<pre id="log"></pre>
+<script src="__PATH__/client.js"></script>
+<script>
+(function () {
+  'use strict';
+  var path = '__PATH__';
+  var log = document.getElementById('log');
+  var status = document.getElementById('status');
+  var nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  var write = function (line) { log.textContent += line + '\n'; };
+
+  var results = { ws: null, sse: null };
+  var opened = { ws: false, sse: false };
+  var bus = Pubsub.connect({ path: path });
+
+  var ws = bus.channel('_selftest', { transport: 'ws' });
+  var sse = bus.channel('_selftest', { transport: 'sse' });
+
+  ws.on('error', function () { write('ws: connection error'); });
+  sse.on('error', function () { write('sse: connection error'); });
+
+  ws.on('open', function () { opened.ws = true; write('ws: open'); maybePublish(); });
+  sse.on('open', function () { opened.sse = true; write('sse: open'); maybePublish(); });
+
+  ws.on('selftest', function (data) { check('ws', data); });
+  sse.on('selftest', function (data) { check('sse', data); });
+
+  var published = false;
+  function maybePublish() {
+    if (published || !opened.ws || !opened.sse) return;
+    published = true;
+    write('publishing probe...');
+    fetch(path + '/_test/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nonce: nonce })
+    }).then(function (response) {
+      write('publish: HTTP ' + response.status);
+    }).catch(function (err) {
+      write('publish failed: ' + err);
+      finish();
+    });
+  }
+
+  function check(name, data) {
+    if (data && data.nonce === nonce) {
+      results[name] = true;
+      write(name + ': received probe');
+    } else {
+      write(name + ': received a different message');
+    }
+    finish();
+  }
+
+  function finish() {
+    if (results.ws === null && results.sse === null) return;
+    if (results.ws === null || results.sse === null) return;
+    var ok = results.ws && results.sse;
+    status.innerHTML = ok ? '<span class="pass">PASS</span> websocket and sse both received the probe' : '<span class="fail">FAIL</span> see log below';
+    bus.close();
+  }
+
+  setTimeout(function () {
+    if (results.ws !== true || results.sse !== true) {
+      status.innerHTML = '<span class="fail">FAIL</span> timed out';
+      if (results.ws !== true) write('ws: no probe within 5s');
+      if (results.sse !== true) write('sse: no probe within 5s');
+      bus.close();
+    }
+  }, 5000);
+})();
+</script>
+</html>

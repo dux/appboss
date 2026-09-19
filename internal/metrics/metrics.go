@@ -33,9 +33,37 @@ type Latency struct {
 	P99   float64
 }
 
-// Render writes the Prometheus exposition for apps, the notifier counters and the request
-// latency, already sorted by name.
-func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency map[string]Latency) string {
+// PGStats is the PostgreSQL state the metrics endpoint exposes: whether the server is reachable,
+// per-database sizes and the age of the last successful backup.
+type PGStats struct {
+	Up        bool
+	Databases []PGDatabase
+	Backups   []PGBackup
+}
+
+// PGDatabase is one database and its size.
+type PGDatabase struct {
+	Name      string
+	SizeBytes int64
+}
+
+// PGBackup is one catalog row reduced to what a dashboard needs.
+type PGBackup struct {
+	Database string
+	Time     time.Time
+	Status   string
+}
+
+// PubsubStats is the realtime hub state of one app.
+type PubsubStats struct {
+	Clients  int
+	Channels int
+	Messages uint64
+}
+
+// Render writes the Prometheus exposition for apps, the notifier counters, the request latency
+// and the PostgreSQL state, already sorted by name.
+func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency map[string]Latency, postgres PGStats, pubsub map[string]PubsubStats) string {
 	var b strings.Builder
 	metric := func(name, help, kind string) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
@@ -158,6 +186,57 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 	metric("appboss_request_duration_ms_samples", "Requests sampled for the duration quantiles.", "gauge")
 	for _, app := range apps {
 		sample("appboss_request_duration_ms_samples", name(app.Name), float64(latency[app.Name].Count))
+	}
+
+	metric("appboss_pubsub_clients", "Subscribers connected to an app's realtime channels.", "gauge")
+	for _, app := range apps {
+		sample("appboss_pubsub_clients", name(app.Name), float64(pubsub[app.Name].Clients))
+	}
+
+	metric("appboss_pubsub_channels", "Realtime channels an app knows about.", "gauge")
+	for _, app := range apps {
+		sample("appboss_pubsub_channels", name(app.Name), float64(pubsub[app.Name].Channels))
+	}
+
+	metric("appboss_pubsub_messages_total", "Messages published to an app's realtime channels.", "counter")
+	for _, app := range apps {
+		sample("appboss_pubsub_messages_total", name(app.Name), float64(pubsub[app.Name].Messages))
+	}
+
+	metric("appboss_pg_up", "1 when the host PostgreSQL server is reachable, 0 otherwise.", "gauge")
+	up := 0.0
+	if postgres.Up {
+		up = 1
+	}
+	sample("appboss_pg_up", "", up)
+
+	metric("appboss_pg_database_size_bytes", "Size on disk of one database.", "gauge")
+	for _, database := range postgres.Databases {
+		sample("appboss_pg_database_size_bytes", "{database="+quote(database.Name)+"}", float64(database.SizeBytes))
+	}
+
+	metric("appboss_pg_backup_last_success_timestamp_seconds", "Unix time of the newest successful backup of one database.", "gauge")
+	metric("appboss_pg_backup_count", "Recorded backups of one database by status.", "gauge")
+	lastSuccess := map[string]float64{}
+	counts := map[string]map[string]int{}
+	for _, backup := range postgres.Backups {
+		if counts[backup.Database] == nil {
+			counts[backup.Database] = map[string]int{}
+		}
+		counts[backup.Database][backup.Status]++
+		if backup.Status == "ok" {
+			if moment := float64(backup.Time.Unix()); moment > lastSuccess[backup.Database] {
+				lastSuccess[backup.Database] = moment
+			}
+		}
+	}
+	for database, moment := range lastSuccess {
+		sample("appboss_pg_backup_last_success_timestamp_seconds", "{database="+quote(database)+"}", moment)
+	}
+	for database, byStatus := range counts {
+		for status, count := range byStatus {
+			sample("appboss_pg_backup_count", "{database="+quote(database)+",status="+quote(status)+"}", float64(count))
+		}
 	}
 
 	return b.String()

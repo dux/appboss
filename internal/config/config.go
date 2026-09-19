@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,24 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 		return &Error{Line: node.Line, Message: fmt.Sprintf("invalid duration %q", node.Value), Hint: "durations look like 500ms, 30s, 20m, 6h or 72h"}
 	}
 	*d = Duration(v)
+	return nil
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		var nanos int64
+		if err := json.Unmarshal(data, &nanos); err != nil {
+			return err
+		}
+		*d = Duration(nanos)
+		return nil
+	}
+	value, err := time.ParseDuration(text)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q", text)
+	}
+	*d = Duration(value)
 	return nil
 }
 
@@ -155,6 +174,56 @@ type Config struct {
 	Defaults   Defaults   `yaml:"defaults" json:"defaults"`
 	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
 	Notify     Notify     `yaml:"notify" json:"notify"`
+	Postgres   Postgres   `yaml:"postgres" json:"postgres"`
+	S3         S3         `yaml:"s3" json:"s3"`
+}
+
+// Postgres is the host's PostgreSQL server. The console inspects it read-only and the daemon
+// backs up the selected databases on a schedule. An empty DSN auto-detects a local server.
+type Postgres struct {
+	Enabled bool           `yaml:"enabled" json:"enabled"`
+	DSN     string         `yaml:"dsn" json:"dsn,omitempty"`
+	Backup  PostgresBackup `yaml:"backup" json:"backup"`
+}
+
+// PostgresBackup is the host-wide backup policy. Databases maps a database name to its
+// destination overrides; a key being present selects the database.
+type PostgresBackup struct {
+	Dir       string            `yaml:"dir" json:"dir"`
+	S3        bool              `yaml:"s3" json:"s3"`
+	Every     Duration          `yaml:"every" json:"every"`
+	Timeout   Duration          `yaml:"timeout" json:"timeout"`
+	Globals   bool              `yaml:"globals" json:"globals"`
+	Keep      PostgresKeep      `yaml:"keep" json:"keep"`
+	Databases map[string]Target `yaml:"databases" json:"databases"`
+}
+
+// PostgresKeep is the grandfather-father-son retention policy: the newest N dumps are kept in
+// each bucket and the rest are pruned. Zero disables that bucket.
+type PostgresKeep struct {
+	Hourly  int `yaml:"hourly" json:"hourly"`
+	Daily   int `yaml:"daily" json:"daily"`
+	Weekly  int `yaml:"weekly" json:"weekly"`
+	Monthly int `yaml:"monthly" json:"monthly"`
+}
+
+// Target overrides where one database's dumps go. A nil field follows the backup-level default.
+type Target struct {
+	Local *bool `yaml:"local" json:"local,omitempty"`
+	S3    *bool `yaml:"s3" json:"s3,omitempty"`
+}
+
+// S3 is the optional object storage used for off-host backup copies. Empty endpoint or bucket
+// disables it.
+type S3 struct {
+	Endpoint  string `yaml:"endpoint" json:"endpoint"`
+	Region    string `yaml:"region" json:"region"`
+	Bucket    string `yaml:"bucket" json:"bucket"`
+	Prefix    string `yaml:"prefix" json:"prefix"`
+	AccessKey string `yaml:"access_key" json:"access_key,omitempty"`
+	SecretKey string `yaml:"secret_key" json:"-"`
+	PathStyle bool   `yaml:"path_style" json:"path_style"`
+	SSE       string `yaml:"sse" json:"sse"`
 }
 
 // Proxy has one listener per Listen address; every listener serves the same routing.
@@ -250,8 +319,25 @@ type Web struct {
 	AllowIPs        List              `yaml:"allow_ips" json:"allow_ips"`
 	Headers         map[string]string `yaml:"headers" json:"headers"`
 	MaintenancePage string            `yaml:"maintenance_page" json:"maintenance_page"`
+	Pubsub          Pubsub            `yaml:"pubsub" json:"pubsub"`
 	allowPrefixes   []netip.Prefix
 }
+
+// Pubsub serves realtime channels on the app's own hosts under Path. An empty Path disables it.
+// Secret is the bearer token HTTP publishers present; when empty appboss generates a per-app
+// secret under state_dir. It never leaves the process as JSON, like the basic-auth hashes.
+type Pubsub struct {
+	Path           string `yaml:"path" json:"path"`
+	Secret         string `yaml:"secret" json:"-"`
+	Replay         int    `yaml:"replay" json:"replay"`
+	MaxClients     int    `yaml:"max_clients" json:"max_clients"`
+	MaxMessageSize Size   `yaml:"max_message_size" json:"max_message_size"`
+	ClientEvents   bool   `yaml:"client_events" json:"client_events"`
+	Test           bool   `yaml:"test" json:"test"`
+}
+
+// Enabled reports whether the app serves realtime channels.
+func (p Pubsub) Enabled() bool { return p.Path != "" }
 
 // AllowPrefixes is allow_ips parsed at load time; empty means every client is allowed.
 func (w Web) AllowPrefixes() []netip.Prefix { return w.allowPrefixes }
@@ -281,9 +367,11 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/appboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/appboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
-		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
+		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
+		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".appboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
+		S3:         S3{Region: "auto"},
 	}
 }
 
@@ -294,7 +382,7 @@ type file struct {
 	appFile `yaml:",inline"`
 }
 
-var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify"}
+var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres", "s3"}
 
 // decode parses one document into raw and reports every top-level key present in it. The node
 // tree is kept so every error can be pointed at a line and a key.
@@ -403,6 +491,7 @@ func Parse(data []byte, path string) (Config, error) {
 	cfg.StateDir = resolvePath(cfg.Dir, cfg.StateDir)
 	cfg.LogDir = resolvePath(cfg.Dir, cfg.LogDir)
 	cfg.Socket = resolvePath(cfg.Dir, cfg.Socket)
+	cfg.Postgres.Backup.Dir = resolvePath(cfg.Dir, cfg.Postgres.Backup.Dir)
 	if err := cfg.validate(hasApp); err != nil {
 		return Config{}, located(err, path, root)
 	}
@@ -510,11 +599,98 @@ func (c Config) validate(hasApp bool) error {
 	if err := validateNotify(c.Notify); err != nil {
 		return scoped(err, "notify")
 	}
+	if err := validateS3(c.S3); err != nil {
+		return scoped(err, "s3")
+	}
+	if err := validatePostgres(c.Postgres, c.S3); err != nil {
+		return scoped(err, "postgres")
+	}
+	return nil
+}
+
+// Destinations reports where a database's dumps go, applying its per-database override to the
+// backup-level defaults. A database that is not in Databases still gets the defaults, so the
+// caller decides whether it is selected by checking the map.
+func (b PostgresBackup) Destinations(name string) (local, s3 bool) {
+	local, s3 = b.Dir != "", b.S3
+	if target, ok := b.Databases[name]; ok {
+		if target.Local != nil {
+			local = *target.Local
+		}
+		if target.S3 != nil {
+			s3 = *target.S3
+		}
+	}
+	return local, s3
+}
+
+// Selected lists the databases configured for backup.
+func (b PostgresBackup) Selected() []string {
+	names := make([]string, 0, len(b.Databases))
+	for name := range b.Databases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+var databaseName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,62}$`)
+
+func validatePostgres(p Postgres, s3 S3) error {
+	if !p.Enabled {
+		return nil
+	}
+	for key, value := range map[string]Duration{"every": p.Backup.Every, "timeout": p.Backup.Timeout} {
+		if value < 0 {
+			return keyErr("backup."+key, "cannot be negative")
+		}
+	}
+	for key, value := range map[string]int{"hourly": p.Backup.Keep.Hourly, "daily": p.Backup.Keep.Daily, "weekly": p.Backup.Keep.Weekly, "monthly": p.Backup.Keep.Monthly} {
+		if value < 0 {
+			return keyErr("backup.keep."+key, "cannot be negative")
+		}
+	}
+	for _, name := range p.Backup.Selected() {
+		if !databaseName.MatchString(name) {
+			return &Error{Key: "backup.databases", Message: fmt.Sprintf("invalid database name %q", name), Hint: "names match [A-Za-z_][A-Za-z0-9_$]*, e.g. myapp_production"}
+		}
+		local, wants3 := p.Backup.Destinations(name)
+		if !local && !wants3 {
+			return keyErr("backup.databases", "database %q has neither a local nor an s3 destination", name)
+		}
+		if wants3 && !s3.Configured() {
+			return &Error{Key: "backup.databases", Message: fmt.Sprintf("database %q targets s3 but s3 is not configured", name), Hint: "set s3.endpoint, s3.bucket and credentials, or set local: true"}
+		}
+	}
+	return nil
+}
+
+// Configured reports whether the S3 block has enough to store objects.
+func (s S3) Configured() bool {
+	return s.Endpoint != "" && s.Bucket != "" && s.AccessKey != "" && s.SecretKey != ""
+}
+
+func validateS3(s S3) error {
+	if s.Endpoint == "" && s.Bucket == "" {
+		return nil
+	}
+	if s.Endpoint == "" || s.Bucket == "" {
+		return &Error{Key: "endpoint", Message: "endpoint and bucket must be set together", Hint: "set both, or clear both to disable s3"}
+	}
+	if parsed, err := url.Parse(s.Endpoint); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return &Error{Key: "endpoint", Message: fmt.Sprintf("invalid URL %q", s.Endpoint), Hint: "use the full endpoint, e.g. https://<account>.r2.cloudflarestorage.com"}
+	}
+	if s.Region == "" {
+		return keyErr("region", "must not be empty; use auto for R2 or the bucket's region")
+	}
+	if s.AccessKey == "" || s.SecretKey == "" {
+		return keyErr("access_key", "access_key and secret_key are required when s3 is configured")
+	}
 	return nil
 }
 
 var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
-var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true}
+var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true, "backup-failed": true}
 
 func validateNotify(n Notify) error {
 	if !notifyFormats[n.Format] {
@@ -705,6 +881,31 @@ func validateWeb(w Web) error {
 		if !strings.HasPrefix(prefix, "/") {
 			return keyErr("static_immutable", "%q must start with /", prefix)
 		}
+	}
+	return validatePubsub(w.Pubsub)
+}
+
+func validatePubsub(p Pubsub) error {
+	if p.Path == "" {
+		return nil
+	}
+	invalid := !strings.HasPrefix(p.Path, "/") || p.Path == "/" || strings.HasSuffix(p.Path, "/") || strings.Contains(p.Path, "//")
+	for _, character := range p.Path {
+		if !(character == '/' || character == '-' || character == '_' || character == '.' || character == '~' ||
+			character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9') {
+			invalid = true
+		}
+	}
+	if invalid {
+		return &Error{Key: "pubsub.path", Message: fmt.Sprintf("invalid path %q", p.Path), Hint: "use a URL prefix such as /socketio (letters, digits, - _ . ~ and / only)"}
+	}
+	for key, value := range map[string]int{"replay": p.Replay, "max_clients": p.MaxClients} {
+		if value < 0 {
+			return keyErr("pubsub."+key, "cannot be negative")
+		}
+	}
+	if p.MaxMessageSize < 0 {
+		return keyErr("pubsub.max_message_size", "cannot be negative")
 	}
 	return nil
 }

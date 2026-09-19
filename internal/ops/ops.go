@@ -4,14 +4,19 @@
 package ops
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	"app-boss/internal/config"
 	"app-boss/internal/logstore"
 	"app-boss/internal/notify"
+	"app-boss/internal/pg"
+	"app-boss/internal/pubsub"
 	"app-boss/internal/super"
 )
 
@@ -21,29 +26,39 @@ var ErrUnknownAction = errors.New("unknown action")
 
 // Action names are the canonical method strings shared by the control protocol and the console.
 const (
-	ActionList        = "ls"
-	ActionStatus      = "status"
-	ActionStart       = "start"
-	ActionStop        = "stop"
-	ActionRestart     = "restart"
-	ActionMaintenance = "maintenance"
-	ActionRescan      = "rescan"
-	ActionLogs        = "logs"
-	ActionPorts       = "ports"
-	ActionCron        = "cron"
-	ActionCronRun     = "cron-run"
-	ActionHook        = "hook"
-	ActionHookRun     = "hook-run"
-	ActionHookRotate  = "hook-rotate"
-	ActionExec        = "exec"
-	ActionAudit       = "audit"
-	ActionLogSearch   = "log-search"
+	ActionList          = "ls"
+	ActionStatus        = "status"
+	ActionStart         = "start"
+	ActionStop          = "stop"
+	ActionRestart       = "restart"
+	ActionMaintenance   = "maintenance"
+	ActionRescan        = "rescan"
+	ActionLogs          = "logs"
+	ActionPorts         = "ports"
+	ActionCron          = "cron"
+	ActionCronRun       = "cron-run"
+	ActionHook          = "hook"
+	ActionHookRun       = "hook-run"
+	ActionHookRotate    = "hook-rotate"
+	ActionExec          = "exec"
+	ActionAudit         = "audit"
+	ActionLogSearch     = "log-search"
+	ActionPG            = "pg"
+	ActionPGBackup      = "pg-backup"
+	ActionPGBackups     = "pg-backups"
+	ActionPGRestore     = "pg-restore"
+	ActionPubsub        = "pubsub"
+	ActionPubsubSecret  = "pubsub-secret"
+	ActionPubsubRotate  = "pubsub-rotate"
+	ActionPubsubPublish = "pubsub-publish"
 )
 
 // auditActions are the methods that write an audit row when they run.
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
+	ActionPGBackup: true, ActionPGRestore: true,
+	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
 
 // Runtime is the supervisor surface the service drives.
@@ -91,23 +106,57 @@ type LatencyStore interface {
 	Latency(app string, since time.Time) (logstore.Latency, error)
 }
 
+// PG is the PostgreSQL inspection and backup surface. pg.Service implements it; a nil value
+// disables the feature and every PG action answers with a clear error.
+type PG interface {
+	Enabled() bool
+	Available() bool
+	Snapshot() pg.Snapshot
+	Refresh(ctx context.Context) pg.Snapshot
+	BackupAll(ctx context.Context) error
+	BackupDatabase(ctx context.Context, database string) (pg.Backup, error)
+	Backups() []pg.Backup
+	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
+	BackupConfig() config.PostgresBackup
+	S3Configured() bool
+	Apply(cfg config.Config)
+}
+
+// Pubsub is the realtime channel surface. pubsub.Service implements it; a nil value disables the
+// feature and every pubsub action answers with a clear error.
+type Pubsub interface {
+	Secret(app string, cfg config.Pubsub) (string, error)
+	Rotate(app string, cfg config.Pubsub) (string, error)
+	Publish(app, channel string, msg pubsub.Message, replay int) int
+	Snapshot(snapshots []super.Snapshot) []pubsub.App
+	Stats() map[string]pubsub.Stats
+	Reconcile(snapshots []super.Snapshot)
+}
+
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
 // the console builds it from the HTTP body.
 type Request struct {
-	Method  string        `json:"method"`
-	App     string        `json:"app,omitempty"`
-	Process string        `json:"process,omitempty"`
-	Job     string        `json:"job,omitempty"`
-	Hook    string        `json:"hook,omitempty"`
-	Argv    []string      `json:"argv,omitempty"`
-	Timeout time.Duration `json:"timeout,omitempty"`
-	Lines   int           `json:"lines,omitempty"`
-	On      bool          `json:"on,omitempty"`
-	Actor   string        `json:"actor,omitempty"`
-	Action  string        `json:"action,omitempty"`
-	Query   string        `json:"query,omitempty"`
-	Level   string        `json:"level,omitempty"`
-	Channel string        `json:"channel,omitempty"`
+	Method   string          `json:"method"`
+	App      string          `json:"app,omitempty"`
+	Process  string          `json:"process,omitempty"`
+	Job      string          `json:"job,omitempty"`
+	Hook     string          `json:"hook,omitempty"`
+	Argv     []string        `json:"argv,omitempty"`
+	Timeout  time.Duration   `json:"timeout,omitempty"`
+	Lines    int             `json:"lines,omitempty"`
+	On       bool            `json:"on,omitempty"`
+	Actor    string          `json:"actor,omitempty"`
+	Action   string          `json:"action,omitempty"`
+	Query    string          `json:"query,omitempty"`
+	Level    string          `json:"level,omitempty"`
+	Channel  string          `json:"channel,omitempty"`
+	Event    string          `json:"event,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
+	Database string          `json:"database,omitempty"`
+	BackupID string          `json:"backup_id,omitempty"`
+	Target   string          `json:"target,omitempty"`
+	Replace  bool            `json:"replace,omitempty"`
+	Confirm  string          `json:"confirm,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -127,10 +176,12 @@ type Service struct {
 	store   LogStore
 	auditor Auditor
 	sink    notify.Sink
+	pg      PG
+	pubsub  Pubsub
 }
 
-func New(runtime Runtime, rates Rates, store LogStore, sinks ...notify.Sink) *Service {
-	service := &Service{runtime: runtime, rates: rates, store: store}
+func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pubsub, sinks ...notify.Sink) *Service {
+	service := &Service{runtime: runtime, rates: rates, store: store, pg: postgres, pubsub: realtime}
 	if auditor, ok := store.(Auditor); ok {
 		service.auditor = auditor
 	}
@@ -222,6 +273,22 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.SearchAudit(auditFilter(request))
 	case ActionLogSearch:
 		return s.SearchLogs(request.App, logstore.LogFilter{Channel: request.Channel, Process: request.Process, Level: request.Level, Query: request.Query, Limit: request.Lines})
+	case ActionPG:
+		return s.PGSnapshot(true)
+	case ActionPGBackup:
+		return s.RunBackup(request.Database)
+	case ActionPGBackups:
+		return s.Backups(), nil
+	case ActionPGRestore:
+		return s.Restore(pg.RestoreRequest{ID: request.BackupID, Target: request.Target, Replace: request.Replace, Confirm: request.Confirm})
+	case ActionPubsub:
+		return s.PubsubApps(), nil
+	case ActionPubsubSecret:
+		return s.PubsubSecret(request.App)
+	case ActionPubsubRotate:
+		return s.PubsubRotate(request.App)
+	case ActionPubsubPublish:
+		return s.PubsubPublish(request.App, request.Channel, request.Event, request.Data)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -280,6 +347,12 @@ func auditDetail(request Request) string {
 		return request.Hook
 	case ActionExec:
 		return strings.Join(request.Argv, " ")
+	case ActionPGBackup:
+		return request.Database
+	case ActionPGRestore:
+		return request.BackupID
+	case ActionPubsubPublish:
+		return request.Channel
 	default:
 		return ""
 	}
@@ -366,6 +439,166 @@ func (s *Service) Latency(name string) (logstore.Latency, error) {
 	return store.Latency(name, time.Now().Add(-time.Hour))
 }
 
+// PGSnapshot returns the PostgreSQL inspection, refreshing it first when asked.
+func (s *Service) PGSnapshot(refresh bool) (pg.Snapshot, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return pg.Snapshot{}, errors.New("postgres is not enabled")
+	}
+	if refresh {
+		return s.pg.Refresh(context.Background()), nil
+	}
+	return s.pg.Snapshot(), nil
+}
+
+// PGAvailable reports whether the last inspection reached a server, for the console's tab gate.
+func (s *Service) PGAvailable() bool { return s.pg != nil && s.pg.Enabled() && s.pg.Available() }
+
+// Backups lists the recorded dumps.
+func (s *Service) Backups() []pg.Backup {
+	if s.pg == nil {
+		return nil
+	}
+	return s.pg.Backups()
+}
+
+// RunBackup dumps one database, or every selected database when name is empty.
+func (s *Service) RunBackup(database string) ([]pg.Backup, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return nil, errors.New("postgres is not enabled")
+	}
+	if database == "" {
+		return nil, s.pg.BackupAll(context.Background())
+	}
+	entry, err := s.pg.BackupDatabase(context.Background(), database)
+	return []pg.Backup{entry}, err
+}
+
+// Restore loads a recorded dump into a database.
+func (s *Service) Restore(request pg.RestoreRequest) (pg.RestoreResult, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return pg.RestoreResult{}, errors.New("postgres is not enabled")
+	}
+	return s.pg.Restore(context.Background(), request)
+}
+
+// ApplyPGConfig pushes a freshly saved config into the PostgreSQL service, so PG settings and
+// backup selection apply without a daemon restart.
+func (s *Service) ApplyPGConfig(cfg config.Config) {
+	if s.pg != nil {
+		s.pg.Apply(cfg)
+	}
+}
+
+// PGBackupConfig returns the effective PostgreSQL backup policy.
+func (s *Service) PGBackupConfig() config.PostgresBackup {
+	if s.pg == nil {
+		return config.PostgresBackup{}
+	}
+	return s.pg.BackupConfig()
+}
+
+// S3Configured reports whether object storage is ready for uploads.
+func (s *Service) S3Configured() bool { return s.pg != nil && s.pg.S3Configured() }
+
+// PubsubApps lists every app that serves realtime channels, with its channels and subscriber
+// counts.
+func (s *Service) PubsubApps() []pubsub.App {
+	if s.pubsub == nil {
+		return nil
+	}
+	return s.pubsub.Snapshot(s.runtime.Snapshots())
+}
+
+// PubsubStats is the per-app realtime counters for /metrics.
+func (s *Service) PubsubStats() map[string]pubsub.Stats {
+	if s.pubsub == nil {
+		return nil
+	}
+	return s.pubsub.Stats()
+}
+
+// PubsubSecret is an app's publish credential and the URLs it enables, for the CLI and console.
+type PubsubSecret struct {
+	App       string `json:"app"`
+	Path      string `json:"path"`
+	Host      string `json:"host"`
+	Secret    string `json:"secret"`
+	Subscribe string `json:"subscribe_url"`
+	Publish   string `json:"publish_url"`
+}
+
+// PubsubSecret returns an app's effective publish secret and its example URLs.
+func (s *Service) PubsubSecret(app string) (PubsubSecret, error) {
+	snapshot, cfg, err := s.pubsubApp(app)
+	if err != nil {
+		return PubsubSecret{}, err
+	}
+	secret, err := s.pubsub.Secret(snapshot.Name, cfg)
+	if err != nil {
+		return PubsubSecret{}, err
+	}
+	host := snapshot.CanonicalHost
+	if host == "" && len(snapshot.Hosts) > 0 {
+		host = config.BaseHost(snapshot.Hosts[0])
+	}
+	base := "https://" + host + cfg.Path
+	return PubsubSecret{App: snapshot.Name, Path: cfg.Path, Host: host, Secret: secret, Subscribe: base + "/<channel>", Publish: base + "/<channel>"}, nil
+}
+
+// PubsubRotate replaces an app's generated publish secret and returns the new credential and URLs.
+func (s *Service) PubsubRotate(app string) (PubsubSecret, error) {
+	snapshot, cfg, err := s.pubsubApp(app)
+	if err != nil {
+		return PubsubSecret{}, err
+	}
+	if _, err := s.pubsub.Rotate(snapshot.Name, cfg); err != nil {
+		return PubsubSecret{}, err
+	}
+	return s.PubsubSecret(app)
+}
+
+// PubsubPublished is the result of a console or CLI publish.
+type PubsubPublished struct {
+	Channel     string `json:"channel"`
+	Subscribers int    `json:"subscribers"`
+}
+
+// PubsubPublish sends one message to an app's channel from the CLI or console.
+func (s *Service) PubsubPublish(app, channel, event string, data json.RawMessage) (PubsubPublished, error) {
+	snapshot, cfg, err := s.pubsubApp(app)
+	if err != nil {
+		return PubsubPublished{}, err
+	}
+	if !pubsub.ValidChannel(channel) {
+		return PubsubPublished{}, fmt.Errorf("invalid channel %q", channel)
+	}
+	if event == "" {
+		event = "message"
+	}
+	if len(data) == 0 {
+		data = json.RawMessage("null")
+	}
+	delivered := s.pubsub.Publish(snapshot.Name, channel, pubsub.Message{Event: event, Data: data}, cfg.Replay)
+	return PubsubPublished{Channel: channel, Subscribers: delivered}, nil
+}
+
+func (s *Service) pubsubApp(app string) (super.Snapshot, config.Pubsub, error) {
+	if s.pubsub == nil {
+		return super.Snapshot{}, config.Pubsub{}, errors.New("pubsub is not enabled")
+	}
+	if app == "" {
+		return super.Snapshot{}, config.Pubsub{}, errors.New("app is required")
+	}
+	snapshot, err := s.runtime.Snapshot(app)
+	if err != nil {
+		return super.Snapshot{}, config.Pubsub{}, err
+	}
+	if !snapshot.Web.Pubsub.Enabled() {
+		return super.Snapshot{}, config.Pubsub{}, fmt.Errorf("app %q has no pubsub path", app)
+	}
+	return snapshot, snapshot.Web.Pubsub, nil
+}
+
 // RestartRequired lists the host keys whose value on disk differs from the running session.
 func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired() }
 
@@ -373,6 +606,9 @@ func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired(
 // so every transport answers with the same shape.
 func (s *Service) Rescan() (RescanResult, error) {
 	invalid, err := s.runtime.Rescan()
+	if s.pubsub != nil {
+		s.pubsub.Reconcile(s.runtime.Snapshots())
+	}
 	result := RescanResult{Apps: s.Apps(), Invalid: messages(invalid), RestartRequired: s.runtime.RestartRequired()}
 	return result, err
 }

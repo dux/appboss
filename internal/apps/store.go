@@ -58,7 +58,12 @@ func NewStore(root config.Config) *Store {
 
 // Files lists the host file and, in host mode, the active file of every app folder.
 func (s *Store) Files() ([]ConfigFile, error) {
-	files := []ConfigFile{{ID: "host", Path: s.root.SourcePath, Source: filepath.Base(s.root.SourcePath)}}
+	hostPath, err := config.FindInDir(s.root.Dir)
+	if err != nil {
+		hostPath = s.root.SourcePath
+	}
+	_, localErr := os.Stat(filepath.Join(s.root.Dir, config.LocalFileName))
+	files := []ConfigFile{{ID: "host", Path: hostPath, Source: filepath.Base(hostPath), HasLocal: localErr == nil}}
 	if s.root.App != nil {
 		// Single mode: the host file is the app file, and the app is named after its folder.
 		files[0].App = filepath.Base(s.root.Dir)
@@ -140,7 +145,7 @@ func (s *Store) Validate(id, contents string) error {
 		}
 		return err
 	}
-	root, err := config.Load(s.root.SourcePath)
+	root, err := s.HostConfig()
 	if err != nil {
 		return fmt.Errorf("host file: %w", err)
 	}
@@ -298,9 +303,52 @@ func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	return s.Read("app:" + app)
 }
 
+// CreateHostLocal copies the host config to appboss.local.yaml so console writes there survive a
+// deploy. It is a no-op when the local file already exists.
+func (s *Store) CreateHostLocal() (ConfigFile, error) {
+	target := filepath.Join(s.root.Dir, config.LocalFileName)
+	if _, err := os.Stat(target); err == nil {
+		return s.Read("host")
+	}
+	info, err := os.Stat(s.root.SourcePath)
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	data, err := os.ReadFile(s.root.SourcePath)
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	if _, err := handle.Write(data); err != nil {
+		_ = handle.Close()
+		return ConfigFile{}, err
+	}
+	if err := handle.Close(); err != nil {
+		return ConfigFile{}, err
+	}
+	return s.Read("host")
+}
+
+// HostConfig loads the active host config from disk, so a caller can push a fresh value into a
+// service after a console write.
+func (s *Store) HostConfig() (config.Config, error) {
+	path, err := config.FindInDir(s.root.Dir)
+	if err != nil {
+		return config.Config{}, err
+	}
+	return config.Load(path)
+}
+
 // Effective returns the resolved config of app as YAML, host defaults merged, read from disk.
 func (s *Store) Effective(name string) (string, error) {
-	root, err := config.Load(s.root.SourcePath)
+	path, err := config.FindInDir(s.root.Dir)
+	if err != nil {
+		return "", err
+	}
+	root, err := config.Load(path)
 	if err != nil {
 		return "", fmt.Errorf("host file: %w", err)
 	}
