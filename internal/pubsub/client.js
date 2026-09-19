@@ -153,8 +153,10 @@
     global.setTimeout(function () { if (!self.closed) self.open(); }, delay);
   };
 
-  // fallback switches an unopened auto channel to SSE, e.g. when a proxy blocks the upgrade.
+  // fallback switches an unopened auto channel to SSE, e.g. when a proxy blocks the upgrade. The
+  // decision is shared with the client so later channels skip the handshake that just failed.
   Channel.prototype.fallback = function () {
+    if (this.transport === 'auto' && this.client.transport === 'auto') this.client.transport = 'sse';
     this.transport = 'sse';
     this.openSSE();
   };
