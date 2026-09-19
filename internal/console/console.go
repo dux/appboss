@@ -75,6 +75,7 @@ type Handler struct {
 	auth           *authenticator
 	static         fs.FS
 	managementPort string
+	publicHost     string
 	metricsEnabled bool
 	metricsToken   string
 	notifyStats    func() metrics.NotifyStats
@@ -124,18 +125,30 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	return &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats, sys: sys}, nil
+	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats, sys: sys}
+	if len(cfg.Management.Host) > 0 {
+		handler.publicHost = cfg.Management.Host[0]
+	}
+	return handler, nil
 }
 
-// LoginURL mints a one-time link for `appboss login`. It points at the console's loopback
-// listener, so it works without DNS and, through an SSH tunnel, from another machine.
-func (h *Handler) LoginURL() (string, error) {
+// LoginURL mints a one-time link for `appboss login`. It returns the console's loopback
+// address, which works without DNS and through an SSH tunnel, and the public management host
+// when one is configured. Both links carry the same single-use token.
+func (h *Handler) LoginURL() (local, public string, err error) {
 	token, err := h.auth.issueCLIToken()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	link := url.URL{Scheme: "http", Host: "127.0.0.1:" + h.managementPort, Path: cliLoginPath, RawQuery: "token=" + url.QueryEscape(token)}
-	return link.String(), nil
+	query := "token=" + url.QueryEscape(token)
+	link := url.URL{Scheme: "http", Host: "127.0.0.1:" + h.managementPort, Path: cliLoginPath, RawQuery: query}
+	local = link.String()
+	if h.publicHost != "" {
+		link.Scheme = "https"
+		link.Host = h.publicHost
+		public = link.String()
+	}
+	return local, public, nil
 }
 
 // consoleHost accepts the configured management hostname, which AuthCog can sign in, and the

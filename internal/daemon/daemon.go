@@ -120,7 +120,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 			d.servers = append(d.servers, server)
 		}
 	}
-	var login func() (string, error)
+	var login func() (string, string, error)
 	if d.management != nil {
 		login = d.management.LoginURL
 	}

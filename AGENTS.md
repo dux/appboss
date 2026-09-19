@@ -18,7 +18,7 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 * Boss injects `PORT`, `APP_NAME`, `PROC_TYPE` and `APPBOSS_SOCKET` into every process; `PORT` is one fixed value per (app, proctype) from `ports.range` and is never configurable. `appboss password` prints a bcrypt hash for `basic_auth`.
 * Keys: `appboss config --keys [filter]` (one-line docs + defaults), `appboss config --reference` (long form, also `./internal/config/reference.yaml`), `appboss config [app] -d` (resolved config).
 * Cloudflare is the edge: TLS, compression, caching, WAF and rate limiting stay there. Point `proxy.trusted_cidrs` at the Cloudflare ranges and keep `proxy.client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]` so the origin cannot be reached directly; `proxy.cloudflare_only` is the header-only alternative that refuses requests without `CF-Ray` + `CF-Connecting-IP`.
-* Management console is served on `management.host` and on `127.0.0.1:<first port of ports.range>`. Production sign-in is AuthCog (`management.auth.realm`, default `auth.authcog.com`, `admin_emails`); `appboss login` mints a one-time loopback URL for local access. The public address is `management.url` when set, else `https://<first management.host>`.
+* Management console is served on `management.host` and on `127.0.0.1:<first port of ports.range>`. Production sign-in is AuthCog (`management.auth.realm`, default `auth.authcog.com`, `admin_emails`); `appboss login` mints one one-time token and prints both the loopback URL and the public `https://<first management.host>` URL, so a browser at the edge can sign in without an SSH tunnel. The public address is `https://<first management.host>` (`management.PublicURL()`).
 * App-level changes apply on `appboss rescan`; `apps`, `proxy`, `management`, `ports`, `daemon` and `state_dir`/`log_dir`/`socket` need a daemon restart.
 
 ## Working rules
@@ -113,5 +113,5 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 
 * `./internal/console/auth.go` holds both sign-in paths: AuthCog (admins only) and `appboss login` (`/login?token=`, 3 minutes, single use, signs in as `cli@localhost`).
 * `cli@localhost` is accepted only for sessions created by a token. The AuthCog callback must keep rejecting it.
-* The console answers for `management.host` and for loopback names (`127.0.0.1`, `localhost`). A loopback request without a session gets a "run appboss login" page, never an AuthCog redirect. The login link targets `127.0.0.1:<first port of ports.range>`.
+* The console answers for `management.host` and for loopback names (`127.0.0.1`, `localhost`). A loopback request without a session gets a "run appboss login" page, never an AuthCog redirect. `appboss login` prints both URLs from `Handler.LoginURL`: `http://127.0.0.1:<first port of ports.range>` and `https://<first management.host>`, sharing the one-time token.
 * The login link is minted through the control socket (`login` method in `./internal/ctl/server.go`), never over HTTP.

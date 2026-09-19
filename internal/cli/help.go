@@ -34,8 +34,8 @@ var commands = []command{
 	{name: "kill", args: "[-c path]", group: "Host session", summary: "stop every app and terminate every listener left in ports.range",
 		details: []string{"Asks the running host to stop each app, then kills whatever still listens in the range. Use it to clean up after a crash or a stray process."},
 		options: []option{configOption, jsonOption}},
-	{name: "login", args: "", group: "Host session", summary: "print a one-time console URL that signs you in as cli@localhost",
-		details: []string{"The link is valid for 3 minutes and works once. It needs management.host to be set in the host config.", "It points at 127.0.0.1 and the console's own port (the first port of ports.range), so it works without DNS. From another machine, tunnel that port first: ssh -L 3100:127.0.0.1:3100 <host>."},
+	{name: "login", args: "", group: "Host session", summary: "print one-time console URLs that sign you in as cli@localhost",
+		details: []string{"The links are valid for 3 minutes and work once. They need management.host to be set in the host config.", "It prints a loopback URL on the console's own port (the first port of ports.range), which needs no DNS, and the public URL on management.host for a direct browser. Both carry the same token, so opening one invalidates the other. Without a public URL, tunnel the port first: ssh -L 3100:127.0.0.1:3100 <host>."},
 		options: []option{socketOption, configOption, jsonOption}},
 
 	{name: "ls", args: "", group: "Apps", summary: "list apps with state, ports, uptime, last activity and memory",

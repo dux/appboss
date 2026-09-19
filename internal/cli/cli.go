@@ -1124,7 +1124,11 @@ func (c CLI) printHuman(method string, data any) error {
 			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart appboss, or Ctrl-C and appboss start)\n", joinAny(keys))
 		}
 	case "login":
-		fmt.Fprintln(c.Out, data.(map[string]string)["url"])
+		links := data.(map[string]string)
+		fmt.Fprintf(c.Out, "local:  %s\n", links["url"])
+		if public := links["public_url"]; public != "" {
+			fmt.Fprintf(c.Out, "public: %s\n", public)
+		}
 		fmt.Fprintln(c.Out, "Opens the console as cli@localhost. Valid for 3 minutes, one use.")
 	case ops.ActionPG:
 		snapshot := data.(pg.Snapshot)

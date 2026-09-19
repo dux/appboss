@@ -115,7 +115,7 @@ Host session
   start         run the host session in the foreground; Ctrl-C stops every app
   systemd       print the systemd unit for this config, or install and enable it
   kill          stop every app and terminate every listener left in ports.range
-  login         print a one-time console URL that signs you in as cli@localhost
+  login         print one-time console URLs that sign you in as cli@localhost
 
 Apps
   ls            list apps with state, ports, uptime, last activity and memory
@@ -413,18 +413,21 @@ For local work there is `appboss login`:
 
 ```
 $ appboss login
-http://127.0.0.1:3100/login?token=...
+local:  http://127.0.0.1:3100/login?token=...
+public: https://boss.example.com/login?token=...
 Opens the console as cli@localhost. Valid for 3 minutes, one use.
 ```
 
-The link is minted by the running host over the control socket, so only someone with access to the socket can create one.
-It works once, expires after 3 minutes, and signs the browser in as `cli@localhost` with the same signed session cookie AuthCog logins get.
+The links are minted by the running host over the control socket, so only someone with access to the socket can create one.
+They work once, expire after 3 minutes, and sign the browser in as `cli@localhost` with the same signed session cookie AuthCog logins get.
 AuthCog can never vouch for that address, so the two paths do not overlap.
-`appboss login --json` prints `{"url": ...}`.
+The loopback link and the public link carry the same single-use token, so opening one invalidates the other; run `appboss login` again for a fresh pair.
+`appboss login --json` prints `{"url": ..., "public_url": ...}`.
 
-The link uses the console's own loopback listener, the first port of `ports.range`, so it needs no DNS.
+The loopback link uses the console's own listener, the first port of `ports.range`, so it needs no DNS.
 That listener accepts `127.0.0.1` and `localhost` only for sessions created this way; without one it shows a page telling you to run `appboss login`.
-From another machine, tunnel the port first: `ssh -L 3100:127.0.0.1:3100 <host>`.
+The public link goes through `management.host`, so it signs in from any browser that can reach the edge.
+Without a public URL, tunnel the port first: `ssh -L 3100:127.0.0.1:3100 <host>`.
 
 ### Frontend
 

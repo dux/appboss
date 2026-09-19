@@ -16,12 +16,12 @@ type Server struct {
 	path     string
 	listener net.Listener
 	service  *ops.Service
-	login    func() (string, error)
+	login    func() (string, string, error)
 }
 
-// Listen serves the control socket. login mints a console login link and is nil when the
+// Listen serves the control socket. login mints console login links and is nil when the
 // management console is not enabled.
-func Listen(path string, service *ops.Service, login func() (string, error)) (*Server, error) {
+func Listen(path string, service *ops.Service, login func() (string, string, error)) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
@@ -109,9 +109,9 @@ func (s *Server) loginResponse() Response {
 	if s.login == nil {
 		return Response{Error: "management console is not enabled: set management.host in the host config"}
 	}
-	link, err := s.login()
+	local, public, err := s.login()
 	if err != nil {
 		return Response{Error: err.Error()}
 	}
-	return Response{OK: true, Data: map[string]string{"url": link}}
+	return Response{OK: true, Data: map[string]string{"url": local, "public_url": public}}
 }

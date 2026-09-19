@@ -20,13 +20,17 @@ func TestCLILoginLinkSignsInOnce(t *testing.T) {
 		admins:     map[string]bool{"admin@example.com": true},
 		challenges: map[string]authChallenge{},
 	}
-	handler := &Handler{auth: auth, managementPort: "3100"}
-	link, err := handler.LoginURL()
+	handler := &Handler{auth: auth, managementPort: "3100", publicHost: "boss.lvh.me"}
+	link, public, err := handler.LoginURL()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(link, "http://127.0.0.1:3100/login?token=") {
 		t.Fatalf("unexpected login URL: %s", link)
+	}
+	token := strings.TrimPrefix(link, "http://127.0.0.1:3100/login?token=")
+	if public != "https://boss.lvh.me/login?token="+token {
+		t.Fatalf("unexpected public login URL: %s", public)
 	}
 
 	loginRequest := httptest.NewRequest(http.MethodGet, link, nil)
@@ -82,12 +86,15 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 		t.Fatalf("foreign host status = %d", other.Code)
 	}
 
-	link, err := handler.LoginURL()
+	link, public, err := handler.LoginURL()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(link, "http://127.0.0.1:3100/login?token=") {
 		t.Fatalf("unexpected login URL: %s", link)
+	}
+	if !strings.HasPrefix(public, "https://boss.lvh.me/login?token=") {
+		t.Fatalf("unexpected public login URL: %s", public)
 	}
 	login := httptest.NewRecorder()
 	handler.ServeHTTP(login, httptest.NewRequest(http.MethodGet, link, nil))
