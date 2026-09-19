@@ -228,11 +228,14 @@ type S3 struct {
 
 // Proxy has one listener per Listen address; every listener serves the same routing.
 type Proxy struct {
-	Listen          List     `yaml:"listen" json:"listen"`
-	TrustedCIDRs    List     `yaml:"trusted_cidrs" json:"trusted_cidrs"`
-	ClientIPHeaders List     `yaml:"client_ip_headers" json:"client_ip_headers"`
-	Wake            Wake     `yaml:"wake" json:"wake"`
-	Upstream        Upstream `yaml:"upstream" json:"upstream"`
+	Listen          List `yaml:"listen" json:"listen"`
+	TrustedCIDRs    List `yaml:"trusted_cidrs" json:"trusted_cidrs"`
+	ClientIPHeaders List `yaml:"client_ip_headers" json:"client_ip_headers"`
+	// CloudflareOnly refuses a request that does not carry Cloudflare's edge headers; it is a
+	// convenience alternative to listing trusted_cidrs, not a replacement.
+	CloudflareOnly bool     `yaml:"cloudflare_only" json:"cloudflare_only"`
+	Wake           Wake     `yaml:"wake" json:"wake"`
+	Upstream       Upstream `yaml:"upstream" json:"upstream"`
 }
 
 // Management is served by the proxy listener; any of the Host names selects the console.
@@ -244,6 +247,18 @@ type Management struct {
 }
 
 func (m Management) Enabled() bool { return len(m.Host) > 0 }
+
+// PublicURL is the address operators open and the base of the hook ping URLs. url wins when set;
+// otherwise it defaults to https on the first management host, so host alone is enough.
+func (m Management) PublicURL() string {
+	if m.URL != "" {
+		return strings.TrimSuffix(m.URL, "/")
+	}
+	if len(m.Host) == 0 {
+		return ""
+	}
+	return "https://" + m.Host[0]
+}
 
 // ManagementMetrics exposes /healthz, /readyz and /metrics on the management host. A token, when
 // set, is required as a bearer token for /metrics; /healthz and /readyz stay open.
@@ -363,6 +378,7 @@ type Notify struct {
 
 func Default() Config {
 	return Config{
+		Apps:     "./apps",
 		StateDir: ".appboss/state", LogDir: ".appboss/log", Socket: ".appboss/appboss.sock",
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
@@ -481,13 +497,14 @@ func Parse(data []byte, path string) (Config, error) {
 	cfg.SourcePath = absolutePath
 	cfg.Dir = filepath.Dir(absolutePath)
 	hasApp := keys["procfile"]
-	if hasApp && cfg.Apps != "" {
+	if hasApp && keys["apps"] {
 		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root appboss.yaml or drop apps"}, path, root)
 	}
-	if !hasApp && cfg.Apps == "" {
-		return Config{}, located(&Error{Message: "needs procfile (an app) or apps (a host)", Hint: "an app file starts with procfile:, a host file with apps: ./apps"}, path, root)
-	}
 	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
+	if hasApp {
+		// Single mode: the root file is the app, so the host apps directory does not apply.
+		cfg.Apps = ""
+	}
 	cfg.StateDir = resolvePath(cfg.Dir, cfg.StateDir)
 	cfg.LogDir = resolvePath(cfg.Dir, cfg.LogDir)
 	cfg.Socket = resolvePath(cfg.Dir, cfg.Socket)

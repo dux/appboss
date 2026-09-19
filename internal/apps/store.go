@@ -90,7 +90,7 @@ func (s *Store) Files() ([]ConfigFile, error) {
 
 func (s *Store) stat(files []ConfigFile) ([]ConfigFile, error) {
 	for i := range files {
-		data, err := os.ReadFile(files[i].Path)
+		data, err := readFileIfExists(files[i].Path)
 		if err != nil {
 			return nil, err
 		}
@@ -104,12 +104,22 @@ func (s *Store) Read(id string) (ConfigFile, error) {
 	if err != nil {
 		return ConfigFile{}, err
 	}
-	data, err := os.ReadFile(file.Path)
+	data, err := readFileIfExists(file.Path)
 	if err != nil {
 		return ConfigFile{}, err
 	}
 	file.Contents, file.Revision = string(data), revision(data)
 	return file, nil
+}
+
+// readFileIfExists treats a missing file as empty, so a host started with no config file shows an
+// empty file in the console and the first save creates it.
+func readFileIfExists(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
 }
 
 func (s *Store) lookup(id string) (ConfigFile, error) {
@@ -324,15 +334,17 @@ func (s *Store) CreateHostLocal() (ConfigFile, error) {
 	if _, err := os.Stat(target); err == nil {
 		return s.Read("host")
 	}
-	info, err := os.Stat(s.root.SourcePath)
-	if err != nil {
+	mode := os.FileMode(0o644)
+	data := []byte(nil)
+	if info, err := os.Stat(s.root.SourcePath); err == nil {
+		mode = info.Mode().Perm()
+		if data, err = os.ReadFile(s.root.SourcePath); err != nil {
+			return ConfigFile{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return ConfigFile{}, err
 	}
-	data, err := os.ReadFile(s.root.SourcePath)
-	if err != nil {
-		return ConfigFile{}, err
-	}
-	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return ConfigFile{}, err
 	}
@@ -378,15 +390,17 @@ func (s *Store) Effective(name string) (string, error) {
 }
 
 func replaceFile(path string, data []byte) error {
-	info, err := os.Stat(path)
-	if err != nil {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	temp := path + ".tmp"
-	if err := os.WriteFile(temp, data, info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(temp, data, mode); err != nil {
 		return err
 	}
-	if err := os.Chmod(temp, info.Mode().Perm()); err != nil {
+	if err := os.Chmod(temp, mode); err != nil {
 		_ = os.Remove(temp)
 		return err
 	}

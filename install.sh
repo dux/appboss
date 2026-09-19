@@ -76,4 +76,4 @@ else
 fi
 
 printf 'installed appboss %s to %s/appboss\n' "$version" "$dir"
-printf 'next: appboss start -c <dir>/appboss.yaml\n'
+printf 'next: appboss start   # runs the host in this folder, apps in ./apps\n'

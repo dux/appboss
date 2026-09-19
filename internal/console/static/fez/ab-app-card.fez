@@ -122,7 +122,7 @@
 
     async copy(value) {
       if (!value) {
-        Toast.show('Set management.url to get a full ping URL', true)
+        Toast.show('Set management.host to get a full ping URL', true)
         return
       }
       try {
@@ -273,7 +273,7 @@
         <div class="hook-row" data-running={hook.running ? 'true' : 'false'}>
           <span class="service-name">{hook.name}{#if hook.disabled} <span class="text-muted">(disabled)</span>{/if}{#if hook.restart} <span class="text-muted">(restarts)</span>{/if}</span>
           <span class="service-value">{lastRun(hook)}</span>
-          <span class="hook-url" title={hook.url}>{hook.url || 'management.url not set'}</span>
+          <span class="hook-url" title={hook.url}>{hook.url || 'management.host not set'}</span>
           <span class="hook-actions">
             <button class="btn btn-sm" type="button" onclick={() => fez.copy(hook.url)} disabled={!hook.url} title="Copy the ping URL">
               <svg class="icon"><use href="#i-file-text"></use></svg>

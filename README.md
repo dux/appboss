@@ -52,25 +52,21 @@ Binding port 80 needs root or `CAP_NET_BIND_SERVICE`, so `make demo` runs the da
 ## One config file, two modes
 
 `appboss.yaml` is the only configuration file.
-A file with `procfile` describes an app; a file with `apps` describes a host that runs a directory of apps.
+A file with `procfile` describes an app; any other file describes a host that runs a directory of apps (default `./apps`).
 `appboss.local.yaml` next to it wins when it exists and is meant for server-only overrides (gitignored).
 Every command looks for the config as `-c path`, then `$APPBOSS_CONFIG`, then the current folder.
+
+Every host key has a sane default - `apps: ./apps`, `proxy.listen: ":80"`, `ports.range: [3100, 3990]`, the runtime paths under `./.appboss`, the AuthCog realm, session lifetime, metrics, upstream timeouts, wake pages and the log cadence - so a host file only names what deviates. With no config file at all, `appboss start` runs the default host: `:80`, `./apps`, console off.
 
 Host file (`./demo/appboss.yaml`):
 
 ```yaml
-apps: ./apps
-
-proxy:
-  listen: ":80"
-
 management:
   host: boss.lvh.me
+  url: http://boss.lvh.me   # optional; defaults to https://<host>
   auth:
-    realm: auth.authcog.com
     admin_emails:
       - you@example.com
-    session_ttl: 24h
 
 ports:
   range: [3100, 3199]
@@ -396,7 +392,7 @@ Both work on the host file (no app) or one app's file. A CLI restore writes the 
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `appboss login` sessions.
-`appboss start` prints the loopback address first, and the public address too when `management.url` is set:
+`appboss start` prints the loopback address first, and the public address too (`management.url` when set, otherwise `https://` on the first `management.host`):
 
 ```
 management console: http://127.0.0.1:3100 (run `appboss login` for a one-time sign-in link)

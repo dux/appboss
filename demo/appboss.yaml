@@ -1,16 +1,9 @@
-apps: ./apps
-
-proxy:
-  listen: ":80"
-
 management:
   host: boss.lvh.me
   url: http://boss.lvh.me
   auth:
-    realm: auth.authcog.com
     admin_emails:
       - rejotl@gmail.com
-    session_ttl: 24h
 
 ports:
   range: [3100, 3199]

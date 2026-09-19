@@ -120,11 +120,7 @@ func (c CLI) start(args []string) error {
 	if set.NArg() != 0 {
 		return errors.New("usage: appboss start [-c path]")
 	}
-	path, err := findConfig(*configPath)
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Load(path)
+	cfg, err := loadHostConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -208,13 +204,20 @@ func (c CLI) local(command string, args []string) error {
 		}
 		return c.printKeys(set.Arg(0), *jsonOutput)
 	}
-	path, err := findConfig(*pathFlag)
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		return err
+	var cfg config.Config
+	var err error
+	if command == "config" {
+		path, pathErr := findConfig(*pathFlag)
+		if pathErr != nil {
+			return pathErr
+		}
+		if cfg, err = config.Load(path); err != nil {
+			return err
+		}
+	} else {
+		if cfg, err = loadHostConfig(*pathFlag); err != nil {
+			return err
+		}
 	}
 	if command == "config" {
 		positionals := set.Args()
@@ -931,7 +934,7 @@ func flagsFirst(args []string) []string {
 }
 
 var keyGroups = []struct{ id, title, note string }{
-	{config.GroupHost, "Host keys", "appboss.yaml with apps:"},
+	{config.GroupHost, "Host keys", "the host appboss.yaml (apps defaults to ./apps)"},
 	{config.GroupApp, "App keys", "appboss.yaml with procfile:"},
 	{config.GroupShared, "Shared app keys", "defaults: in the host file, top level in an app file; per-process ones also under processes.<name>"},
 }
@@ -1388,6 +1391,24 @@ func appArgument(args []string, configPath string) (string, error) {
 		return "", fmt.Errorf("%s is a host config, name the app", path)
 	}
 	return filepath.Base(cfg.Dir), nil
+}
+
+// loadHostConfig loads the config file, or, when none was requested explicitly and none exists in
+// the working directory, synthesizes the default host for it. That is what makes `start`, `check`
+// and `doctor` work in a folder that only has an apps/ directory.
+func loadHostConfig(explicit string) (config.Config, error) {
+	path, err := findConfig(explicit)
+	if err != nil {
+		if explicit != "" || os.Getenv("APPBOSS_CONFIG") != "" {
+			return config.Config{}, err
+		}
+		dir, wdErr := os.Getwd()
+		if wdErr != nil {
+			return config.Config{}, err
+		}
+		return config.Parse(nil, filepath.Join(dir, config.FileName))
+	}
+	return config.Load(path)
 }
 
 func findConfig(explicit string) (string, error) {

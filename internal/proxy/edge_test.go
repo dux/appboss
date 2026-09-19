@@ -39,3 +39,31 @@ func TestTrustedOnlyRejectsOutsideCIDRs(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestCloudflareOnlyRejectsRequestsWithoutCFHeaders(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := CloudflareOnly(true, next)
+	for name, headers := range map[string]map[string]string{
+		"both":     {"CF-Ray": "abc123", "CF-Connecting-IP": "203.0.113.9"},
+		"ray only": {"CF-Ray": "abc123"},
+		"ip only":  {"CF-Connecting-IP": "203.0.113.9"},
+		"neither":  {},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		want := http.StatusForbidden
+		if name == "both" {
+			want = http.StatusOK
+		}
+		if response.Code != want {
+			t.Fatalf("%s: status = %d, want %d", name, response.Code, want)
+		}
+	}
+	if CloudflareOnly(false, next) == nil {
+		t.Fatal("disabled guard should still return a handler")
+	}
+}

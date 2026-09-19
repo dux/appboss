@@ -164,6 +164,38 @@ func TestStoreCreatesHostOverride(t *testing.T) {
 	}
 }
 
+func TestStoreHandlesMissingHostFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "apps"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(nil, filepath.Join(root, config.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(cfg)
+	files, err := store.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].ID != "host" {
+		t.Fatalf("files = %+v", files)
+	}
+	if read, err := store.Read("host"); err != nil || read.Contents != "" {
+		t.Fatalf("read = %+v, %v", read, err)
+	}
+	written, err := store.Write("host", "proxy:\n  cloudflare_only: true\n", files[0].Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(written.Contents, "cloudflare_only") {
+		t.Fatalf("contents = %q", written.Contents)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.FileName)); err != nil {
+		t.Fatalf("write did not create the file: %v", err)
+	}
+}
+
 func TestStoreSingleModeHasOneEntry(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, config.FileName), "procfile:\n  web: ./server\n")

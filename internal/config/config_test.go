@@ -88,16 +88,49 @@ func TestLoadSingleAppRoot(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsAmbiguousOrEmptyRole(t *testing.T) {
+func TestLoadRejectsAmbiguousRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 	writeConfigFile(t, path, "procfile:\n  web: ./server\napps: ./apps\n")
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "not both") {
 		t.Fatalf("expected both-set error, got %v", err)
 	}
+	// A file with neither key is a host that scans the default apps directory.
 	writeConfigFile(t, path, "defaults:\n  idle_stop: 1h\n")
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected missing role error")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != nil || cfg.Apps != filepath.Join(dir, "apps") {
+		t.Fatalf("empty file should be a host with ./apps: app=%v apps=%q", cfg.App, cfg.Apps)
+	}
+}
+
+func TestManagementPublicURLDerivesFromHost(t *testing.T) {
+	cfg := Default()
+	if url := cfg.Management.PublicURL(); url != "" {
+		t.Fatalf("disabled management url = %q", url)
+	}
+	cfg.Management.Host = List{"boss.example.com", "boss.internal"}
+	if url := cfg.Management.PublicURL(); url != "https://boss.example.com" {
+		t.Fatalf("derived management url = %q", url)
+	}
+	cfg.Management.URL = "http://boss.example.com/"
+	if url := cfg.Management.PublicURL(); url != "http://boss.example.com" {
+		t.Fatalf("url override = %q", url)
+	}
+}
+
+func TestCloudflareOnlyLoads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	writeConfigFile(t, path, "proxy:\n  cloudflare_only: true\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Proxy.CloudflareOnly {
+		t.Fatal("cloudflare_only did not load")
 	}
 }
 

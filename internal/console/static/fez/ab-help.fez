@@ -250,7 +250,7 @@ appboss logs shop --search timeout --level error --channel stdout</pre>
     {#if state.topic === 'hooks'}
       <section>
         <h2>Deploy hooks</h2>
-        <p><code>hooks:</code> declares one-shot commands a signed HTTP ping triggers, so a Git host webhook can deploy without shell access. The ping URL is <code>&lt;management.url&gt;/hooks/&lt;app&gt;/&lt;hook&gt;</code>.</p>
+        <p><code>hooks:</code> declares one-shot commands a signed HTTP ping triggers, so a Git host webhook can deploy without shell access. The ping URL is <code>https://&lt;management.host&gt;/hooks/&lt;app&gt;/&lt;hook&gt;</code>.</p>
         <p>Authentication is the hook's own secret, accepted as <code>?token=</code> in the URL, <code>Authorization: Bearer</code>, <code>X-Gitlab-Token</code>, or a GitHub <code>X-Hub-Signature-256</code> HMAC over the raw body. With no <code>secret</code> in the config, appboss generates one under <code>state_dir</code> on first use. <code>appboss hooks</code> prints the ready-made URL and <code>appboss hooks rotate</code> mints a new one.</p>
         <pre>hooks:
   deploy:

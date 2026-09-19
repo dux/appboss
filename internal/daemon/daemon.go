@@ -140,8 +140,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	if d.management != nil {
 		logx.Infof("management console: http://127.0.0.1:%d (run `appboss login` for a one-time sign-in link)", d.managementPort)
-		if d.cfg.Management.URL != "" {
-			logx.Infof("management console: %s (AuthCog sign-in)", d.cfg.Management.URL)
+		if publicURL := d.cfg.Management.PublicURL(); publicURL != "" {
+			logx.Infof("management console: %s (AuthCog sign-in)", publicURL)
 		}
 	}
 	logx.Infof("appboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
@@ -197,7 +197,10 @@ func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager
 		handler = proxy.HostSwitch(cfg.Management.Host, management, appProxy)
 	}
 	edge, err := proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
-	return edge, management, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return proxy.CloudflareOnly(cfg.Proxy.CloudflareOnly, edge), management, nil
 }
 
 func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {

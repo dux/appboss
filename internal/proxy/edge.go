@@ -47,6 +47,22 @@ func TrustedOnly(cidrs []string, next http.Handler) (http.Handler, error) {
 	}), nil
 }
 
+// CloudflareOnly rejects a request Cloudflare did not proxy, decided from the headers the edge
+// always adds. It is the header-only alternative to trusted_cidrs; a direct caller can spoof the
+// headers, so it pairs with a firewall that only lets Cloudflare connect.
+func CloudflareOnly(enabled bool, next http.Handler) http.Handler {
+	if !enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("CF-Ray") == "" || r.Header.Get("CF-Connecting-IP") == "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func trusted(remoteAddr string, prefixes []netip.Prefix) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {

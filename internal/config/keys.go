@@ -40,6 +40,7 @@ type keyDoc struct {
 
 var keyDocs = map[string]keyDoc{
 	"apps":                                   {description: "directory of app folders, one entry (folder or symlink) per app", example: "./apps"},
+	"proxy.cloudflare_only":                  {description: "accept a request only when it carries Cloudflare's CF-Ray and CF-Connecting-IP headers; headers are spoofable, so also lock the origin to Cloudflare at the firewall"},
 	"state_dir":                              {description: "session state: process state and the console signing key"},
 	"log_dir":                                {description: "process logs and per-app request logs"},
 	"socket":                                 {description: "unix socket for the control API the CLI talks to"},
@@ -55,7 +56,7 @@ var keyDocs = map[string]keyDoc{
 	"proxy.upstream.idle_conn_timeout":       {description: "idle keep-alive connection lifetime to an app"},
 	"proxy.upstream.max_idle_conns_per_app":  {description: "idle keep-alive connections kept per app"},
 	"management.host":                        {description: "one or more hostnames of the management console; omit to disable it", example: "boss.example.com"},
-	"management.url":                         {description: "public URL of the console as operators open it, printed on start; its host must be one of management.host", example: "https://boss.example.com"},
+	"management.url":                         {description: "public URL of the console as operators open it; defaults to https://<first management.host>", example: "https://boss.example.com"},
 	"management.auth.realm":                  {description: "AuthCog realm used for sign-in"},
 	"management.auth.admin_emails":           {description: "email addresses allowed into the console", example: "[admin@example.com]"},
 	"management.auth.session_ttl":            {description: "signed console session lifetime"},

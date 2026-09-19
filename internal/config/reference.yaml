@@ -5,7 +5,8 @@
 #   2. <app>/appboss.yaml             app config with `procfile` (part 2)
 #   3. state files under state_dir  written by boss, never hand-edited (part 3)
 #
-# A file that has `procfile` is an app; a file that has `apps` is a host. Never both.
+# A file that has `procfile` is an app; any other file is a host, with `apps` defaulting to
+# ./apps. Never both. With no config file at all, `appboss start` runs the default host.
 # An app file may also carry host keys so `appboss start` inside the app folder runs it
 # standalone (single mode); the same file under a host must not, or the app is invalid.
 # Whenever a folder is resolved to its config, appboss.local.yaml is used when it exists,
@@ -40,10 +41,11 @@
 ---
 # --- Paths -------------------------------------------------------------------
 
-# Directory whose entries are the apps. Relative paths resolve from the directory containing
-# this file. Each entry is a symlink to an app folder or a plain subfolder; the entry name is
-# the app name and dot entries are skipped. The entry path (not the symlink target) is the
-# process working directory. Entries are walked in name order.
+# Directory whose entries are the apps. Defaults to ./apps, so a host file needs no apps key.
+# Relative paths resolve from the directory containing this file. Each entry is a symlink to
+# an app folder or a plain subfolder; the entry name is the app name and dot entries are
+# skipped. The entry path (not the symlink target) is the process working directory. Entries
+# are walked in name order.
 apps: ./apps
 
 # Session-owned runtime state. Contains process state and the console signing key.
@@ -70,36 +72,40 @@ proxy:
   # Set to "" to disable the proxy entirely (supervisor-only mode).
   listen: ":80"
 
-  # Optional. When set, connections from any other source address get 403.
-  # Use the Cloudflare ranges (https://www.cloudflare.com/ips/) so the origin IP
-  # cannot be used to bypass Cloudflare or spoof CF-Connecting-IP. Empty means
-  # accept from anywhere.
-  trusted_cidrs:
-    - 173.245.48.0/20
-    - 103.21.244.0/22
-    - 103.22.200.0/22
-    - 103.31.4.0/22
-    - 141.101.64.0/18
-    - 108.162.192.0/18
-    - 190.93.240.0/20
-    - 188.114.96.0/20
-    - 197.234.240.0/22
-    - 198.41.128.0/17
-    - 162.158.0.0/15
-    - 104.16.0.0/13
-    - 104.24.0.0/14
-    - 172.64.0.0/13
-    - 131.0.72.0/22
-    - 2400:cb00::/32
-    - 2606:4700::/32
-    - 2803:f800::/32
-    - 2405:b500::/32
-    - 2405:8100::/32
-    - 2a06:98c0::/29
-    - 2c0f:f248::/32
+  # Optional. Empty (the default) accepts any source. When set, connections from any other
+  # source address get 403. Use the Cloudflare ranges (https://www.cloudflare.com/ips/) so the
+  # origin IP cannot be used to bypass Cloudflare or spoof CF-Connecting-IP.
+  trusted_cidrs: []
+  #   - 173.245.48.0/20
+  #   - 103.21.244.0/22
+  #   - 103.22.200.0/22
+  #   - 103.31.4.0/22
+  #   - 141.101.64.0/18
+  #   - 108.162.192.0/18
+  #   - 190.93.240.0/20
+  #   - 188.114.96.0/20
+  #   - 197.234.240.0/22
+  #   - 198.41.128.0/17
+  #   - 162.158.0.0/15
+  #   - 104.16.0.0/13
+  #   - 104.24.0.0/14
+  #   - 172.64.0.0/13
+  #   - 131.0.72.0/22
+  #   - 2400:cb00::/32
+  #   - 2606:4700::/32
+  #   - 2803:f800::/32
+  #   - 2405:b500::/32
+  #   - 2405:8100::/32
+  #   - 2a06:98c0::/29
+  #   - 2c0f:f248::/32
+  #
+  # A simpler alternative to listing every range: accept only requests that carry Cloudflare's
+  # CF-Ray and CF-Connecting-IP headers. A direct caller can spoof the headers, so pair this with
+  # a firewall that only lets Cloudflare connect. Both guards apply when both are set.
+  cloudflare_only: false
 
   # Header that carries the real client IP, checked in order. First non-empty wins.
-  # Falls back to the TCP remote address.
+  # Falls back to the TCP remote address. The default needs no configuration.
   client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]
 
   # Response served when a request matches an app that is not running.
@@ -131,8 +137,10 @@ management:
   # Point each at the box in Cloudflare like any app hostname.
   host: boss.example.com
   # Optional. The address operators open, printed on start next to the always-available
-  # http://127.0.0.1:<first port> link. Its host must be one of the hosts above.
-  url: https://boss.example.com
+  # http://127.0.0.1:<first port> link, and the base of the hook ping URLs. When empty it is
+  # https://<first host>, so a plain Cloudflare setup needs only host. Set it for a custom scheme
+  # or host (for example an http demo); its host must be one of the hosts above.
+  url: ""
   auth:
     # AuthCog realm used for login and the server-side callback exchange.
     realm: auth.authcog.com

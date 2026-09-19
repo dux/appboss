@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -427,13 +426,7 @@ func (a *appRuntime) hookInfos() []HookInfo {
 
 // hookBaseURL is the public address operators open, used to print ready-made ping URLs.
 func hookBaseURL(cfg config.Config) string {
-	if cfg.Management.URL != "" {
-		return strings.TrimSuffix(cfg.Management.URL, "/")
-	}
-	if len(cfg.Management.Host) > 0 {
-		return "https://" + cfg.Management.Host[0]
-	}
-	return ""
+	return cfg.Management.PublicURL()
 }
 
 func hookLink(base, app, name, secret string) string {
