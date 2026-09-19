@@ -75,6 +75,7 @@ type Snapshot struct {
 	CanonicalHost   string            `json:"canonical_host,omitempty"`
 	WebProcess      string            `json:"web_process"`
 	Autostart       bool              `json:"autostart"`
+	WakeButton      bool              `json:"wake_button,omitempty"`
 	Web             config.Web        `json:"web"`
 	Processes       []ProcessSnapshot `json:"processes"`
 	Cron            []CronSnapshot    `json:"cron,omitempty"`
@@ -133,7 +134,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 	// apps are not started here even when listed; run, the console, or a request starts them.
 	if _, statErr := os.Stat(runningPath); errors.Is(statErr, os.ErrNotExist) {
 		for _, spec := range discovered {
-			if spec.Config.Autostart {
+			if spec.Config.Autostart.Starts() {
 				desired[spec.Name] = true
 			}
 		}
@@ -166,7 +167,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 	m.syncHookSecrets(discovered)
 	if cfg.Daemon.ResumeRunning {
 		for name := range desired {
-			if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart {
+			if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart.Starts() {
 				_ = runtime.call(request{kind: requestStart})
 			}
 		}
@@ -1423,7 +1424,7 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Autostart: a.spec.Config.Autostart, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Autostart: a.spec.Config.Autostart.Starts(), WakeButton: a.spec.Config.Autostart == config.AutostartButton, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" {

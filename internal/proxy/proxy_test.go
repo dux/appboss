@@ -172,6 +172,62 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	}
 }
 
+// TestButtonAppWakesOnPost pins the autostart: button contract: a GET answers the start page
+// without touching the app, and only the POST the button makes brings it up.
+func TestButtonAppWakesOnPost(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "apps", "demo")
+	if err := os.MkdirAll(appDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nautostart: button\n", os.Args[0])
+	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
+	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
+	cfg := config.Default()
+	cfg.Apps = filepath.Join(root, "apps")
+	cfg.StateDir = filepath.Join(root, "state")
+	cfg.LogDir = filepath.Join(root, "log")
+	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Ports.Range = [2]int{32300, 32320}
+	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
+	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
+	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(invalid) != 0 {
+		t.Fatalf("invalid apps: %v", invalid)
+	}
+	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
+	defer requestLogs.Close()
+	handler, err := New(cfg, manager, requestLogs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	get.Host = "demo.test"
+	get.Header.Set("Accept", "text/html")
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusServiceUnavailable || !strings.Contains(getResponse.Body.String(), "Start app: demo") {
+		t.Fatalf("stopped button page = %d %s", getResponse.Code, getResponse.Body.String())
+	}
+	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != super.Stopped {
+		t.Fatalf("GET woke the button app: %+v", snapshot)
+	}
+	post := httptest.NewRequest(http.MethodPost, "http://demo.test/", nil)
+	post.Host = "demo.test"
+	post.Header.Set("Accept", "text/html")
+	postResponse := httptest.NewRecorder()
+	handler.ServeHTTP(postResponse, post)
+	if postResponse.Code != http.StatusServiceUnavailable || !strings.Contains(postResponse.Body.String(), "Starting demo") {
+		t.Fatalf("post wake response = %d %s", postResponse.Code, postResponse.Body.String())
+	}
+	waitForProxyState(t, manager, super.Running)
+}
+
 // assertUpgradePassthrough drives a raw websocket-style upgrade through a real listener so the
 // hijack path of the response recorder and the reverse proxy is exercised end to end.
 func assertUpgradePassthrough(t *testing.T, handler http.Handler) {

@@ -756,12 +756,43 @@ func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
+// Autostart is when an app comes up on its own: true with the host and on resume, false only on
+// an explicit run or console start, button only after a POST to its wake page. Any request wakes
+// a false app, but only a POST wakes a button app, so crawlers and favicon probes cannot start it.
+type Autostart string
+
+const (
+	AutostartOn     Autostart = "true"
+	AutostartOff    Autostart = "false"
+	AutostartButton Autostart = "button"
+)
+
+// Starts reports whether the host should bring the app up on boot and on resume.
+func (a Autostart) Starts() bool { return a == AutostartOn }
+
+// UnmarshalYAML accepts the booleans true and false and the string "button".
+func (a *Autostart) UnmarshalYAML(node *yaml.Node) error {
+	if node.Tag == "!!bool" {
+		*a = AutostartOff
+		if node.Value == "true" {
+			*a = AutostartOn
+		}
+		return nil
+	}
+	switch value := Autostart(node.Value); value {
+	case AutostartOn, AutostartOff, AutostartButton:
+		*a = value
+		return nil
+	}
+	return &Error{Line: node.Line, Message: "must be true, false or button"}
+}
+
 type App struct {
 	Procfile      map[string]string  `yaml:"procfile" json:"procfile"`
 	Hosts         List               `yaml:"hosts" json:"hosts"`
 	WebProcess    string             `yaml:"web_process" json:"web_process"`
 	CanonicalHost string             `yaml:"canonical_host" json:"canonical_host"`
-	Autostart     bool               `yaml:"autostart" json:"autostart"`
+	Autostart     Autostart          `yaml:"autostart" json:"autostart"`
 	Cron          map[string]CronJob `yaml:"cron" json:"cron"`
 	Hooks         map[string]Hook    `yaml:"hooks" json:"hooks"`
 	Defaults      `yaml:",inline"`
@@ -797,7 +828,7 @@ type appFile struct {
 	Hosts         List               `yaml:"hosts"`
 	WebProcess    string             `yaml:"web_process"`
 	CanonicalHost string             `yaml:"canonical_host"`
-	Autostart     *bool              `yaml:"autostart"`
+	Autostart     Autostart          `yaml:"autostart"`
 	Cron          map[string]CronJob `yaml:"cron"`
 	Hooks         map[string]Hook    `yaml:"hooks"`
 	Overrides     `yaml:",inline"`
@@ -837,12 +868,12 @@ func buildApp(raw appFile, defaults Defaults) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: true, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Hosts: raw.Hosts, WebProcess: "web", CanonicalHost: raw.CanonicalHost, Autostart: AutostartOn, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
 	if raw.WebProcess != "" {
 		app.WebProcess = raw.WebProcess
 	}
-	if raw.Autostart != nil {
-		app.Autostart = *raw.Autostart
+	if raw.Autostart != "" {
+		app.Autostart = raw.Autostart
 	}
 	if app.Processes == nil {
 		app.Processes = map[string]ProcessOverrides{}

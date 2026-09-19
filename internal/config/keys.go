@@ -79,7 +79,7 @@ var keyDocs = map[string]keyDoc{
 	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains, a leading . matches the domain and its subdomains", example: "[\".myapp.com\"]"},
 	"web_process":    {description: "process that receives proxied traffic", def: "web"},
 	"canonical_host": {description: "301 every other host of this app to this one; must be in hosts", example: "myapp.com"},
-	"autostart":      {description: "start this app when the host starts; false waits for run or a request", def: "true"},
+	"autostart":      {description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", def: "true"},
 	"processes":      {description: "per-process overrides of the process keys, by process name", example: "{worker: {stop_timeout: 120s}}"},
 	"cron":           {description: "scheduled one-shot commands by name, run on an every interval or a cron expression", example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
 	"hooks":          {description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>", example: "{deploy: {command: git pull, restart: true}}"},
@@ -125,7 +125,7 @@ func Keys() []Key {
 			keys = append(keys, key)
 		}
 	})
-	app := App{WebProcess: "web", Autostart: true}
+	app := App{WebProcess: "web", Autostart: AutostartOn}
 	walk(reflect.ValueOf(app), "", GroupApp, false, func(key Key) {
 		if _, shared := keyDocs[key.Path]; shared && isSharedKey(key.Path) {
 			return
@@ -204,6 +204,8 @@ func typeName(t reflect.Type) string {
 		return "size"
 	case reflect.TypeOf(List(nil)):
 		return "list"
+	case reflect.TypeOf(Autostart("")):
+		return "bool | button"
 	}
 	switch t.Kind() {
 	case reflect.String:

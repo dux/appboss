@@ -42,6 +42,7 @@ type Handler struct {
 	starting    []byte
 	crashed     []byte
 	unknown     []byte
+	button      []byte
 	maintenance []byte
 	filters     []Filter
 }
@@ -61,12 +62,16 @@ func New(cfg config.Config, manager *super.Manager, recorder Recorder, extra ...
 	if err != nil {
 		return nil, err
 	}
+	button, err := readPage("web/button.html")
+	if err != nil {
+		return nil, err
+	}
 	maintenance, err := readPage("web/maintenance.html")
 	if err != nil {
 		return nil, err
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, transport: transport, starting: starting, crashed: crashed, unknown: unknown, maintenance: maintenance}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance}
 	h.initFilters(extra...)
 	return h, nil
 }
@@ -273,7 +278,20 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	}
 	if snapshot.State != super.Running {
 		if snapshot.State == super.Stopped {
+			// A button app only wakes on the deliberate POST of its start page, so a GET for
+			// a favicon or a crawler never starts it.
+			if snapshot.WakeButton && r.Method != http.MethodPost {
+				h.stoppedPage(w, r, snapshot.Name)
+				return
+			}
 			go h.manager.Wake(snapshot.Name)
+			if snapshot.WakeButton {
+				// The POST came from our own page: answer the starting page directly instead
+				// of an empty 503, and let its refresh follow the app up.
+				w.Header().Set("Retry-After", strconv.Itoa(h.cfg.Proxy.Wake.RetryAfter))
+				h.page(w, http.StatusServiceUnavailable, h.starting, snapshot.Name)
+				return
+			}
 		}
 		if snapshot.State == super.Crashed {
 			h.unavailablePage(w, r, h.crashed, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
@@ -408,6 +426,18 @@ func (h *Handler) unavailablePage(w http.ResponseWriter, r *http.Request, page [
 	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
+// stoppedPage is the answer for a stopped button app on anything but POST: a page with a start
+// button whose form posts back to the same URL. It carries no Retry-After and no auto-refresh so
+// nothing but a deliberate click starts the app.
+func (h *Handler) stoppedPage(w http.ResponseWriter, r *http.Request, app string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if wantsHTML(r) {
+		h.page(w, http.StatusServiceUnavailable, h.button, app)
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 func wantsHTML(r *http.Request) bool {
 	return r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")
 }
@@ -438,6 +468,8 @@ func readPage(path string) ([]byte, error) {
 		return []byte(defaultStartingPage), nil
 	case "crashed.html":
 		return []byte(defaultCrashedPage), nil
+	case "button.html":
+		return []byte(defaultButtonPage), nil
 	case "404.html":
 		return []byte(defaultUnknownPage), nil
 	case "maintenance.html":
@@ -447,8 +479,9 @@ func readPage(path string) ([]byte, error) {
 	}
 }
 
-const pageStyle = `<style>body{background:#111;color:#eee;font:16px system-ui;display:grid;min-height:100vh;place-items:center;margin:0}main{text-align:center}p{color:#aaa}</style>`
+const pageStyle = `<style>body{background:#111;color:#eee;font:16px system-ui;display:grid;min-height:100vh;place-items:center;margin:0}main{text-align:center}p{color:#aaa}button{font:inherit;padding:.6em 1.4em;border:0;border-radius:6px;background:#3b82f6;color:#fff;cursor:pointer}</style>`
 const defaultStartingPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta http-equiv="refresh" content="{{RETRY_AFTER}}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Starting {{APP_NAME}}</title>` + pageStyle + `<main><h1>Starting {{APP_NAME}}</h1><p>This page will refresh shortly.</p></main></html>`
+const defaultButtonPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is stopped</title>` + pageStyle + `<main><h1>{{APP_NAME}} is stopped</h1><p>Start it to continue.</p><form method="post"><button type="submit">Start app: {{APP_NAME}}</button></form></main></html>`
 const defaultCrashedPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is unavailable</title>` + pageStyle + `<main><h1>{{APP_NAME}} is unavailable</h1><p>The application could not be started.</p></main></html>`
 const defaultUnknownPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Not found</title>` + pageStyle + `<main><h1>Application not found</h1></main></html>`
 const defaultMaintenancePage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is down for maintenance</title>` + pageStyle + `<main><h1>Down for maintenance</h1><p>{{APP_NAME}} will be back shortly.</p></main></html>`

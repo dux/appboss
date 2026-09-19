@@ -145,22 +145,32 @@ func TestParseAppAutostart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !omitted.Autostart {
-		t.Fatalf("omitted autostart = %v, want true", omitted.Autostart)
+	if omitted.Autostart != AutostartOn {
+		t.Fatalf("omitted autostart = %q, want %q", omitted.Autostart, AutostartOn)
 	}
 	off, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: false\n"), path, defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if off.Autostart {
-		t.Fatalf("autostart: false = %v, want false", off.Autostart)
+	if off.Autostart != AutostartOff {
+		t.Fatalf("autostart: false = %q, want %q", off.Autostart, AutostartOff)
 	}
 	on, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: true\n"), path, defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !on.Autostart {
-		t.Fatalf("autostart: true = %v, want true", on.Autostart)
+	if on.Autostart != AutostartOn {
+		t.Fatalf("autostart: true = %q, want %q", on.Autostart, AutostartOn)
+	}
+	button, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: button\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if button.Autostart != AutostartButton || button.Autostart.Starts() {
+		t.Fatalf("autostart: button = %q starts=%v, want button false", button.Autostart, button.Autostart.Starts())
+	}
+	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nautostart: maybe\n"), path, defaults); err == nil {
+		t.Fatal("autostart: maybe should be rejected")
 	}
 }
 

@@ -151,6 +151,9 @@
       {#if props.app.maintenance}
         <span class="badge badge-warning">maintenance</span>
       {/if}
+      {#if props.app.wake_button}
+        <span class="badge" title="Start it from the console or its start page">manual</span>
+      {/if}
       {#if props.app.draining}
         <span class="badge badge-warning">draining</span>
       {/if}

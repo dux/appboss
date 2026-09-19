@@ -33,7 +33,7 @@ func TestKeysDocumentEveryConfigKey(t *testing.T) {
 		"restart_backoff": {Group: GroupShared, Type: "list", Default: "[1s, 2, 60s]", PerProcess: true},
 		"ports.range":     {Group: GroupHost, Type: "[from, to]", Default: "[3100, 3990]"},
 		"web_process":     {Group: GroupApp, Type: "string", Default: "web"},
-		"autostart":       {Group: GroupApp, Type: "bool", Default: "true"},
+		"autostart":       {Group: GroupApp, Type: "bool | button", Default: "true"},
 		"management.host": {Group: GroupHost, Type: "list", Example: "boss.example.com"},
 		"log_max_size":    {Group: GroupShared, Type: "size", Default: "10m", PerProcess: true},
 	} {

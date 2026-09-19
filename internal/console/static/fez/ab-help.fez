@@ -175,7 +175,7 @@ health: http:/up</pre>
         <h2>Processes</h2>
         <p>Each key under <code>procfile</code> is a process type. All of them run at once; only <code>web</code> gets proxied traffic. Boss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>APPBOSS_SOCKET</code> into every process.</p>
         <ul>
-          <li><code>autostart: false</code> keeps an app down until <code>appboss run</code>, the console, or a request starts it.</li>
+          <li><code>autostart: false</code> keeps an app down until <code>appboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
           <li><code>health</code> is the readiness check: <code>tcp</code>, or <code>http:&lt;path&gt;</code> expecting a 2xx. A process that never passes it is restarted.</li>
           <li>After the web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check).</li>
           <li><code>idle_stop</code> stops an app with no traffic; <code>0s</code> disables it.</li>

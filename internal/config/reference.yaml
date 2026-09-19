@@ -361,8 +361,10 @@ hosts:
 # Which proctype receives proxied traffic. Only one. Default: web.
 web_process: web
 
-# Start this app when the host starts. false leaves it stopped until `appboss run`,
-# the console, or the first proxied request. A host restart does not bring it back.
+# Start policy. true starts the app with the host and brings it back on resume. false leaves
+# it stopped until `appboss run`, the console, or any proxied request starts it; a host restart
+# does not bring it back. button is like false, but a request answers a page with a start button
+# and only its POST starts the app, so a crawler or favicon GET never does.
 autostart: true
 
 # Optional. Must be one of hosts. Requests for any other host of this app answer 301 to

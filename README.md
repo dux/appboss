@@ -38,12 +38,13 @@ make build            # ./bin/appboss
 make demo             # builds, then runs the host session on ./demo/appboss.yaml
 ```
 
-The demo listens on `:80` and hosts two apps.
+The demo listens on `:80` and hosts three apps.
 Binding port 80 needs root or `CAP_NET_BIND_SERVICE`, so `make demo` runs the daemon through `sudo`.
 
 * http://boss.lvh.me - management console
 * http://sinatra.lvh.me - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
 * http://bun.lvh.me - Bun app
+* http://button.lvh.me - Bun app with `autostart: button`; it serves a start button and only its POST brings it up, so a crawler or favicon request never starts it (stop it in the console to see the page again)
 
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
 `make kill` stops the demo apps and clears the port range after a crash.
@@ -152,6 +153,7 @@ On start the host clears every listener in `ports.range`, then starts the apps l
 That file is written on every `run` and `stop`, so an app you stopped stays stopped across restarts.
 When the file does not exist yet, which is the case on a first start, every discovered app with `autostart: true` is started.
 An app with `autostart: false` stays down across host restarts until `appboss run`, the console, or the first proxied request starts it.
+An app with `autostart: button` also stays down, but a request answers a page with a start button and only its POST starts the app, so a crawler or a favicon request never does.
 A stopped app is also started by the first proxied request, which gets a "starting" page that refreshes after `proxy.wake.retry_after` seconds.
 
 ## Logs
@@ -377,8 +379,8 @@ internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console
 internal/res/         resource backend: process groups or cgroup v2 limits
-web/                  starting, crashed, maintenance and 404 pages
-demo/                 host config and two sample apps
+web/                  starting, crashed, button, maintenance and 404 pages
+demo/                 host config and three sample apps
 ```
 
 ## Validation

@@ -16,7 +16,7 @@ import (
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
 func featureHandler() *Handler {
-	handler := &Handler{cfg: config.Default(), maintenance: []byte(defaultMaintenancePage)}
+	handler := &Handler{cfg: config.Default(), button: []byte(defaultButtonPage), maintenance: []byte(defaultMaintenancePage)}
 	handler.initFilters()
 	return handler
 }
