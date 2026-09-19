@@ -26,7 +26,7 @@
 
   var results = { ws: null, sse: null };
   var opened = { ws: false, sse: false };
-  var bus = Pubsub.connect({ path: path });
+  var bus = Pubsub.connect();
 
   var ws = bus.channel('_selftest', { transport: 'ws' });
   var sse = bus.channel('_selftest', { transport: 'sse' });

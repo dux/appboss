@@ -1,6 +1,6 @@
 // app-boss pubsub client. No dependencies. Serve it from the app's own host and use:
 //
-//   const bus = Pubsub.connect({ path: '/socketio' });
+//   const bus = Pubsub.connect();
 //   const chat = bus.channel('chat');
 //   chat.on('message', (envelope) => console.log(envelope.event, envelope.data));
 //   chat.on('open', () => chat.send('typing', { user: 'a' }));   // WebSocket only
@@ -8,12 +8,35 @@
 //   chat.on('error', (err) => {});
 //
 // Lifecycle events 'open', 'close' and 'error' are reserved; every other name is a server event.
-// connect({ transport: 'ws' | 'sse' | 'auto' }) forces a transport. 'auto' uses a WebSocket and
-// falls back to SSE if the socket cannot open.
+// connect({ path: '...', transport: 'ws' | 'sse' | 'auto' }) overrides the defaults. The path
+// defaults to the directory this script was served from (the library lives at <path>/client.js).
+// 'auto' uses a WebSocket and falls back to SSE if the socket cannot open.
 (function (global) {
   'use strict';
 
+  // The library is served at <path>/client.js, so its own URL is the default path.
+  function scriptPath() {
+    var doc = global.document;
+    if (!doc) return '';
+    var script = doc.currentScript;
+    if (!script && doc.scripts) {
+      for (var i = doc.scripts.length - 1; i >= 0; i--) {
+        if ((doc.scripts[i].getAttribute('src') || '').indexOf('client.js') >= 0) {
+          script = doc.scripts[i];
+          break;
+        }
+      }
+    }
+    var src = script && script.getAttribute('src');
+    if (!src) return '';
+    var anchor = doc.createElement('a');
+    anchor.href = src;
+    var cut = anchor.pathname.lastIndexOf('/');
+    return cut > 0 ? anchor.pathname.slice(0, cut) : '';
+  }
+
   function normalize(path) {
+    if (!path) path = scriptPath();
     if (!path) return '/socketio';
     if (path.charAt(0) !== '/') path = '/' + path;
     return path.replace(/\/+$/, '');

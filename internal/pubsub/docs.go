@@ -34,11 +34,12 @@ Publish over HTTP (any language, any process):
     curl -X POST https://myapp.example.com/socketio/chat \
       -H "Authorization: Bearer $PUBSUB_SECRET" -d 'plain text'
 
-Subscribe in the browser with the bundled client:
+Subscribe in the browser with the bundled client. It reads the path from the directory it was
+served from, so connect() needs no arguments:
 
     <script src="/socketio/client.js"></script>
     <script>
-      const chat = Pubsub.connect({ path: '/socketio' }).channel('chat');
+      const chat = Pubsub.connect().channel('chat');
       chat.on('message', (envelope) => console.log(envelope.event, envelope.data));
       chat.on('open', () => chat.send('typing', { user: 'a' }));   // WebSocket only
       chat.on('close', () => {});

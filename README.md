@@ -243,12 +243,12 @@ pubsub:
 
 **Subscribe.** A `GET <path>/<channel>` upgrades to a WebSocket, or streams SSE when the request carries no `Upgrade` header. Messages are `{"event","data","ts"}`; the last `replay` are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher.
 
-The bundled client, served at `GET <path>/client.js`, needs no dependency and picks WebSocket with an SSE fallback:
+The bundled client, served at `GET <path>/client.js`, needs no dependency and picks WebSocket with an SSE fallback. It derives the path from the directory it was served from, so `Pubsub.connect()` needs no arguments:
 
 ```html
 <script src="/socketio/client.js"></script>
 <script>
-  const chat = Pubsub.connect({ path: '/socketio' }).channel('chat');
+  const chat = Pubsub.connect().channel('chat');
   chat.on('message', (envelope) => console.log(envelope.event, envelope.data));
   chat.on('open', () => chat.send('typing', { user: 'a' })); // WebSocket only
   chat.on('close', () => {});
