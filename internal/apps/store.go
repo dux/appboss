@@ -303,6 +303,20 @@ func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	return s.Read("app:" + app)
 }
 
+// EnsureLocal creates an app's appboss.local.yaml from its appboss.yaml when the override is
+// missing, and otherwise returns the existing one. The console's visual editor calls it before
+// a write, so an edit lands in the file the next deploy does not overwrite.
+func (s *Store) EnsureLocal(app string) (ConfigFile, error) {
+	file, err := s.lookup("app:" + app)
+	if err != nil {
+		return ConfigFile{}, err
+	}
+	if file.HasLocal {
+		return s.Read("app:" + app)
+	}
+	return s.CreateLocal(app)
+}
+
 // CreateHostLocal copies the host config to appboss.local.yaml so console writes there survive a
 // deploy. It is a no-op when the local file already exists.
 func (s *Store) CreateHostLocal() (ConfigFile, error) {

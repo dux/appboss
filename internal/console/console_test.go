@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +198,17 @@ func (s *fakeStore) CreateLocal(app string) (apps.ConfigFile, error) {
 	}
 	file.HasLocal, file.Source, file.Path = true, "appboss.local.yaml", "/srv/apps/sinatra/appboss.local.yaml"
 	return s.Read("app:" + app)
+}
+
+func (s *fakeStore) EnsureLocal(app string) (apps.ConfigFile, error) {
+	file := s.files["app:"+app]
+	if file == nil {
+		return apps.ConfigFile{}, errors.New("unknown config file")
+	}
+	if file.HasLocal {
+		return s.Read("app:" + app)
+	}
+	return s.CreateLocal(app)
 }
 
 func (s *fakeStore) Effective(app string) (string, error) {
@@ -542,6 +555,185 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 	handler.ServeHTTP(noCSRFResponse, noCSRF)
 	if noCSRFResponse.Code != http.StatusForbidden {
 		t.Fatalf("write without CSRF token: %d", noCSRFResponse.Code)
+	}
+}
+
+func TestConsoleConfigFormRoundTrip(t *testing.T) {
+	manager := &fakeManager{}
+	handler := newTestHandler(t, manager, nil)
+	store := handler.store.(*fakeStore)
+	cookie, session := sessionCookie(t, handler)
+
+	form := call(t, handler, cookie, session, http.MethodGet, "/api/config/form?id=app:sinatra", "")
+	if form.Code != http.StatusOK {
+		t.Fatalf("form: %d %s", form.Code, form.Body.String())
+	}
+	var payload struct {
+		Values  map[string]any `json:"values"`
+		Recipes []struct {
+			ID     string `json:"id"`
+			Scope  string `json:"scope"`
+			Fields []struct {
+				Path string `json:"path"`
+				Kind string `json:"kind"`
+			} `json:"fields"`
+		} `json:"recipes"`
+	}
+	if err := json.Unmarshal(form.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Recipes) == 0 {
+		t.Fatal("no app recipes returned")
+	}
+	for _, recipe := range payload.Recipes {
+		if recipe.Scope != "app" {
+			t.Errorf("host recipe %q leaked into an app form", recipe.ID)
+		}
+	}
+
+	file, err := store.Read("app:sinatra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyBody := `{"id":"app:sinatra","revision":"` + file.Revision + `","recipe":"pubsub","values":{"pubsub.path":"/socketio","pubsub.replay":25},"reset":["pubsub.secret"]}`
+	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", applyBody)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
+	}
+	if !store.files["app:sinatra"].HasLocal {
+		t.Error("apply did not create the server override")
+	}
+	contents := store.files["app:sinatra"].Contents
+	if !strings.Contains(contents, "/socketio") || !strings.Contains(contents, "replay: 25") {
+		t.Errorf("apply did not write the recipe values:\n%s", contents)
+	}
+	if manager.actions[len(manager.actions)-1] != "rescan" {
+		t.Errorf("apply did not rescan: %v", manager.actions)
+	}
+
+	// A key outside the recipe is ignored rather than written.
+	current, err := store.Read("app:sinatra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"pubsub","values":{"s3.endpoint":"https://evil"},"reset":[]}`
+	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", foreign); got.Code != http.StatusOK {
+		t.Fatalf("foreign apply: %d %s", got.Code, got.Body.String())
+	}
+	if strings.Contains(store.files["app:sinatra"].Contents, "evil") {
+		t.Error("a key outside the recipe was written")
+	}
+
+	unknown := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"nope","values":{},"reset":[]}`
+	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", unknown); got.Code != http.StatusBadRequest {
+		t.Errorf("unknown recipe should be a 400: %d %s", got.Code, got.Body.String())
+	}
+}
+
+// TestConsoleConfigFormWritesRealOverride drives the form endpoints through the real
+// apps.Store and checks that a save lands in the server-only override on disk.
+func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
+	root := t.TempDir()
+	hostDir := filepath.Join(root, "host")
+	appDir := filepath.Join(hostDir, "apps", "sinatra")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostPath := filepath.Join(hostDir, config.FileName)
+	if err := os.WriteFile(hostPath, []byte("apps: ./apps\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appPath := filepath.Join(appDir, config.FileName)
+	if err := os.WriteFile(appPath, []byte("procfile:\n  web: ./server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.SourcePath = hostPath
+	cfg.Dir = hostDir
+	cfg.Apps = filepath.Join(hostDir, "apps")
+	cfg.StateDir = filepath.Join(root, "state")
+	cfg.LogDir = filepath.Join(root, "log")
+	cfg.Management.Host = config.List{"boss.lvh.me"}
+	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	store := apps.NewStore(cfg)
+	manager := &fakeManager{}
+	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil), store, nil, &fakeSys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, session := sessionCookie(t, handler)
+
+	form := call(t, handler, cookie, session, http.MethodGet, "/api/config/form?id=app:sinatra", "")
+	if form.Code != http.StatusOK {
+		t.Fatalf("form: %d %s", form.Code, form.Body.String())
+	}
+	var payload struct {
+		File    apps.ConfigFile `json:"file"`
+		Recipes []config.Recipe `json:"recipes"`
+	}
+	if err := json.Unmarshal(form.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, recipe := range payload.Recipes {
+		if recipe.Scope != config.RecipeApp {
+			t.Errorf("host recipe %q in an app form", recipe.ID)
+		}
+	}
+
+	apply := `{"id":"app:sinatra","revision":"` + payload.File.Revision + `","recipe":"pubsub","values":{"pubsub.path":"/socketio","pubsub.replay":25},"reset":[]}`
+	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", apply)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
+	}
+	override, err := os.ReadFile(filepath.Join(appDir, config.LocalFileName))
+	if err != nil {
+		t.Fatalf("override was not written: %v", err)
+	}
+	if !strings.Contains(string(override), "/socketio") || !strings.Contains(string(override), "replay: 25") {
+		t.Fatalf("override is missing the values:\n%s", override)
+	}
+	base, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(base), "socketio") {
+		t.Fatal("the base appboss.yaml was modified")
+	}
+	if manager.actions[len(manager.actions)-1] != "rescan" {
+		t.Fatalf("apply did not rescan: %v", manager.actions)
+	}
+
+	hostForm := call(t, handler, cookie, session, http.MethodGet, "/api/config/form?id=host", "")
+	var hostPayload struct {
+		File    apps.ConfigFile `json:"file"`
+		Recipes []config.Recipe `json:"recipes"`
+	}
+	if err := json.Unmarshal(hostForm.Body.Bytes(), &hostPayload); err != nil {
+		t.Fatal(err)
+	}
+	sawS3 := false
+	for _, recipe := range hostPayload.Recipes {
+		if recipe.Scope != config.RecipeHost {
+			t.Errorf("app recipe %q in a host form", recipe.ID)
+		}
+		if recipe.ID == "s3" {
+			sawS3 = true
+		}
+	}
+	if !sawS3 {
+		t.Fatal("the host form has no s3 recipe")
+	}
+	hostApply := `{"id":"host","revision":"` + hostPayload.File.Revision + `","recipe":"s3","values":{"s3.endpoint":"https://r2.example.com","s3.region":"auto","s3.bucket":"backups","s3.access_key":"key","s3.secret_key":"secret"},"reset":[]}`
+	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", hostApply); got.Code != http.StatusOK {
+		t.Fatalf("host apply: %d %s", got.Code, got.Body.String())
+	}
+	hostOverride, err := os.ReadFile(filepath.Join(hostDir, config.LocalFileName))
+	if err != nil {
+		t.Fatalf("host override was not written: %v", err)
+	}
+	if !strings.Contains(string(hostOverride), "r2.example.com") {
+		t.Fatalf("host override is missing the endpoint:\n%s", hostOverride)
 	}
 }
 

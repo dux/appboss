@@ -1956,8 +1956,152 @@ select.log-control { max-width: 220px; }
   to { transform: rotate(360deg); }
 }
 
+/* --- visual config form (ab-config-form) --- */
+.config-form {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 460px;
+}
+
+.config-recipes {
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.config-form-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.config-form-head {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.config-form-title h3 {
+  margin-bottom: 2px;
+}
+
+.config-form-title p {
+  max-width: 60ch;
+  margin-bottom: 0;
+  font-size: var(--text-size-small);
+}
+
+.config-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+  padding: 20px;
+}
+
+.config-section {
+  grid-column: 1 / -1;
+  margin: 4px 0 -4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: var(--text-size-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.config-section:first-child {
+  margin-top: 0;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.config-field-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.config-field-label {
+  font-weight: 600;
+}
+
+.config-field-path {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-size-small);
+}
+
+.config-field-desc {
+  color: var(--muted);
+  font-size: var(--text-size-small);
+  line-height: 1.4;
+}
+
+.config-input,
+.config-textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+}
+
+.config-input:focus,
+.config-textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.config-input::placeholder,
+.config-textarea::placeholder {
+  color: #a0aab5;
+}
+
+.config-textarea {
+  min-height: 62px;
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  resize: vertical;
+}
+
+.config-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.config-form-note {
+  padding: 0 20px 16px;
+  font-size: var(--text-size-small);
+}
+
+.config-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.config-mode .btn.active {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
 @media (max-width: 900px) {
   .container { padding-inline: 16px; }
+  .config-form { grid-template-columns: 1fr; }
+  .config-recipes { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); }
   .page-header { align-items: flex-start; flex-direction: column; }
   .page-actions { justify-content: flex-start; }
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1969,6 +2113,7 @@ select.log-control { max-width: 220px; }
 }
 
 @media (max-width: 560px) {
+  .config-fields { grid-template-columns: 1fr; }
   .navbar-inner { align-items: flex-start; flex-direction: column; padding: 12px 0; }
   .user-block { display: none; }
   .stat-row { grid-template-columns: 1fr; }

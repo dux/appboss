@@ -3,6 +3,7 @@
     init() {
       this.state.files = []
       this.state.current = null
+      this.state.mode = 'yaml'
       // Edits are kept per file so switching files never loses a change.
       this.state.buffers = {}
       this.state.revisions = {}
@@ -91,6 +92,34 @@
       text.disabled = !file
       text.value = file ? this.state.buffers[file.id] ?? file.saved : ''
       this.renderGutter()
+    }
+
+    // --- form / yaml mode ---
+
+    async setMode(mode) {
+      if (mode === this.state.mode) return
+      // The form writes to disk, so coming back to YAML picks up the file the form saved.
+      if (mode === 'yaml') await this.reloadCurrentIfClean()
+      this.state.mode = mode
+      this.state.message = ''
+      this.state.messageError = false
+      this.state.conflict = null
+      this.state.history = null
+    }
+
+    // Reload the active file from disk unless the editor holds unsaved changes.
+    async reloadCurrentIfClean() {
+      const file = this.currentFile()
+      if (!file || this.state.dirty[file.id]) return
+      try {
+        const loaded = await Boss.api(`/api/config/file?id=${encodeURIComponent(file.id)}`)
+        Object.assign(file, loaded, { saved: loaded.contents })
+        this.state.buffers[file.id] = loaded.contents
+        this.state.revisions[file.id] = loaded.revision
+        this.syncEditor()
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
     }
 
     showMessage(message, error = false, line = 0) {
@@ -373,7 +402,13 @@
   </nav>
   <div class="config-main">
     <div class="card-header config-toolbar">
-      <span class="config-path">{state.path}</span>
+      <div class="config-toolbar-left">
+        <span class="config-path">{state.path}</span>
+        <div class="btn-list config-mode" role="group" aria-label="Editor mode">
+          <button class="btn btn-sm" class:active={state.mode === 'form'} type="button" onclick="fez.setMode('form')">Form</button>
+          <button class="btn btn-sm" class:active={state.mode === 'yaml'} type="button" onclick="fez.setMode('yaml')">YAML</button>
+        </div>
+      </div>
       <div class="btn-list">
         {#if state.canLocal}
           <button class="btn btn-sm" type="button" onclick="fez.createOverride()" disabled={state.busy}>
@@ -393,19 +428,26 @@
           <svg class="icon"><use href="#i-help"></use></svg>
           Help
         </button>
-        <button class="btn btn-sm" type="button" onclick="fez.validate()" disabled={!state.current || state.busy}>
-          <svg class="icon"><use href="#i-check"></use></svg>
-          Validate
-        </button>
-        <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={!state.current || state.busy}>
-          <svg class="icon"><use href="#i-save"></use></svg>
-          Save
-        </button>
+        {#if state.mode === 'yaml'}
+          <button class="btn btn-sm" type="button" onclick="fez.validate()" disabled={!state.current || state.busy}>
+            <svg class="icon"><use href="#i-check"></use></svg>
+            Validate
+          </button>
+          <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={!state.current || state.busy}>
+            <svg class="icon"><use href="#i-save"></use></svg>
+            Save
+          </button>
+        {/if}
       </div>
     </div>
-    <div class="editor" fez:keep="editor">
-      <pre class="gutter" fez:this="gutter" aria-hidden="true"></pre>
-      <textarea fez:this="text" spellcheck="false" wrap="off" aria-label="File contents" disabled></textarea>
+    <div class:d-none={state.mode !== 'yaml'}>
+      <div class="editor" fez:keep="editor">
+        <pre class="gutter" fez:this="gutter" aria-hidden="true"></pre>
+        <textarea fez:this="text" spellcheck="false" wrap="off" aria-label="File contents" disabled></textarea>
+      </div>
+    </div>
+    <div class:d-none={state.mode !== 'form'}>
+      <ab-config-form file_id={state.current} />
     </div>
     {#if state.message}
       <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>

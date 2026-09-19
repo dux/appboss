@@ -28,3 +28,20 @@ func TestEveryConsoleTabIsRouted(t *testing.T) {
 		}
 	}
 }
+
+// The visual config form is a child of ab-config, so index.html must load it before ab-config.
+func TestConfigFormComponentIsLoaded(t *testing.T) {
+	index, err := assets.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	form := strings.Index(html, `fez="/assets/fez/ab-config-form.fez"`)
+	parent := strings.Index(html, `fez="/assets/fez/ab-config.fez"`)
+	if form < 0 || parent < 0 || form > parent {
+		t.Error("index.html must load ab-config-form.fez before ab-config.fez")
+	}
+	if _, err := assets.ReadFile("static/fez/ab-config-form.fez"); err != nil {
+		t.Fatalf("ab-config-form.fez is not embedded: %v", err)
+	}
+}

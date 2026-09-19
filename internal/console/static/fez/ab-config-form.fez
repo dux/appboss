@@ -1,0 +1,347 @@
+<script>
+  // Resolves a dotted path such as pubsub.replay inside the parsed config.
+  function getPath(source, path) {
+    let current = source
+    for (const part of path.split('.')) {
+      if (current === null || typeof current !== 'object') return undefined
+      current = current[part]
+    }
+    return current
+  }
+
+  class {
+    PROPS = {
+      file_id: { type: String, default: '' },
+    }
+
+    init() {
+      this.state.ready = false
+      this.state.file = null
+      this.state.values = {}
+      this.state.recipes = []
+      this.state.recipeId = ''
+      this.state.active = null
+      this.state.sections = []
+      this.state.fieldIndex = {}
+      // Raw form values are kept per recipe, so switching recipes keeps unsaved edits and a
+      // re-render restores them instead of resetting to the last saved values.
+      this.state.drafts = {}
+      this.state.revision = ''
+      this.state.busy = false
+      this.state.message = ''
+      this.state.messageError = false
+    }
+
+    onMount() {
+      this.subscribe('config:changed', () => this.load())
+      this.load()
+    }
+
+    onPropsChange(name) {
+      if (name !== 'file_id') return
+      this.state.message = ''
+      this.state.messageError = false
+      this.load()
+    }
+
+    // --- data ---
+
+    async load() {
+      if (!this.props.file_id) {
+        this.state.ready = false
+        return
+      }
+      try {
+        const data = await Boss.api(`/api/config/form?id=${encodeURIComponent(this.props.file_id)}`)
+        this.state.file = data.file
+        this.state.values = data.values || {}
+        this.state.recipes = data.recipes || []
+        this.state.revision = data.file ? data.file.revision : ''
+        this.state.drafts = {}
+        if (!this.state.recipes.some((recipe) => recipe.id === this.state.recipeId)) {
+          this.state.recipeId = this.state.recipes.length ? this.state.recipes[0].id : ''
+        }
+        this.state.ready = true
+      } catch (error) {
+        this.message(error.message, true)
+      }
+    }
+
+    beforeRender() {
+      const recipe = this.state.recipes.find((candidate) => candidate.id === this.state.recipeId) || null
+      const sections = []
+      const byName = {}
+      const fieldIndex = {}
+      for (const field of recipe ? recipe.fields : []) {
+        fieldIndex[field.path] = field
+        const name = field.section || ''
+        if (byName[name] === undefined) {
+          byName[name] = sections.length
+          sections.push({ name, fields: [] })
+        }
+        sections[byName[name]].fields.push(field)
+      }
+      this.state.active = recipe
+      this.state.sections = sections
+      this.state.fieldIndex = fieldIndex
+    }
+
+    // Controls are plain DOM, so the form never re-renders while typing. After a render the
+    // draft (or the parsed file) is written back into them.
+    afterRender() {
+      if (!this.state.ready || !this.state.active) return
+      this.applyControls()
+    }
+
+    applyControls() {
+      const draft = this.state.drafts[this.state.recipeId] || {}
+      for (const node of this.root.querySelectorAll('[data-path]')) {
+        const field = this.state.fieldIndex[node.dataset.path]
+        if (!field) continue
+        const raw = draft[field.path]
+        if (field.kind === 'range') {
+          const parts = Array.isArray(raw) ? raw : this.initialValue(field, getPath(this.state.values, field.path))
+          node.value = parts[Number(node.dataset.index || 0)] || ''
+        } else if (raw !== undefined) {
+          node.value = raw
+        } else {
+          node.value = this.initialValue(field, getPath(this.state.values, field.path))
+        }
+      }
+    }
+
+    initialValue(field, value) {
+      if (value === undefined || value === null) return ''
+      if (field.kind === 'list') return Array.isArray(value) ? value.join('\n') : String(value)
+      if (field.kind === 'map') return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join('\n')
+      if (field.kind === 'bool') return value === true ? 'true' : 'false'
+      return String(value)
+    }
+
+    placeholder(field, fallback = '') {
+      if (field.kind === 'list') return 'one per line'
+      if (field.kind === 'map') return 'key: value, one per line'
+      return field.default || field.example || fallback
+    }
+
+    defaultLabel(field) {
+      return field.default || field.example || 'unset'
+    }
+
+    // --- editing ---
+
+    selectRecipe(id) {
+      if (id === this.state.recipeId) return
+      this.captureDraft()
+      this.state.recipeId = id
+      this.state.message = ''
+      this.state.messageError = false
+    }
+
+    resetRecipe() {
+      const recipe = this.state.active
+      if (!recipe) return
+      const draft = {}
+      for (const field of recipe.fields) {
+        draft[field.path] = field.kind === 'range' ? ['', ''] : ''
+      }
+      this.state.drafts = { ...this.state.drafts, [recipe.id]: draft }
+      this.message('Cleared. Save to remove those keys and fall back to the defaults.')
+    }
+
+    captureDraft() {
+      const id = this.state.recipeId
+      if (!id) return
+      const draft = {}
+      for (const node of this.root.querySelectorAll('[data-path]')) {
+        const kind = node.dataset.kind
+        if (kind === 'range') {
+          if (!Array.isArray(draft[node.dataset.path])) draft[node.dataset.path] = ['', '']
+          draft[node.dataset.path][Number(node.dataset.index || 0)] = node.value
+        } else {
+          draft[node.dataset.path] = node.value
+        }
+      }
+      this.state.drafts = { ...this.state.drafts, [id]: draft }
+    }
+
+    buildPayload(recipe, draft) {
+      const values = {}
+      const reset = []
+      for (const field of recipe.fields) {
+        if (draft[field.path] === undefined) continue
+        const value = this.decodeValue(field, draft[field.path])
+        if (value === null) reset.push(field.path)
+        else values[field.path] = value
+      }
+      return { values, reset }
+    }
+
+    decodeValue(field, raw) {
+      if (field.kind === 'range') {
+        const parts = (Array.isArray(raw) ? raw : []).map((part) => String(part).trim())
+        if (parts.length < 2 || parts.some((part) => part === '')) return null
+        const numbers = parts.map(Number)
+        return numbers.some((number) => !Number.isFinite(number)) ? null : numbers
+      }
+      const text = String(raw === undefined || raw === null ? '' : raw).trim()
+      if (field.kind === 'list') {
+        const items = text ? text.split('\n').map((line) => line.trim()).filter(Boolean) : []
+        return items.length ? items : null
+      }
+      if (field.kind === 'map') {
+        const map = {}
+        for (const line of text ? text.split('\n') : []) {
+          const entry = line.trim()
+          if (!entry) continue
+          const at = entry.indexOf(':')
+          if (at < 0) map[entry] = ''
+          else map[entry.slice(0, at).trim()] = entry.slice(at + 1).trim()
+        }
+        return Object.keys(map).length ? map : null
+      }
+      if (text === '') return null
+      if (field.kind === 'bool') return text === 'true'
+      if (field.kind === 'number') {
+        const number = Number(text)
+        return Number.isFinite(number) ? number : text
+      }
+      return raw
+    }
+
+    // --- save ---
+
+    async save() {
+      const recipe = this.state.active
+      if (!recipe || this.state.busy) return
+      this.captureDraft()
+      const { values, reset } = this.buildPayload(recipe, this.state.drafts[recipe.id] || {})
+      try {
+        this.state.busy = true
+        const response = await fetch('/api/config/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': Boss.state.csrf },
+          body: JSON.stringify({ id: this.props.file_id, revision: this.state.revision, recipe: recipe.id, values, reset }),
+        })
+        if (response.status === 401) {
+          window.location.reload()
+          return
+        }
+        const data = await response.json()
+        if (response.status === 409) {
+          await this.load()
+          this.message('Saved copy is stale: the file changed on disk. Reloaded.', true)
+          return
+        }
+        if (!response.ok) {
+          this.message(data.error || `Save failed with status ${response.status}`, true)
+          return
+        }
+        await this.load()
+        this.message(`Saved ${data.file.source}.`)
+        Toast.show(`Saved ${recipe.title}.`)
+        Boss.globalState.restartRequired = data.restart_required || []
+        if (data.invalid && data.invalid.length) {
+          Toast.show(`Rescan found ${data.invalid.length} invalid app(s): ${data.invalid[0]}`, true)
+        }
+        Fez.publish('config:changed')
+        Boss.reload({ quiet: true })
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    message(text, error = false) {
+      this.state.message = text
+      this.state.messageError = error
+    }
+  }
+</script>
+
+{#if !state.ready}
+  <div class="config-form d-none"></div>
+{:else if !state.recipes.length}
+  <div class="card empty-state">
+    <strong>No recipe for this file</strong>
+    <span>Use the YAML view for the remaining keys.</span>
+  </div>
+{:else}
+  <div class="config-form">
+    <nav class="config-recipes list-group" aria-label="Recipes">
+      {#each state.recipes as recipe}
+        <button class="list-group-item" class:active={recipe.id === state.recipeId} type="button" onclick="fez.selectRecipe('{recipe.id}')">
+          <strong>{recipe.title}</strong>
+          <span>{recipe.fields.length} settings</span>
+        </button>
+      {/each}
+    </nav>
+    <div class="config-form-main">
+      {#if state.active}
+        <div class="card-header config-form-head">
+          <div class="config-form-title">
+            <h3 class="section-title">{state.active.title}</h3>
+            <p class="text-muted">{state.active.description}</p>
+          </div>
+          <div class="btn-list">
+            <button class="btn btn-sm" type="button" onclick="fez.resetRecipe()" disabled={state.busy}>Reset to defaults</button>
+            <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={state.busy}>
+              <svg class="icon"><use href="#i-save"></use></svg>
+              Save
+            </button>
+          </div>
+        </div>
+        <div class="config-fields">
+          {#each state.sections as section}
+            {#if section.name}
+              <h4 class="config-section">{section.name}</h4>
+            {/if}
+            {#each section.fields as field}
+              <div class="config-field">
+                <label class="config-field-head" for={('config-' + field.path)}>
+                  <span class="config-field-label">{field.label}</span>
+                  {#if field.per_process}<span class="key-tag">per process</span>{/if}
+                  <code class="config-field-path">{field.path}</code>
+                </label>
+                {#if field.kind === 'select'}
+                  <select class="config-input" id={('config-' + field.path)} data-path={field.path} data-kind={field.kind}>
+                    <option value="">Default: {defaultLabel(field)}</option>
+                    {#each field.options as option}
+                      <option value={option}>{option}</option>
+                    {/each}
+                  </select>
+                {:else if field.kind === 'bool'}
+                  <select class="config-input" id={('config-' + field.path)} data-path={field.path} data-kind="bool">
+                    <option value="">Default: {defaultLabel(field)}</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                {:else if field.kind === 'list'}
+                  <textarea class="config-textarea" id={('config-' + field.path)} data-path={field.path} data-kind="list" rows="2" placeholder={placeholder(field)}></textarea>
+                {:else if field.kind === 'map'}
+                  <textarea class="config-textarea" id={('config-' + field.path)} data-path={field.path} data-kind="map" rows="3" placeholder={placeholder(field)}></textarea>
+                {:else if field.kind === 'range'}
+                  <div class="config-range">
+                    <input class="config-input" type="number" data-path={field.path} data-kind="range" data-index="0" placeholder="from" />
+                    <input class="config-input" type="number" data-path={field.path} data-kind="range" data-index="1" placeholder="to" />
+                  </div>
+                {:else}
+                  <input class="config-input" type={field.kind === 'number' ? 'number' : 'text'} id={('config-' + field.path)} data-path={field.path} data-kind={field.kind} placeholder={placeholder(field)} />
+                {/if}
+                <span class="config-field-desc">{field.description}</span>
+              </div>
+            {/each}
+          {/each}
+        </div>
+        <div class="config-form-note text-muted">
+          Saved to the server-only override (appboss.local.yaml) next to {state.file ? state.file.source : 'the file'}, so a deploy never overwrites it.
+        </div>
+        {#if state.message}
+          <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+        {/if}
+      {/if}
+    </div>
+  </div>
+{/if}

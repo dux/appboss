@@ -30,7 +30,7 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 * Do not add Docker, TLS, rate limiting or deploy logic. Cloudflare owns the edge, lux-deploy owns releases.
 * Config is real YAML on disk. Never introduce a database copy of the config.
 * `appboss.yaml` is the only config file name; `appboss.local.yaml` is the server-only override and is gitignored.
-* A new config key needs a description (and an example when it has no default) in `keyDocs` in `./internal/config/keys.go`; the test fails otherwise. Path, type and default are read from the structs and `Default()`. Update `reference.yaml` for the long-form text.
+* A new config key needs a description (and an example when it has no default) in `keyDocs` in `./internal/config/keys.go`; the test fails otherwise. Path, type and default are read from the structs and `Default()`. Update `reference.yaml` for the long-form text, and add the key to `recipeSpecs` in `./internal/config/recipes.go` when the visual form should offer it.
 * State files under `state_dir` (`running.json`, `maintenance.json`, `last_activity.json`) are written by the daemon only.
 
 ## Modules and the request pipeline
@@ -98,6 +98,8 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 * The PostgreSQL tab (`ab-pg.fez`) is gated on `globalState.pgAvailable`, set from `capabilities.postgres` in `/api/bootstrap` and `/api/apps`, so it only appears when a server is reachable. It reads `GET /api/pg`, writes selection and policy through `POST /api/pg/config`, and runs `POST /api/pg/backup` and `POST /api/pg/restore`. The policy inputs are `fez:this` refs, never bound to rendered state, so typing never re-renders or resets them.
 * The Realtime tab (`ab-pubsub.fez`) is gated on `globalState.pubsubAvailable` from `capabilities.pubsub`, which is true when any app sets a `pubsub.path`. It reads `GET /api/pubsub` and `GET /api/pubsub/secret`, and writes through `POST /api/pubsub/publish` and `POST /api/pubsub/rotate`; both publish and rotate audit. The app select and the publish inputs are `fez:this` refs, synced after render, never bound to rendered state.
 * The config editor keeps the textarea and gutter under `fez:keep` and drives them with direct DOM writes; typing must never re-render the component.
+* The visual config form is `ab-config-form.fez`, a child of `ab-config` behind the Form/YAML toggle. It renders `config.Recipes()` from `GET /api/config/form?id=<fileID>` and saves one recipe at a time through `POST /api/config/apply`, which accepts only the paths that recipe declares. A save goes to the server-only `appboss.local.yaml` (host or app, created from the base), so a deploy never overwrites it. Controls are `data-path` DOM nodes restored after each render from a per-recipe draft; typing must never re-render.
+* A new recipe is a `recipeSpec` in `./internal/config/recipes.go`. Its fields must name real `keyDocs` paths and match the recipe scope (host keys for `host`, app or shared keys for `app`); `recipes_test.go` enforces both.
 * Check components with `bun ~/dev/gems/fez/bin/fez compile 'internal/console/static/fez/*.fez'` and then look at the real page in a browser.
 
 ## Deploy hooks and one-off commands

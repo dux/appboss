@@ -403,6 +403,9 @@ management console: http://127.0.0.1:3100 (run `appboss login` for a one-time si
 management console: https://boss.example.com (AuthCog sign-in)
 ```
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, links to the process logs, and edits the host and app `appboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
+The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (Realtime channels, Web, Health and runtime for an app; S3, Notifications and the PostgreSQL connection for the host).
+Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
+A form save is written to the server-only `appboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
 The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, uptime, load, memory and disk use, the appboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
 It never starts, stops or changes anything; the `sysinfo` module keeps the snapshot warm and **Re-inspect** re-probes on demand.
 
@@ -441,7 +444,8 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 * `fez/ab-logs.fez` - the in-console Logs tab, a thin wrapper around `ab-log-view`.
 * `fez/ab-log-shell.fez` - the full-screen page shell; exposes `Boss` for `log.html`.
 * `fez/ab-app-card.fez` - one service: status badge, stats datagrid, actions.
-* `fez/ab-config.fez` - config file list, editor and revision history.
+* `fez/ab-config.fez` - config file list, the YAML/Form mode toggle, the editor and revision history.
+* `fez/ab-config-form.fez` - the visual config editor: one form per recipe, driven by `config.Recipes()`.
 * `fez/ab-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
 * `fez/ab-audit.fez` - the Audit tab: operator actions with app, actor and action filters.
 * `fez/ab-sys.fez` - the Sys tab: read-only host facts, resource use and installed toolchains with versions.
