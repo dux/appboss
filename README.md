@@ -489,7 +489,7 @@ demo/                 host config and three sample apps
 ## Validation
 
 ```sh
-make check                                   # go vet + go test ./...
+make check                                   # go vet + staticcheck + go test ./...
 go test ./internal/console/                  # console API and auth, including dboss login
 bun ~/dev/gems/fez/bin/fez compile 'internal/console/static/fez/*.fez'   # component syntax check
 ```

@@ -261,3 +261,45 @@ func TestConfigPrintsGivenFileOrDefaults(t *testing.T) {
 		t.Fatalf("typo: exit %d %s", code, errOut.String())
 	}
 }
+
+func TestSplitFlagsSeparatesValuedFlagsFromPositionals(t *testing.T) {
+	flags, positionals := splitFlags(
+		[]string{"--event", "message", "--data", `{"a":1}`, "chat", "--json"},
+		"--event", "--data",
+	)
+	if strings.Join(flags, "|") != `--event|message|--data|{"a":1}|--json` {
+		t.Fatalf("flags = %v", flags)
+	}
+	if strings.Join(positionals, "|") != "chat" {
+		t.Fatalf("positionals = %v", positionals)
+	}
+
+	// name=value stays one token, so the next argument is positional.
+	flags, positionals = splitFlags([]string{"--data=raw", "chat"}, "--data")
+	if strings.Join(flags, "|") != "--data=raw" || strings.Join(positionals, "|") != "chat" {
+		t.Fatalf("equals form: flags=%v positionals=%v", flags, positionals)
+	}
+}
+
+func TestPubsubDataNormalizesPayloads(t *testing.T) {
+	cases := []struct {
+		value string
+		input io.Reader
+		want  string
+	}{
+		{"", nil, "null"},
+		{"   ", nil, "null"},
+		{`{"a":1}`, nil, `{"a":1}`},
+		{"plain", nil, `"plain"`},
+		{"-", strings.NewReader("42"), "42"},
+	}
+	for _, item := range cases {
+		got, err := pubsubData(item.value, item.input)
+		if err != nil {
+			t.Fatalf("pubsubData(%q): %v", item.value, err)
+		}
+		if string(got) != item.want {
+			t.Fatalf("pubsubData(%q) = %s, want %s", item.value, got, item.want)
+		}
+	}
+}

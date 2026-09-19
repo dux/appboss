@@ -17,6 +17,7 @@ type fakeRuntime struct {
 	actions   []string
 	invalid   []error
 	restart   []string
+	startErr  error
 }
 
 func (f *fakeRuntime) Snapshots() []super.Snapshot {
@@ -34,7 +35,7 @@ func (f *fakeRuntime) Snapshot(name string) (super.Snapshot, error) {
 
 func (f *fakeRuntime) Start(name string) error {
 	f.actions = append(f.actions, "start "+name)
-	return nil
+	return f.startErr
 }
 
 func (f *fakeRuntime) Stop(name string) error {
@@ -228,5 +229,65 @@ func TestPGActionsDisabledWithoutService(t *testing.T) {
 	}
 	if _, err := service.Do(Request{Method: ActionPG}); err == nil {
 		t.Fatal("pg action should fail without a service")
+	}
+}
+
+// fakeAuditStore implements both LogStore and Auditor, which is what makes ops.New turn auditing on.
+type fakeAuditStore struct {
+	audits []logstore.AuditEntry
+}
+
+func (s *fakeAuditStore) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, error) {
+	return nil, nil
+}
+func (s *fakeAuditStore) SearchRequests(string, logstore.RequestFilter) ([]logstore.RequestEntry, error) {
+	return nil, nil
+}
+func (s *fakeAuditStore) Channels(string) ([]logstore.Channel, error) { return nil, nil }
+func (s *fakeAuditStore) Tree([]string) ([]logstore.AppTree, error)   { return nil, nil }
+func (s *fakeAuditStore) RecordAudit(entry logstore.AuditEntry) error {
+	s.audits = append(s.audits, entry)
+	return nil
+}
+func (s *fakeAuditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error) {
+	return s.audits, nil
+}
+
+func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
+	store := &fakeAuditStore{}
+	service := New(&fakeRuntime{}, nil, store, nil, nil)
+
+	if _, err := service.Do(Request{Method: ActionStart, App: "sinatra"}); err != nil {
+		t.Fatal(err)
+	}
+	entry := store.audits[0]
+	if entry.Actor != "cli" || entry.Action != ActionStart || entry.Result != "ok" {
+		t.Fatalf("audit = %+v", entry)
+	}
+
+	if _, err := service.Do(Request{Method: ActionStop, App: "sinatra", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.audits[1].Actor; got != "bob" {
+		t.Fatalf("explicit actor = %q", got)
+	}
+
+	failing := New(&fakeRuntime{startErr: errors.New("port busy")}, nil, store, nil, nil)
+	if _, err := failing.Do(Request{Method: ActionStart, App: "sinatra"}); err == nil {
+		t.Fatal("expected start error")
+	}
+	last := store.audits[len(store.audits)-1]
+	if last.Result != "error" || last.Error != "port busy" {
+		t.Fatalf("failed audit = %+v", last)
+	}
+}
+
+func TestNonAuditedActionsWriteNoRow(t *testing.T) {
+	store := &fakeAuditStore{}
+	if _, err := New(&fakeRuntime{}, nil, store, nil, nil).Do(Request{Method: ActionList}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.audits) != 0 {
+		t.Fatalf("ls must not audit: %+v", store.audits)
 	}
 }

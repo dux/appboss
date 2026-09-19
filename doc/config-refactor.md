@@ -1,5 +1,7 @@
 # Config as a first-class citizen
 
+> Status: implemented (see `./internal/config/schema.go`, `./internal/config/keyspecs.go` and git history). Kept as a design record.
+
 ## Goal
 
 Make one config registry the single source of truth for every setting, so the key listing, the console keys view, the annotated reference and the visual form all stay in sync from it.

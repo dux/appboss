@@ -6,7 +6,9 @@ package pg
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -96,19 +98,121 @@ func processEnv(connConfig *pgx.ConnConfig) []string {
 	return env
 }
 
-// databaseConnString clones the connection config for one database so a dump does not need a
-// dbname in the base DSN. The password is stripped because it travels through PGPASSWORD.
+// databaseConnString is the connection string for one database. It keeps every option of the
+// resolved DSN but never the password, which travels through PGPASSWORD; pgx's ConnString returns
+// the original string unchanged, so the password is removed here instead.
 func databaseConnString(connConfig *pgx.ConnConfig, database string) string {
-	clone := connConfig.Copy()
-	clone.Database = database
-	clone.Password = ""
-	return clone.ConnString()
+	return connStringWithoutPassword(connConfig, database)
 }
 
 func serverConnString(connConfig *pgx.ConnConfig) string {
-	clone := connConfig.Copy()
-	clone.Password = ""
-	return clone.ConnString()
+	return connStringWithoutPassword(connConfig, "")
+}
+
+// connStringWithoutPassword rebuilds a libpq connection string with the password removed and,
+// when database is set, its dbname replaced. It accepts both postgres:// URLs and keyword/value
+// strings, and is the only form ever placed in a child process's argv.
+func connStringWithoutPassword(connConfig *pgx.ConnConfig, database string) string {
+	original := connConfig.ConnString()
+	if strings.TrimSpace(original) == "" {
+		settings := map[string]string{"host": connConfig.Host, "port": strconv.Itoa(int(connConfig.Port)), "user": connConfig.User}
+		if database != "" {
+			settings["dbname"] = database
+		}
+		return formatConnSettings(settings)
+	}
+	if parsed, err := url.Parse(original); err == nil && (parsed.Scheme == "postgres" || parsed.Scheme == "postgresql") {
+		if parsed.User != nil {
+			parsed.User = url.User(parsed.User.Username())
+		}
+		if database != "" {
+			parsed.Path = "/" + database
+		}
+		return parsed.String()
+	}
+	settings := parseConnSettings(original)
+	delete(settings, "password")
+	if database != "" {
+		settings["dbname"] = database
+	}
+	return formatConnSettings(settings)
+}
+
+// parseConnSettings tokenizes the libpq keyword/value form, honoring the single-quote and
+// backslash escaping libpq accepts.
+func parseConnSettings(connString string) map[string]string {
+	settings := map[string]string{}
+	skipSpace := func(i int) int {
+		for i < len(connString) && (connString[i] == ' ' || connString[i] == '\t') {
+			i++
+		}
+		return i
+	}
+	for i := 0; i < len(connString); {
+		i = skipSpace(i)
+		start := i
+		for i < len(connString) && connString[i] != '=' && connString[i] != ' ' && connString[i] != '\t' {
+			i++
+		}
+		key := connString[start:i]
+		i = skipSpace(i)
+		if key == "" {
+			i++
+			continue
+		}
+		if i >= len(connString) || connString[i] != '=' {
+			settings[key] = key
+			continue
+		}
+		i++
+		i = skipSpace(i)
+		var value strings.Builder
+		if i < len(connString) && connString[i] == '\'' {
+			i++
+			for i < len(connString) {
+				if connString[i] == '\\' && i+1 < len(connString) {
+					value.WriteByte(connString[i+1])
+					i += 2
+					continue
+				}
+				if connString[i] == '\'' {
+					i++
+					break
+				}
+				value.WriteByte(connString[i])
+				i++
+			}
+		} else {
+			start = i
+			for i < len(connString) && connString[i] != ' ' && connString[i] != '\t' {
+				i++
+			}
+			value.WriteString(connString[start:i])
+		}
+		settings[key] = value.String()
+	}
+	return settings
+}
+
+// formatConnSettings renders settings as a libpq keyword/value string, quoting when needed.
+func formatConnSettings(settings map[string]string) string {
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := settings[key]
+		if value == "" {
+			continue
+		}
+		if strings.ContainsAny(value, " \t'\\") {
+			value = "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'").Replace(value) + "'"
+		}
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, " ")
 }
 
 func describe(connConfig *pgx.ConnConfig) string {

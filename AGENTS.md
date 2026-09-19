@@ -25,7 +25,7 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 ## Working rules
 
 * Build with `make build`; `~/bin/dboss` is a symlink to `./bin/dboss`, so a rebuild is what the shell runs.
-* Validate with `make check` (vet and tests). Add a test next to the package you change.
+* Validate with `make check` (vet, staticcheck and tests). Add a test next to the package you change.
 * The demo host is `./demo/dboss.yaml`; run it with `make demo` or `dboss start` inside `./demo`. It listens on `:80`, so every hostname is port 80 and the daemon needs root (`make demo` uses `sudo`).
 * Console static assets are embedded with `go:embed`. A CSS or component change needs a rebuild and a daemon restart to show up.
 * Do not add Docker, TLS, rate limiting or deploy logic. Cloudflare owns the edge, lux-deploy owns releases.

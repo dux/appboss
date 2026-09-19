@@ -63,17 +63,6 @@ func (c *catalog) list() []Backup {
 	return result
 }
 
-// database lists the entries of one database newest first.
-func (c *catalog) database(name string) []Backup {
-	var result []Backup
-	for _, entry := range c.list() {
-		if entry.Database == name {
-			result = append(result, entry)
-		}
-	}
-	return result
-}
-
 func (c *catalog) get(id string) (Backup, bool) {
 	for _, entry := range c.list() {
 		if entry.ID == id {
