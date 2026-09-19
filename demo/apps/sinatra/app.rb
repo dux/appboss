@@ -22,7 +22,7 @@ get "/" do
       <body>
         <main>
           <h1>Hello from Sinatra</h1>
-          <p>Served by app-boss on port #{settings.port}.</p>
+          <p>Served by dboss on port #{settings.port}.</p>
         </main>
       </body>
     </html>

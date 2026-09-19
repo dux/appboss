@@ -19,7 +19,7 @@ func TestRecordSearchAndPrune(t *testing.T) {
 	if err := store.RecordLogs("demo", []LogEntry{{Time: time.Now(), Source: "process", Process: "web", Stream: "combined", Level: "error", Message: "boom request", RequestID: "abc", Raw: "boom request"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "demo", "appboss.sqlite")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "demo", "dboss.sqlite")); err != nil {
 		t.Fatalf("per-app database missing: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestChannelsFilterAndPruneBySource(t *testing.T) {
 		}
 	}
 	hostChannels, err := store.Channels(HostApp)
-	if err != nil || len(hostChannels) != 1 || hostChannels[0].ID != "appboss" {
+	if err != nil || len(hostChannels) != 1 || hostChannels[0].ID != "dboss" {
 		t.Fatalf("host channels: %v %+v", err, hostChannels)
 	}
 
@@ -180,10 +180,10 @@ func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 	if tree[1].Name != "ghost" || tree[1].Bytes != 0 || len(tree[1].Channels) != 0 {
 		t.Fatalf("ghost should have no channels: %+v", tree[1])
 	}
-	if _, err := os.Stat(filepath.Join(dir, "ghost", "appboss.sqlite")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "ghost", "dboss.sqlite")); !os.IsNotExist(err) {
 		t.Fatalf("tree should not create ghost: %v", err)
 	}
-	if tree[2].Name != HostApp || len(tree[2].Channels) != 1 || tree[2].Channels[0].ID != "appboss" {
+	if tree[2].Name != HostApp || len(tree[2].Channels) != 1 || tree[2].Channels[0].ID != "dboss" {
 		t.Fatalf("host tree: %+v", tree[2])
 	}
 }

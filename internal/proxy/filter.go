@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"app-boss/internal/super"
+	"dboss/internal/super"
 )
 
 // Filter is one stage of the request pipeline. It either answers the request itself or calls

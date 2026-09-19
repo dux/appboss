@@ -1,6 +1,6 @@
 package ctl
 
-import "app-boss/internal/ops"
+import "dboss/internal/ops"
 
 // Request is the wire form of one action. It is the same type both transports build, so the
 // control socket and the console cannot drift apart.

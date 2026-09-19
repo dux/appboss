@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/ports"
+	"dboss/internal/config"
+	"dboss/internal/ports"
 )
 
 func cronTestConfig(t *testing.T, portRange [2]int, cronYAML string) config.Config {
@@ -26,7 +26,7 @@ func cronTestConfig(t *testing.T, portRange [2]int, cronYAML string) config.Conf
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	return cfg

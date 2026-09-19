@@ -30,7 +30,7 @@
     async load() {
       this.state.loading = true
       try {
-        const data = await Boss.api('/api/pubsub')
+        const data = await Dboss.api('/api/pubsub')
         this.state.apps = data.apps || []
         this.state.guide = data.guide || ''
         if (!this.state.apps.some((app) => app.name === this.state.publishApp)) {
@@ -53,7 +53,7 @@
       if (this.state.busy) return
       try {
         this.state.busy = true
-        this.state.credential = await Boss.api(`/api/pubsub/secret?app=${encodeURIComponent(name)}`)
+        this.state.credential = await Dboss.api(`/api/pubsub/secret?app=${encodeURIComponent(name)}`)
       } catch (error) {
         this.message(error.message, true)
       } finally {
@@ -66,7 +66,7 @@
       if (!window.confirm(`Rotate the publish secret for ${name}? The old secret stops working.`)) return
       try {
         this.state.busy = true
-        this.state.credential = await Boss.api('/api/pubsub/rotate', { method: 'POST', body: JSON.stringify({ app: name }) })
+        this.state.credential = await Dboss.api('/api/pubsub/rotate', { method: 'POST', body: JSON.stringify({ app: name }) })
         this.message(`Rotated the secret for ${name}.`)
         Toast.show(`${name}: publish secret rotated`)
       } catch (error) {
@@ -102,7 +102,7 @@
       }
       try {
         this.state.busy = true
-        const result = await Boss.api('/api/pubsub/publish', { method: 'POST', body: JSON.stringify({ app, channel, event, data }) })
+        const result = await Dboss.api('/api/pubsub/publish', { method: 'POST', body: JSON.stringify({ app, channel, event, data }) })
         this.message(`Published ${event} to ${app}/${result.channel} (${result.subscribers} subscribers).`)
         Toast.show(`${app}/${result.channel}: message sent`)
       } catch (error) {
@@ -171,7 +171,7 @@
   {#if !state.loading}
     <div class="card empty-state">
       <strong>No app serves PubSub channels</strong>
-      <span>Set <code>pubsub.path</code> in an app's appboss.yaml, then rescan.</span>
+      <span>Set <code>pubsub.path</code> in an app's dboss.yaml, then rescan.</span>
     </div>
   {/if}
 {/each}

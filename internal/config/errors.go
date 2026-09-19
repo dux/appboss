@@ -144,7 +144,7 @@ func unknownKey(keyNode *yaml.Node, fields map[string]reflect.StructField, prefi
 	} else if len(names) <= 12 {
 		err.Hint = "valid keys here: " + strings.Join(names, ", ")
 	} else {
-		err.Hint = "run `appboss config --reference` for the list of keys"
+		err.Hint = "run `dboss config --reference` for the list of keys"
 	}
 	return err
 }

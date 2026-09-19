@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/notify"
-	"app-boss/internal/super"
-	"app-boss/internal/version"
+	"dboss/internal/notify"
+	"dboss/internal/super"
+	"dboss/internal/version"
 )
 
-// stateValue maps an app state to the number used by appboss_app_state.
+// stateValue maps an app state to the number used by dboss_app_state.
 var stateValue = map[super.State]int{
 	super.Stopped:  0,
 	super.Starting: 1,
@@ -74,60 +74,60 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 
 	name := func(app string) string { return "{app=" + quote(app) + "}" }
 
-	metric("appboss_build_info", "Build information.", "gauge")
-	sample("appboss_build_info", `{version=`+quote(version.String())+`}`, 1)
+	metric("dboss_build_info", "Build information.", "gauge")
+	sample("dboss_build_info", `{version=`+quote(version.String())+`}`, 1)
 
-	metric("appboss_app_up", "1 when the app is running, 0 otherwise.", "gauge")
+	metric("dboss_app_up", "1 when the app is running, 0 otherwise.", "gauge")
 	for _, app := range apps {
 		up := 0.0
 		if app.State == super.Running {
 			up = 1
 		}
-		sample("appboss_app_up", name(app.Name), up)
+		sample("dboss_app_up", name(app.Name), up)
 	}
 
-	metric("appboss_app_state", "App state: 0 stopped, 1 starting, 2 running, 3 stopping, 4 crashed.", "gauge")
+	metric("dboss_app_state", "App state: 0 stopped, 1 starting, 2 running, 3 stopping, 4 crashed.", "gauge")
 	for _, app := range apps {
-		sample("appboss_app_state", name(app.Name), float64(stateValue[app.State]))
+		sample("dboss_app_state", name(app.Name), float64(stateValue[app.State]))
 	}
 
-	metric("appboss_app_uptime_seconds", "Seconds since the app's earliest running process started.", "gauge")
+	metric("dboss_app_uptime_seconds", "Seconds since the app's earliest running process started.", "gauge")
 	for _, app := range apps {
 		if started, ok := uptimeStart(app); ok {
-			sample("appboss_app_uptime_seconds", name(app.Name), now.Sub(started).Seconds())
+			sample("dboss_app_uptime_seconds", name(app.Name), now.Sub(started).Seconds())
 		}
 	}
 
-	metric("appboss_app_memory_bytes", "Resident memory of every app process (approximate on the procgroup backend).", "gauge")
+	metric("dboss_app_memory_bytes", "Resident memory of every app process (approximate on the procgroup backend).", "gauge")
 	for _, app := range apps {
-		sample("appboss_app_memory_bytes", name(app.Name), float64(app.Resources.MemoryBytes))
+		sample("dboss_app_memory_bytes", name(app.Name), float64(app.Resources.MemoryBytes))
 	}
 
-	metric("appboss_app_cpu_percent", "CPU use of every app process, percent of one core (approximate on the procgroup backend).", "gauge")
+	metric("dboss_app_cpu_percent", "CPU use of every app process, percent of one core (approximate on the procgroup backend).", "gauge")
 	for _, app := range apps {
-		sample("appboss_app_cpu_percent", name(app.Name), app.Resources.CPUPercent)
+		sample("dboss_app_cpu_percent", name(app.Name), app.Resources.CPUPercent)
 	}
 
-	metric("appboss_app_process_restarts_total", "Restarts of one process.", "counter")
+	metric("dboss_app_process_restarts_total", "Restarts of one process.", "counter")
 	for _, app := range apps {
 		for _, process := range app.Processes {
 			labels := "{app=" + quote(app.Name) + ",process=" + quote(process.Name) + "}"
-			sample("appboss_app_process_restarts_total", labels, float64(process.Restarts))
+			sample("dboss_app_process_restarts_total", labels, float64(process.Restarts))
 		}
 	}
 
-	metric("appboss_app_process_memory_bytes", "Resident memory of one process (approximate on the procgroup backend).", "gauge")
+	metric("dboss_app_process_memory_bytes", "Resident memory of one process (approximate on the procgroup backend).", "gauge")
 	for _, app := range apps {
 		for _, process := range app.Processes {
 			if process.MemoryBytes == 0 {
 				continue
 			}
 			labels := "{app=" + quote(app.Name) + ",process=" + quote(process.Name) + "}"
-			sample("appboss_app_process_memory_bytes", labels, float64(process.MemoryBytes))
+			sample("dboss_app_process_memory_bytes", labels, float64(process.MemoryBytes))
 		}
 	}
 
-	metric("appboss_request_rate", "Proxied requests counted over the window.", "gauge")
+	metric("dboss_request_rate", "Proxied requests counted over the window.", "gauge")
 	for _, app := range apps {
 		for _, window := range []struct {
 			label string
@@ -138,38 +138,38 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 			{"day", app.RequestRates.LastDay},
 		} {
 			labels := "{app=" + quote(app.Name) + ",window=" + quote(window.label) + "}"
-			sample("appboss_request_rate", labels, float64(window.value))
+			sample("dboss_request_rate", labels, float64(window.value))
 		}
 	}
 
-	metric("appboss_cron_last_exit", "Exit code of the last cron run.", "gauge")
+	metric("dboss_cron_last_exit", "Exit code of the last cron run.", "gauge")
 	for _, app := range apps {
 		for _, job := range app.Cron {
 			if job.LastEnd.IsZero() {
 				continue
 			}
 			labels := "{app=" + quote(app.Name) + ",job=" + quote(job.Name) + "}"
-			sample("appboss_cron_last_exit", labels, float64(job.LastExit))
+			sample("dboss_cron_last_exit", labels, float64(job.LastExit))
 		}
 	}
 
-	metric("appboss_hook_last_exit", "Exit code of the last deploy hook run.", "gauge")
+	metric("dboss_hook_last_exit", "Exit code of the last deploy hook run.", "gauge")
 	for _, app := range apps {
 		for _, hook := range app.Hooks {
 			if hook.LastEnd.IsZero() {
 				continue
 			}
 			labels := "{app=" + quote(app.Name) + ",hook=" + quote(hook.Name) + "}"
-			sample("appboss_hook_last_exit", labels, float64(hook.LastExit))
+			sample("dboss_hook_last_exit", labels, float64(hook.LastExit))
 		}
 	}
 
-	metric("appboss_notifications_total", "Operator webhook sends by result.", "counter")
-	sample("appboss_notifications_total", `{result="sent"}`, float64(notify.Sent))
-	sample("appboss_notifications_total", `{result="failed"}`, float64(notify.Failed))
-	sample("appboss_notifications_total", `{result="dropped"}`, float64(notify.Dropped))
+	metric("dboss_notifications_total", "Operator webhook sends by result.", "counter")
+	sample("dboss_notifications_total", `{result="sent"}`, float64(notify.Sent))
+	sample("dboss_notifications_total", `{result="failed"}`, float64(notify.Failed))
+	sample("dboss_notifications_total", `{result="dropped"}`, float64(notify.Dropped))
 
-	metric("appboss_request_duration_ms", "Request duration over the last hour, milliseconds, by quantile.", "gauge")
+	metric("dboss_request_duration_ms", "Request duration over the last hour, milliseconds, by quantile.", "gauge")
 	for _, app := range apps {
 		stats := latency[app.Name]
 		if stats.Count == 0 {
@@ -180,43 +180,43 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 			value float64
 		}{{"0.5", stats.P50}, {"0.95", stats.P95}, {"0.99", stats.P99}} {
 			labels := "{app=" + quote(app.Name) + ",quantile=" + quote(quantile.label) + "}"
-			sample("appboss_request_duration_ms", labels, quantile.value)
+			sample("dboss_request_duration_ms", labels, quantile.value)
 		}
 	}
-	metric("appboss_request_duration_ms_samples", "Requests sampled for the duration quantiles.", "gauge")
+	metric("dboss_request_duration_ms_samples", "Requests sampled for the duration quantiles.", "gauge")
 	for _, app := range apps {
-		sample("appboss_request_duration_ms_samples", name(app.Name), float64(latency[app.Name].Count))
+		sample("dboss_request_duration_ms_samples", name(app.Name), float64(latency[app.Name].Count))
 	}
 
-	metric("appboss_pubsub_clients", "Subscribers connected to an app's realtime channels.", "gauge")
+	metric("dboss_pubsub_clients", "Subscribers connected to an app's realtime channels.", "gauge")
 	for _, app := range apps {
-		sample("appboss_pubsub_clients", name(app.Name), float64(pubsub[app.Name].Clients))
+		sample("dboss_pubsub_clients", name(app.Name), float64(pubsub[app.Name].Clients))
 	}
 
-	metric("appboss_pubsub_channels", "Realtime channels an app knows about.", "gauge")
+	metric("dboss_pubsub_channels", "Realtime channels an app knows about.", "gauge")
 	for _, app := range apps {
-		sample("appboss_pubsub_channels", name(app.Name), float64(pubsub[app.Name].Channels))
+		sample("dboss_pubsub_channels", name(app.Name), float64(pubsub[app.Name].Channels))
 	}
 
-	metric("appboss_pubsub_messages_total", "Messages published to an app's realtime channels.", "counter")
+	metric("dboss_pubsub_messages_total", "Messages published to an app's realtime channels.", "counter")
 	for _, app := range apps {
-		sample("appboss_pubsub_messages_total", name(app.Name), float64(pubsub[app.Name].Messages))
+		sample("dboss_pubsub_messages_total", name(app.Name), float64(pubsub[app.Name].Messages))
 	}
 
-	metric("appboss_pg_up", "1 when the host PostgreSQL server is reachable, 0 otherwise.", "gauge")
+	metric("dboss_pg_up", "1 when the host PostgreSQL server is reachable, 0 otherwise.", "gauge")
 	up := 0.0
 	if postgres.Up {
 		up = 1
 	}
-	sample("appboss_pg_up", "", up)
+	sample("dboss_pg_up", "", up)
 
-	metric("appboss_pg_database_size_bytes", "Size on disk of one database.", "gauge")
+	metric("dboss_pg_database_size_bytes", "Size on disk of one database.", "gauge")
 	for _, database := range postgres.Databases {
-		sample("appboss_pg_database_size_bytes", "{database="+quote(database.Name)+"}", float64(database.SizeBytes))
+		sample("dboss_pg_database_size_bytes", "{database="+quote(database.Name)+"}", float64(database.SizeBytes))
 	}
 
-	metric("appboss_pg_backup_last_success_timestamp_seconds", "Unix time of the newest successful backup of one database.", "gauge")
-	metric("appboss_pg_backup_count", "Recorded backups of one database by status.", "gauge")
+	metric("dboss_pg_backup_last_success_timestamp_seconds", "Unix time of the newest successful backup of one database.", "gauge")
+	metric("dboss_pg_backup_count", "Recorded backups of one database by status.", "gauge")
 	lastSuccess := map[string]float64{}
 	counts := map[string]map[string]int{}
 	for _, backup := range postgres.Backups {
@@ -231,11 +231,11 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 		}
 	}
 	for database, moment := range lastSuccess {
-		sample("appboss_pg_backup_last_success_timestamp_seconds", "{database="+quote(database)+"}", moment)
+		sample("dboss_pg_backup_last_success_timestamp_seconds", "{database="+quote(database)+"}", moment)
 	}
 	for database, byStatus := range counts {
 		for status, count := range byStatus {
-			sample("appboss_pg_backup_count", "{database="+quote(database)+",status="+quote(status)+"}", float64(count))
+			sample("dboss_pg_backup_count", "{database="+quote(database)+",status="+quote(status)+"}", float64(count))
 		}
 	}
 

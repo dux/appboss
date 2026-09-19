@@ -1,6 +1,6 @@
 <script>
   class {
-    GLOBAL = 'Boss'
+    GLOBAL = 'Dboss'
 
     init() {
       this.state.view = this.viewFromHash()
@@ -163,9 +163,9 @@
 
 <header class="navbar">
   <div class="container navbar-inner">
-    <a class="brand" href="/" aria-label="App Boss home">
+    <a class="brand" href="/" aria-label="dboss home">
       <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-terminal"></use></svg></span>
-      <span class="brand-name">App Boss</span>
+      <span class="brand-name">dboss</span>
     </a>
     <div class="navbar-user">
       <span class="avatar" aria-hidden="true">{initials()}</span>
@@ -203,28 +203,28 @@
 <main class="page-body">
   <div class="container">
     <section class="view" class:d-none={state.view !== 'overview'}>
-      <ab-overview />
+      <db-overview />
     </section>
     <section class="view" class:d-none={state.view !== 'logs'}>
-      <ab-logs />
+      <db-logs />
     </section>
     <section class="view" class:d-none={state.view !== 'audit'}>
-      <ab-audit />
+      <db-audit />
     </section>
     <section class="view" class:d-none={state.view !== 'sys'}>
-      <ab-sys />
+      <db-sys />
     </section>
     <section class="view" class:d-none={state.view !== 'pg'}>
-      <ab-pg />
+      <db-pg />
     </section>
     <section class="view" class:d-none={state.view !== 'pubsub'}>
-      <ab-pubsub />
+      <db-pubsub />
     </section>
     <section class="view" class:d-none={state.view !== 'config'}>
-      <ab-config />
+      <db-config />
     </section>
     <section class="view" class:d-none={state.view !== 'help'}>
-      <ab-help />
+      <db-help />
     </section>
   </div>
 </main>

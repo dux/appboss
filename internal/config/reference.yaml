@@ -1,16 +1,16 @@
-# app-boss configuration reference
+# dboss configuration reference
 #
 # One file name, two roles:
-#   1. <host>/appboss.yaml            host config with `apps` (this document, part 1)
-#   2. <app>/appboss.yaml             app config with `procfile` (part 2)
-#   3. state files under state_dir  written by boss, never hand-edited (part 3)
+#   1. <host>/dboss.yaml            host config with `apps` (this document, part 1)
+#   2. <app>/dboss.yaml             app config with `procfile` (part 2)
+#   3. state files under state_dir  written by dboss, never hand-edited (part 3)
 #
 # A file that has `procfile` is an app; any other file is a host, with `apps` defaulting to
-# ./apps. Never both. With no config file at all, `appboss start` runs the default host.
-# An app file may also carry host keys so `appboss start` inside the app folder runs it
+# ./apps. Never both. With no config file at all, `dboss start` runs the default host.
+# An app file may also carry host keys so `dboss start` inside the app folder runs it
 # standalone (single mode); the same file under a host must not, or the app is invalid.
-# Whenever a folder is resolved to its config, appboss.local.yaml is used when it exists,
-# appboss.yaml otherwise. The local file is server-only and gitignored.
+# Whenever a folder is resolved to its config, dboss.local.yaml is used when it exists,
+# dboss.yaml otherwise. The local file is server-only and gitignored.
 #
 # Rules that apply everywhere:
 #   - Durations are Go duration strings: 30s, 20m, 6h, 72h. No days suffix; use 72h.
@@ -19,24 +19,24 @@
 #   - Every key that takes a list also accepts a single value: `hosts: myapp.com` is
 #     `hosts: [myapp.com]`.
 #   - Unknown keys are an error at load time, not a warning. Typos must not pass silently.
-#   - Per-app values in an app's appboss.yaml override global defaults.* one key at a time.
+#   - Per-app values in an app's dboss.yaml override global defaults.* one key at a time.
 #     Process keys can be overridden once more under processes.<name>; web keys cannot.
 #   - App-level changes (defaults.* and app files) apply on rescan without a restart. Changing
 #     apps, state_dir, log_dir, socket, proxy, management, ports or daemon needs a restart;
 #     rescan and the console report which keys are waiting.
-#   - $NAME in a value is replaced with that variable from the appboss process environment.
+#   - $NAME in a value is replaced with that variable from the dboss process environment.
 #     Only all-uppercase names are expanded; an unset name is left as written.
 #     procfile commands and cron commands are never expanded; they are runtime shell lines.
 #
-# Load order at `appboss start`:
-#   root appboss.yaml -> validate -> walk the apps directory (or use the root file itself in
-#   single mode) -> per app: appboss.local.yaml or appboss.yaml, .env, .env.local
+# Load order at `dboss start`:
+#   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in
+#   single mode) -> per app: dboss.local.yaml or dboss.yaml, .env, .env.local
 #   -> validate each app (an invalid app is reported and skipped, it does not stop the session)
 #   -> terminate listeners in ports.range -> assign one fixed port per (app, proctype)
 #   -> start apps that were running before and have autostart: true -> listen.
 
 # =============================================================================
-# PART 1: <host>/appboss.yaml
+# PART 1: <host>/dboss.yaml
 # =============================================================================
 ---
 # --- Paths -------------------------------------------------------------------
@@ -50,21 +50,21 @@ apps: ./apps
 
 # Session-owned runtime state. Contains process state and the console signing key.
 # Must be writable by the service user. Created on first run.
-state_dir: ./.appboss/state
+state_dir: ./.dboss/state
 
 # Process logs and request logs. Contains <app>/<proctype>.log and <app>/requests.sqlite.
-log_dir: ./.appboss/log
+log_dir: ./.dboss/log
 
 # Unix socket for the control API. The CLI talks here. In production set it to
-# /run/appboss/appboss.sock: that is where `appboss restart` run inside an app folder looks when
-# the folder's own socket does not exist, and the generated unit creates /run/appboss.
-socket: ./.appboss/appboss.sock
+# /run/dboss/dboss.sock: that is where `dboss restart` run inside an app folder looks when
+# the folder's own socket does not exist, and the generated unit creates /run/dboss.
+socket: ./.dboss/dboss.sock
 
 # --- Proxy -------------------------------------------------------------------
 
 proxy:
   # The public listener, one address or a list; every address gets its own listener
-  # with the same routing. appboss owns port 80 and routes every request to an app;
+  # with the same routing. dboss owns port 80 and routes every request to an app;
   # Cloudflare proxies straight to it. The systemd unit grants CAP_NET_BIND_SERVICE,
   # so no root is needed. For a hand-run session on Linux use a high port such as
   # 127.0.0.1:8080. The management console is served on the same listener,
@@ -113,7 +113,7 @@ proxy:
     # Seconds sent in Retry-After and in the meta refresh of the starting page.
     retry_after: 5
     # Files served for the three non-forwarding cases. Relative paths resolve
-    # against the boss binary's web/ directory; absolute paths are used as is.
+    # against the dboss binary's web/ directory; absolute paths are used as is.
     starting_page: web/starting.html   # app stopped or starting, GET + Accept: text/html
     crashed_page:  web/crashed.html    # app crashed (max_restarts hit), GET + Accept: text/html
     unknown_page:  web/404.html        # host matches no app
@@ -135,7 +135,7 @@ proxy:
 management:
   # Hostname accepted by the console and registered with AuthCog; one name or a list.
   # Point each at the box in Cloudflare like any app hostname.
-  host: boss.example.com
+  host: dboss.example.com
   # Optional. The address operators open, printed on start next to the always-available
   # http://127.0.0.1:<first port> link, and the base of the hook ping URLs. When empty it is
   # https://<first host>, so a plain Cloudflare setup needs only host. Set it for a custom scheme
@@ -163,8 +163,8 @@ management:
 # --- Ports -------------------------------------------------------------------
 
 ports:
-  # Inclusive range boss hands out. This range belongs exclusively to boss:
-  # daemon startup and `appboss kill` terminate every listener in it before apps
+  # Inclusive range dboss hands out. This range belongs exclusively to dboss:
+  # daemon startup and `dboss kill` terminate every listener in it before apps
   # start, and every spawn kills whatever still holds its port. This requires
   # `lsof`. The first port belongs to the management console, reserved whether
   # or not the console is enabled. After it one fixed port is assigned per
@@ -173,7 +173,7 @@ ports:
   range: [3100, 3990]
 
 # --- Per-app defaults --------------------------------------------------------
-# Every key here can be overridden per app in the app's appboss.yaml with the same name.
+# Every key here can be overridden per app in the app's dboss.yaml with the same name.
 
 defaults:
   # Stop the whole app after this long without a proxied HTTP request.
@@ -198,7 +198,7 @@ defaults:
   stop_timeout: 20s
   stop_signal: TERM         # TERM | INT | QUIT | USR1 | USR2
 
-  # Restart policy when a process exits on its own (not via appboss stop).
+  # Restart policy when a process exits on its own (not via dboss stop).
   #   on-failure   restart only when exit code != 0 or killed by signal
   #   always       restart on any exit
   #   never        leave it stopped, mark app crashed if it was the web process
@@ -213,15 +213,15 @@ defaults:
   # Process log files (stdout+stderr of each proctype).
   log_max_size: 10m         # rotate when the file exceeds this
   log_keep: 5               # rotated files kept per proctype; 0 truncates the file in place
-  log_tail_lines: 500       # lines kept in memory for `appboss logs` without -f
+  log_tail_lines: 500       # lines kept in memory for `dboss logs` without -f
 
   # Log store (SQLite written by the proxy and the ingestion module).
   # Every app database holds the REQUEST rows from the proxy and the STDOUT rows from the
-  # process log segments; appboss also tails every *.log file under the app's ./log directory.
+  # process log segments; dboss also tails every *.log file under the app's ./log directory.
   # Requests and app log files are pruned after log_retention, process stdout after
   # stdout_retention. 0 disables the matching channels for the app.
   log_retention: 336h       # 14 days for request rows and app log files
-  stdout_retention: 3h      # process stdout and the appboss daemon log
+  stdout_retention: 3h      # process stdout and the dboss daemon log
   log_flush: 1s             # batch insert interval
 
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
@@ -231,12 +231,12 @@ defaults:
   shell: false
 
   # Extra environment injected into every process of every app, lowest priority
-  # (app .env files and boss-injected PORT/APP_NAME/PROC_TYPE win).
+  # (app .env files and dboss-injected PORT/APP_NAME/PROC_TYPE win).
   env: {}
   #   RAILS_ENV: production
 
   # Resource backend. auto picks cgroup on Linux when the cgroup v2 hierarchy under
-  # /sys/fs/cgroup/boss is writable, otherwise procgroup; force one with cgroup | procgroup.
+  # /sys/fs/cgroup/dboss is writable, otherwise procgroup; force one with cgroup | procgroup.
   # The cgroup backend gives every (app, process) its own cgroup and applies the limits below.
   resources: auto
   # Limits, only enforced by the cgroup backend. A host that falls back to procgroup logs a
@@ -257,7 +257,7 @@ defaults:
   # Public status path on the app's own hosts, so a Cloudflare health check or uptime monitor
   # can probe the app domain. GET/HEAD answer 200 {"app","state"} while the app runs and is not
   # draining, 503 otherwise. It runs before basic auth and never wakes the app. Empty disables it.
-  health_endpoint: /.well-known/appboss/health
+  health_endpoint: /.well-known/dboss/health
   # Path prefixes under static that get "public, max-age=31536000, immutable".
   # Everything else under static gets "public, max-age=3600".
   static_immutable: [/assets/]
@@ -267,7 +267,7 @@ defaults:
   # partial upload. A declared or chunked body over the limit answers 413 without forwarding.
   max_body: 0
 
-  # HTTP basic auth: user -> bcrypt hash, generated with `appboss password`. Empty = open.
+  # HTTP basic auth: user -> bcrypt hash, generated with `dboss password`. Empty = open.
   # Set globally on a staging box to protect every app with one line. Applies to static files too.
   basic_auth: {}
   #   alice: "$2a$10$..."
@@ -284,7 +284,7 @@ defaults:
   #   X-Frame-Options: DENY
   #   X-Powered-By: ""
 
-  # File served while the app is in maintenance mode (`appboss maintenance <app> on`), relative
+  # File served while the app is in maintenance mode (`dboss maintenance <app> on`), relative
   # to the app folder. Default: <static>/503.html when it exists, then the built-in page.
   # HTML GETs get the page with 503 and Retry-After: 30; everything else an empty 503.
   maintenance_page: ""
@@ -304,7 +304,7 @@ daemon:
   # Reclaims the space the prune freed. Set to "" to disable; run it off peak if the box
   # is busy, since VACUUM rewrites each database.
   vacuum_at: "04:30"
-  # appboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
+  # dboss's own log always goes to stderr: the terminal in the foreground, journald under systemd.
   log_level: info           # debug | info | warn | error
   # How often each running process's log segment is sealed and ingested into the per-app
   # log store. A sealed segment stays on disk until its rows are committed.
@@ -347,7 +347,7 @@ notify:
 # Optional. When a server is reachable the management console gains a PostgreSQL tab with server
 # facts, database sizes, activity and the backup history. With backup.databases empty nothing is
 # scheduled, so the block is read-only until you select databases (the console writes the
-# selection to appboss.local.yaml). This feature needs pg_dump, pg_dumpall and pg_restore on the
+# selection to dboss.local.yaml). This feature needs pg_dump, pg_dumpall and pg_restore on the
 # service user's PATH.
 
 postgres:
@@ -359,7 +359,7 @@ postgres:
   backup:
     # Local directory that receives dumps, one subfolder per database. Empty disables local
     # copies, so a database with s3: false and no dir has nowhere to go and is rejected.
-    dir: ./.appboss/pg-backups
+    dir: ./.dboss/pg-backups
     # Default destination for every selected database. A database can override it per entry.
     s3: true
     # Interval between scheduled backups, a Go duration. 0 makes backups manual only.
@@ -394,7 +394,7 @@ s3:
   region: auto
   # Bucket that receives the objects. Empty disables object storage.
   bucket: ""
-  #   appboss-backups
+  #   dboss-backups
   # Key prefix prepended to every object (a trailing / is added).
   prefix: ""
   #   pg/
@@ -406,12 +406,12 @@ s3:
   sse: ""
 
 # =============================================================================
-# PART 2: <app>/appboss.yaml   (required, per app)
+# PART 2: <app>/dboss.yaml   (required, per app)
 # =============================================================================
 ---
 # Only keys listed here are allowed under a host. Anything under defaults.* in the host config
 # can be repeated here with the same name to override it for this app. When this file is the
-# one `appboss start` runs directly (single mode), part 1 keys are allowed as well.
+# one `dboss start` runs directly (single mode), part 1 keys are allowed as well.
 
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
@@ -433,7 +433,7 @@ hosts:
 web_process: web
 
 # Start policy. true starts the app with the host and brings it back on resume. false leaves
-# it stopped until `appboss run`, the console, or any proxied request starts it; a host restart
+# it stopped until `dboss run`, the console, or any proxied request starts it; a host restart
 # does not bring it back. button is like false, but a request answers a page with a start button
 # and only its POST starts the app, so a crawler or favicon GET never does.
 autostart: true
@@ -464,11 +464,11 @@ max_body: 50m
 headers:
   X-Powered-By: ""
 
-# Ports are NOT configurable per app. boss allocates one per (app, proctype)
+# Ports are NOT configurable per app. dboss allocates one per (app, proctype)
 # from ports.range and injects it as PORT into that process's environment,
 # always, for every procfile entry. There is no pin, no override, no opt-out.
 # An app that ignores PORT and binds its own port will not be reachable
-# through the proxy. Read the allocation with `appboss ports`.
+# through the proxy. Read the allocation with `dboss ports`.
 
 # Per-proctype overrides. Process keys only (health, stop, restart, logs, shell, env,
 # resources); a web key here is an error. Useful for a worker that needs a longer
@@ -480,7 +480,7 @@ processes:
 
 # Scheduled one-shot commands, run by the daemon and independent of the app's run state:
 # a stopped or idle app still fires its jobs. Each job runs in the app folder with the app
-# environment (APP_NAME, PROC_TYPE, APPBOSS_SOCKET; no PORT), logs to its own channel and does
+# environment (APP_NAME, PROC_TYPE, DBOSS_SOCKET; no PORT), logs to its own channel and does
 # not count as activity for idle_stop. There is no catch-up: after a daemon restart the next
 # run is computed forward from that moment.
 cron:
@@ -504,8 +504,8 @@ cron:
 # Deploy hooks: named one-shot commands a signed HTTP POST can trigger, independent of the app's
 # run state. The ping URL is <management.url>/hooks/<app>/<hook>. Auth is a token: either
 # ?token=<secret> in the URL, Authorization: Bearer <secret>, X-Gitlab-Token: <secret>, or a
-# GitHub X-Hub-Signature-256 HMAC over the raw body. With no secret here, appboss generates a
-# 64-character secret under state_dir on first use; `appboss hooks` prints the full URL.
+# GitHub X-Hub-Signature-256 HMAC over the raw body. With no secret here, dboss generates a
+# 64-character secret under state_dir on first use; `dboss hooks` prints the full URL.
 hooks:
   # Hook name, unique in the app; matches [a-z][a-z0-9_-]*.
   deploy:
@@ -520,11 +520,11 @@ hooks:
     # true keeps the hook configured but its endpoint answers 404.
     disabled: false
     # Token the caller must present. Keep it out of the committed file: use $DEPLOY_SECRET or
-    # leave it empty and let appboss generate one under state_dir (rotate it with
-    # `appboss hooks rotate`). A secret set here wins over the generated one.
+    # leave it empty and let dboss generate one under state_dir (rotate it with
+    # `dboss hooks rotate`). A secret set here wins over the generated one.
     secret: $DEPLOY_SECRET
 
-# Realtime channels (pub/sub). When path is set, boss serves a small hub on this app's own
+# Realtime channels (pub/sub). When path is set, dboss serves a small hub on this app's own
 # hosts. It is independent of the app process: a subscriber can connect while the app is
 # stopped, and realtime traffic never wakes it.
 #
@@ -538,13 +538,13 @@ hooks:
 # Messages are fanned out to every subscriber of the same app and channel. The last `replay`
 # are replayed to a subscriber that joins late. A slow client is dropped, never blocking the
 # publisher. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved.
-# `appboss pubsub help` prints the same guide with copy-paste examples.
+# `dboss pubsub help` prints the same guide with copy-paste examples.
 pubsub:
   # URL prefix on the app's hosts. Empty disables the whole feature. Must start with /.
   path: ""
   #   /socketio
   # Bearer token a publisher presents. Empty generates a 64-character secret per app under
-  # state_dir on first use; `appboss pubsub` prints it and `appboss pubsub rotate` replaces it.
+  # state_dir on first use; `dboss pubsub` prints it and `dboss pubsub rotate` replaces it.
   # A secret set here wins and cannot be rotated from the console.
   secret: ""
   #   $PUBSUB_SECRET
@@ -563,15 +563,15 @@ pubsub:
 
 # Procfile behavior:
 #   - Each command is split on whitespace and exec'd directly unless shell: true.
-#   - Each entry becomes unit boss-<app>-<name> and gets its own PORT.
-#   - PORT is always injected by boss for every line, including workers and
+#   - Each entry becomes unit dboss-<app>-<name> and gets its own PORT.
+#   - PORT is always injected by dboss for every line, including workers and
 #     cron-style processes that never listen. Not configurable. A PORT set in
 #     .env or .env.local is overwritten and a warning is logged.
 #   - Env available to every command, in priority order (highest first):
-#       PORT, APP_NAME, PROC_TYPE, APPBOSS_SOCKET    injected by boss, always win
+#       PORT, APP_NAME, PROC_TYPE, DBOSS_SOCKET    injected by dboss, always win
 #       .env.local                                server-only overrides
 #       .env                                      committed defaults
-#       defaults.env / appboss.yaml env             boss config
+#       defaults.env / dboss.yaml env             dboss config
 #       mise env (PATH and tool vars)             when mise.toml exists
 #       daemon's own environment                  minimal: HOME, LANG, TZ
 #
@@ -586,7 +586,7 @@ pubsub:
 #   - .env.local should be mode 0600 and is never rsynced by lux-deploy.
 
 # =============================================================================
-# PART 3: state files under state_dir (written by boss, read-only for humans)
+# PART 3: state files under state_dir (written by dboss, read-only for humans)
 # =============================================================================
 ---
 # state_dir/running.json
@@ -597,7 +597,7 @@ running.json:
   - myapp-staging
 
 # state_dir/maintenance.json
-# Apps currently in maintenance mode. Updated by `appboss maintenance`; survives a restart.
+# Apps currently in maintenance mode. Updated by `dboss maintenance`; survives a restart.
 #
 # state_dir/<app>/<proctype>.pid
 # One line: the pid of the running child. Removed when the process exits.
@@ -614,25 +614,25 @@ running.json:
 # CLI lookup rules
 # =============================================================================
 #
-#   Config, every command:   -c path, then $APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml.
-#   Socket, remote commands: --socket, then $APPBOSS_SOCKET, then the socket of the config found
-#                            above if that file exists on disk, then /run/appboss/appboss.sock.
+#   Config, every command:   -c path, then $DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml.
+#   Socket, remote commands: --socket, then $DBOSS_SOCKET, then the socket of the config found
+#                            above if that file exists on disk, then /run/dboss/dboss.sock.
 #   App, remote commands:    the argument, or inside an app folder that folder's app.
 #
-#   appboss start [-c path]                      foreground host session
-#   appboss systemd [-c path] [--user u] [--bin p] [--install]
-#   appboss kill [-c path]                       stop every app and clear ports.range
-#   appboss maintenance [app] on|off             answer with the maintenance page, app keeps running
-#   appboss password                             print a bcrypt hash for basic_auth
-#   APPBOSS_SOCKET is injected into app processes, so a process can always find its host.
+#   dboss start [-c path]                      foreground host session
+#   dboss systemd [-c path] [--user u] [--bin p] [--install]
+#   dboss kill [-c path]                       stop every app and clear ports.range
+#   dboss maintenance [app] on|off             answer with the maintenance page, app keeps running
+#   dboss password                             print a bcrypt hash for basic_auth
+#   DBOSS_SOCKET is injected into app processes, so a process can always find its host.
 #
-# `appboss config` validates the host file and prints it as written, comments included.
-# `appboss config <app>` does the same for that app's file.
-# `appboss config -d` / `--defaults` prints the resolved config with every default filled in.
-# `appboss config --reference` prints this document.
+# `dboss config` validates the host file and prints it as written, comments included.
+# `dboss config <app>` does the same for that app's file.
+# `dboss config -d` / `--defaults` prints the resolved config with every default filled in.
+# `dboss config --reference` prints this document.
 # Errors name the file, line and key: an unknown key suggests the closest valid one.
-# `appboss check` validates the config and every app without starting anything.
+# `dboss check` validates the config and every app without starting anything.
 #
-# The management console edits these same files: the host file and, per app, the file appboss
-# reads for that folder (appboss.local.yaml when it exists). "Create server override" copies
-# appboss.yaml to appboss.local.yaml so edits made on the box survive the next deploy.
+# The management console edits these same files: the host file and, per app, the file dboss
+# reads for that folder (dboss.local.yaml when it exists). "Create server override" copies
+# dboss.yaml to dboss.local.yaml so edits made on the box survive the next deploy.

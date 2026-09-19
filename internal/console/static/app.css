@@ -1338,7 +1338,7 @@ input[type="radio"] {
   line-height: 20px;
 }
 
-.drawer .fez-ab-config-keys {
+.drawer .fez-db-config-keys {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -1440,6 +1440,10 @@ input[type="radio"] {
 .key-value .text-muted {
   margin-right: 4px;
   font-size: var(--text-size-small);
+}
+
+.key-value .key-example {
+  margin-left: 10px;
 }
 
 .keys-empty {
@@ -1673,7 +1677,7 @@ input[type="radio"] {
   background: var(--bg);
 }
 
-.log-page > .fez-ab-log-shell {
+.log-page > .fez-db-log-shell {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -1682,7 +1686,7 @@ input[type="radio"] {
 
 .log-page .log-navbar { flex: 0 0 auto; }
 
-.log-page .fez-ab-log-view {
+.log-page .fez-db-log-view {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
@@ -1957,7 +1961,7 @@ select.log-control { max-width: 220px; }
   to { transform: rotate(360deg); }
 }
 
-/* --- visual config form (ab-config-form) --- */
+/* --- visual config form (db-config-form) --- */
 .config-form {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -2043,6 +2047,15 @@ select.log-control { max-width: 220px; }
   color: var(--muted);
   font-size: var(--text-size-small);
   line-height: 1.4;
+}
+
+.config-field-example {
+  color: var(--muted);
+  font-size: var(--text-size-small);
+}
+
+.config-field-example code {
+  font-size: var(--text-size-small);
 }
 
 .config-input,

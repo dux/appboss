@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/logx"
+	"dboss/internal/config"
+	"dboss/internal/logx"
 )
 
 const (
@@ -32,7 +32,7 @@ const (
 	authStateTTL        = 5 * time.Minute
 	maxAuthChallenges   = 4096
 	maxAuthResponseSize = 1 << 20
-	// `appboss login` mints a one-time link for a local operator; the session it creates belongs
+	// `dboss login` mints a one-time link for a local operator; the session it creates belongs
 	// to cliEmail, which AuthCog can never vouch for.
 	cliLoginPath = "/login"
 	cliEmail     = "cli@localhost"
@@ -121,7 +121,7 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 	}
 	if loopbackHost(r.Host) {
 		// AuthCog has no destination for a loopback name, so the only way in here is the link
-		// from `appboss login`.
+		// from `dboss login`.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, cliLoginPage)
@@ -131,7 +131,7 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 	return authSession{}, false
 }
 
-const cliLoginPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to App Boss</title><style>body{background:#f1f5f9;color:#182433;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;min-height:100vh;place-items:center;margin:0}main{max-width:32rem;padding:0 1.5rem;text-align:center}code{padding:2px 6px;border:1px solid rgb(4 32 69 / 14%);border-radius:4px;background:#fff}p{color:#667382}</style><main><h1>Sign in from the command line</h1><p>Run <code>appboss login</code> on this host and open the link it prints. The link works once and expires after 3 minutes.</p></main></html>`
+const cliLoginPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to dboss</title><style>body{background:#f1f5f9;color:#182433;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;min-height:100vh;place-items:center;margin:0}main{max-width:32rem;padding:0 1.5rem;text-align:center}code{padding:2px 6px;border:1px solid rgb(4 32 69 / 14%);border-radius:4px;background:#fff}p{color:#667382}</style><main><h1>Sign in from the command line</h1><p>Run <code>dboss login</code> on this host and open the link it prints. The link works once and expires after 3 minutes.</p></main></html>`
 
 // loopbackHost reports whether rawHost names this machine: localhost or a loopback address,
 // with or without a port.
@@ -255,7 +255,7 @@ func (a *authenticator) cliLogin(w http.ResponseWriter, r *http.Request) {
 	delete(a.cliTokens, token)
 	a.mu.Unlock()
 	if token == "" || !ok || !expiresAt.After(time.Now()) {
-		http.Error(w, "login link is invalid or expired; run appboss login again", http.StatusBadRequest)
+		http.Error(w, "login link is invalid or expired; run dboss login again", http.StatusBadRequest)
 		return
 	}
 	if err := a.setSessionCookie(w, r, cliEmail); err != nil {

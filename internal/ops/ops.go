@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/logstore"
-	"app-boss/internal/notify"
-	"app-boss/internal/pg"
-	"app-boss/internal/pubsub"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/logstore"
+	"dboss/internal/notify"
+	"dboss/internal/pg"
+	"dboss/internal/pubsub"
+	"dboss/internal/super"
 )
 
 // ErrUnknownAction is returned by Do for a method it does not implement, so a transport can tell
@@ -192,7 +192,7 @@ func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pub
 }
 
 // SearchLogs and SearchRequests are the read side of the log store, shared by the console and
-// any future `appboss logs --search`.
+// any future `dboss logs --search`.
 func (s *Service) SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error) {
 	if s.store == nil {
 		return nil, errors.New("log store is not enabled")

@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/logx"
-	"app-boss/internal/notify"
+	"dboss/internal/config"
+	"dboss/internal/logx"
+	"dboss/internal/notify"
 
 	"github.com/jackc/pgx/v5"
 )

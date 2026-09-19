@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 )
 
 func (s *Service) serveTestPage(w http.ResponseWriter, r *http.Request, cfg config.Pubsub) {

@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"app-boss/internal/config"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/super"
 )
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
@@ -54,7 +54,7 @@ func TestDrainingAppAnswers503(t *testing.T) {
 }
 
 func TestHealthEndpointReportsState(t *testing.T) {
-	path := "/.well-known/appboss/health"
+	path := "/.well-known/dboss/health"
 	get := func(snapshot super.Snapshot) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, "http://demo.test"+path, nil)
 		request.Host = "demo.test"

@@ -9,6 +9,7 @@ import (
 
 type command struct {
 	name    string
+	aliases []string
 	args    string
 	group   string
 	summary string
@@ -16,21 +17,29 @@ type command struct {
 	options []option
 }
 
+// display is the name column: the command plus any aliases, e.g. "start (s)".
+func (cmd command) display() string {
+	if len(cmd.aliases) == 0 {
+		return cmd.name
+	}
+	return cmd.name + " (" + strings.Join(cmd.aliases, ", ") + ")"
+}
+
 type option struct{ flag, help string }
 
-var configOption = option{"-c, --config <path>", "config file (default: $APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml)"}
-var socketOption = option{"--socket <path>", "control socket (default: $APPBOSS_SOCKET, the config's socket when it exists, then /run/appboss/appboss.sock)"}
+var configOption = option{"-c, --config <path>", "config file (default: $DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml)"}
+var socketOption = option{"--socket <path>", "control socket (default: $DBOSS_SOCKET, the config's socket when it exists, then /run/dboss/dboss.sock)"}
 var jsonOption = option{"--json", "machine-readable output"}
 var appArgumentNote = "app defaults to the current folder's app when run inside one."
 
-// commands is the single source for `appboss`, `appboss help <command>` and `<command> --help`.
+// commands is the single source for `dboss`, `dboss help <command>` and `<command> --help`.
 var commands = []command{
-	{name: "start", args: "[-c path]", group: "Host session", summary: "run the host session in the foreground; Ctrl-C stops every app",
-		details: []string{"Loads the config, clears every listener in ports.range, starts the apps that were running before, then serves the proxy, the management console and the control socket.", "With no config file in the working directory it runs the default host: listen :80, apps in ./apps, state under ./.appboss and the console off.", "On a terminal every process's output is echoed with an app/proc prefix. Under systemd only appboss's own log reaches journald; app output stays in log_dir."},
+	{name: "start", aliases: []string{"s"}, args: "[-c path]", group: "Host session", summary: "run the host session in the foreground; Ctrl-C stops every app",
+		details: []string{"Loads the config, clears every listener in ports.range, starts the apps that were running before, then serves the proxy, the management console and the control socket.", "With no config file in the working directory it runs the default host: listen :80, apps in ./apps, state under ./.dboss and the console off.", "On a terminal every process's output is echoed with an app/proc prefix. Under systemd only dboss's own log reaches journald; app output stays in log_dir."},
 		options: []option{configOption}},
 	{name: "systemd", args: "[-c path] [--user name] [--group name] [--bin path] [--install]", group: "Host session", summary: "print the systemd unit for this config, or install and enable it",
-		details: []string{"The unit runs `appboss start -c <absolute config>` as the given user from the config directory with Restart=always and CAP_NET_BIND_SERVICE for port 80."},
-		options: []option{configOption, {"--user <name>", "service user (default: current user)"}, {"--group <name>", "service group (default: the user's primary group)"}, {"--bin <path>", "appboss binary (default: this executable)"}, {"--install", "write /etc/systemd/system/appboss.service, reload systemd and enable the service"}}},
+		details: []string{"The unit runs `dboss start -c <absolute config>` as the given user from the config directory with Restart=always and CAP_NET_BIND_SERVICE for port 80."},
+		options: []option{configOption, {"--user <name>", "service user (default: current user)"}, {"--group <name>", "service group (default: the user's primary group)"}, {"--bin <path>", "dboss binary (default: this executable)"}, {"--install", "write /etc/systemd/system/dboss.service, reload systemd and enable the service"}}},
 	{name: "kill", args: "[-c path]", group: "Host session", summary: "stop every app and terminate every listener left in ports.range",
 		details: []string{"Asks the running host to stop each app, then kills whatever still listens in the range. Use it to clean up after a crash or a stray process."},
 		options: []option{configOption, jsonOption}},
@@ -60,16 +69,16 @@ var commands = []command{
 		details: []string{appArgumentNote, "HTML GETs get 503 with the page (maintenance_page, then <static>/503.html, then the built-in one); everything else an empty 503 with Retry-After: 30.", "The flag survives a host restart."},
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "cron", args: "[app] | run [app] <job>", group: "Apps", summary: "list an app's scheduled jobs, or run one now",
-		details: []string{appArgumentNote, "Jobs are declared under cron: in the app's appboss.yaml, each with a schedule (every 5m, every 2h, every 1d or a 5-field cron expression) and a command. They run in the app folder with the app environment, even while the app is stopped, and their output is written to the log store."},
+		details: []string{appArgumentNote, "Jobs are declared under cron: in the app's dboss.yaml, each with a schedule (every 5m, every 2h, every 1d or a 5-field cron expression) and a command. They run in the app folder with the app environment, even while the app is stopped, and their output is written to the log store."},
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "hooks", args: "[app] | run [app] <hook> | rotate [app] <hook>", group: "Apps", summary: "list an app's deploy hooks, run one, or rotate its secret",
-		details: []string{appArgumentNote, "Hooks are declared under hooks: in the app's appboss.yaml. A signed HTTP POST to https://<management.host>/hooks/<app>/<hook> starts the hook; a hook with restart: true restarts the app when it exits 0.", "The URL carries a token. With no secret in the config, appboss generates one under state_dir on first use; rotate mints a new one. Every call prints the ready-made ping URL to paste into a Git host webhook."},
+		details: []string{appArgumentNote, "Hooks are declared under hooks: in the app's dboss.yaml. A signed HTTP POST to https://<management.host>/hooks/<app>/<hook> starts the hook; a hook with restart: true restarts the app when it exits 0.", "The URL carries a token. With no secret in the config, dboss generates one under state_dir on first use; rotate mints a new one. Every call prints the ready-made ping URL to paste into a Git host webhook."},
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "pubsub", args: "[app] | secret [app] | rotate [app] | publish [app] <channel> [--event name] [--data json|-] | help", group: "Apps", summary: "list an app's realtime channels, its publish secret, or publish a message",
-		details: []string{appArgumentNote, "Realtime channels are served on the app's own hosts under pubsub.path. A subscriber connects to <path>/<channel> over a WebSocket or SSE; a publisher POSTs the same URL with the publish secret. `appboss pubsub help` prints the browser client and copy-paste examples.", "secret prints the effective publish secret and ready-made URLs; rotate replaces a generated one. A secret set in the config cannot be rotated."},
+		details: []string{appArgumentNote, "Realtime channels are served on the app's own hosts under pubsub.path. A subscriber connects to <path>/<channel> over a WebSocket or SSE; a publisher POSTs the same URL with the publish secret. `dboss pubsub help` prints the browser client and copy-paste examples.", "secret prints the effective publish secret and ready-made URLs; rotate replaces a generated one. A secret set in the config cannot be rotated."},
 		options: []option{{"--event <name>", "event name (default message)"}, {"--data <json|->", "JSON payload, or - to read stdin"}, socketOption, configOption, jsonOption}},
 	{name: "exec", args: "[options] [app] <command> [args...]", group: "Apps", summary: "run a one-off command in the app's environment",
-		details: []string{"Runs the command in the app folder with the app environment and prints its combined output. The app argument is optional inside an app folder or when the config there is an app.", "Options must come before the command, so the command's own flags (including -c) pass through untouched. The command is killed after --timeout (default 1m) and its exit code becomes appboss's exit code."},
+		details: []string{"Runs the command in the app folder with the app environment and prints its combined output. The app argument is optional inside an app folder or when the config there is an app.", "Options must come before the command, so the command's own flags (including -c) pass through untouched. The command is killed after --timeout (default 1m) and its exit code becomes dboss's exit code."},
 		options: []option{{"--timeout <duration>", "kill the command after this long (default 1m)"}, socketOption, configOption, jsonOption}},
 	{name: "audit", args: "[--app name] [--actor who] [--action name] [-n rows]", group: "Apps", summary: "list operator actions: start, stop, restart, hook runs and config writes",
 		details: []string{"Every mutating action records who did what to which app and the result. Console actions carry the signed-in email, hook pings the hook that fired, and control-socket actions are attributed to `cli`.", "Rows are kept for daemon.audit_retention (default 8760h, 0 forever) and pruned with the daily log prune."},
@@ -79,6 +88,8 @@ var commands = []command{
 		details: []string{"With no argument it prints the server version, connection, uptime, activity and every database with its size and backup selection.", "backup dumps every selected database; give a name to dump one. restore loads a recorded backup into a new database named <source>_restore unless --target names one; replacing an existing database needs --force with --target.", "The server is reached through postgres.dsn, or a local socket and 127.0.0.1 using the PG* environment when it is empty."},
 		options: []option{{"--target <name>", "database to restore into (default: <source>_restore_<timestamp>)"}, {"--force", "replace the target database instead of creating a new one"}, socketOption, configOption, jsonOption}},
 
+	{name: "init", args: "[service|app]", group: "Config", summary: "print a fully commented starter config for a service or an app",
+		details: []string{"Every key is printed commented out with its default, or an example when it has none, so you uncomment only what you need. With no argument it asks with an up/down menu; pipe input or pass the type to skip it.", "Save it with `dboss init > dboss.yaml` at the host root, or `dboss init app > dboss.yaml` inside an app folder."}},
 	{name: "config", args: "[app] [-d] | --keys [filter] | --reference | history [app] | restore [app] <revision>", group: "Config", summary: "validate and print a config file, the resolved config, or the key reference",
 		details: []string{"Validates first: an unknown key, a bad value or a syntax error is reported with file, line, key and a hint.", "Without -d the file is printed as written, comments included. With -d every default is filled in: the host config, or with an app that app's effective config after the host defaults and its own overrides are merged.", "--keys lists every key with a one-line description and its default, or an example when it has none; a filter narrows by key name. --reference prints the long annotated reference, shipped inside the binary.", "history lists the last 50 saved revisions of the host file or one app's file under state_dir/config-history; restore writes one back. The running host applies it on the next rescan."},
 		options: []option{{"-d, --defaults", "print the resolved config with defaults instead of the file as written"}, {"--keys [filter]", "list every configuration key with description and default"}, {"--reference", "print the annotated configuration reference"}, configOption, jsonOption}},
@@ -88,19 +99,24 @@ var commands = []command{
 	{name: "doctor", args: "[-c path]", group: "Config", summary: "preflight a box: tools, writable directories, valid config and a clear port range",
 		details: []string{"Checks that lsof is on PATH, that state_dir, log_dir and the socket directory are writable, that the config and every app load, and whether anything still listens in ports.range. Warns on listeners a start would clear; fails on anything that would stop the session."},
 		options: []option{configOption, jsonOption}},
-	{name: "rescan", args: "", group: "Config", summary: "re-read the apps directory, every appboss.yaml and the host defaults",
+	{name: "rescan", args: "", group: "Config", summary: "re-read the apps directory, every dboss.yaml and the host defaults",
 		details: []string{"App-level changes apply right away. Host keys that changed (proxy, ports, apps, ...) are listed as restart required."},
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "ports", args: "", group: "Config", summary: "show the live port table, one fixed port per app process",
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "password", args: "", group: "Config", summary: "print a bcrypt hash for basic_auth",
-		details: []string{"Prompts without echo on a terminal; reads one line from stdin otherwise, so `printf secret | appboss password` works in scripts."}},
+		details: []string{"Prompts without echo on a terminal; reads one line from stdin otherwise, so `printf secret | dboss password` works in scripts."}},
 }
 
 func findCommand(name string) *command {
 	for i := range commands {
 		if commands[i].name == name {
 			return &commands[i]
+		}
+		for _, alias := range commands[i].aliases {
+			if alias == name {
+				return &commands[i]
+			}
 		}
 	}
 	return nil
@@ -119,12 +135,12 @@ func wantsHelp(args []string) bool {
 // usage prints the overview: every command grouped, then the shared options.
 func (c CLI) usage(out io.Writer) {
 	style := newStyle(out)
-	fmt.Fprintf(out, "%s runs, proxies and supervises the apps on one host.\n\n", style.bold("appboss"))
-	fmt.Fprintf(out, "%s\n  appboss <command> [options]\n  appboss help <command>\n\n", style.heading("Usage"))
+	fmt.Fprintf(out, "%s runs, proxies and supervises the apps on one host.\n\n", style.bold("dboss"))
+	fmt.Fprintf(out, "%s\n  dboss <command> [options]\n  dboss help <command>\n\n", style.heading("Usage"))
 	var group string
 	width := 0
 	for _, cmd := range commands {
-		width = max(width, len(cmd.name))
+		width = max(width, len(cmd.display()))
 	}
 	for _, cmd := range commands {
 		if cmd.group != group {
@@ -134,21 +150,25 @@ func (c CLI) usage(out io.Writer) {
 			group = cmd.group
 			fmt.Fprintf(out, "%s\n", style.heading(group))
 		}
-		fmt.Fprintf(out, "  %s%s   %s\n", style.command(cmd.name), strings.Repeat(" ", width-len(cmd.name)), cmd.summary)
+		name := cmd.display()
+		fmt.Fprintf(out, "  %s%s   %s\n", style.command(name), strings.Repeat(" ", width-len(name)), cmd.summary)
 	}
 	fmt.Fprintf(out, "\n%s\n", style.heading("Options"))
 	writeOptions(out, style, []option{configOption, socketOption, jsonOption})
 	fmt.Fprintf(out, "\nRemote commands talk to the running host over its control socket.\n")
-	fmt.Fprintf(out, "Run %s for details on one command.\n", style.command("appboss help <command>"))
+	fmt.Fprintf(out, "Run %s for details on one command.\n", style.command("dboss help <command>"))
 }
 
 func (c CLI) help(out io.Writer, name string) error {
 	cmd := findCommand(name)
 	if cmd == nil {
-		return fmt.Errorf("unknown command %q (run appboss help)", name)
+		return fmt.Errorf("unknown command %q (run dboss help)", name)
 	}
 	style := newStyle(out)
-	fmt.Fprintf(out, "%s\n  appboss %s %s\n\n", style.heading("Usage"), style.command(cmd.name), cmd.args)
+	fmt.Fprintf(out, "%s\n  dboss %s %s\n\n", style.heading("Usage"), style.command(cmd.name), cmd.args)
+	if len(cmd.aliases) > 0 {
+		fmt.Fprintf(out, "Alias: %s\n\n", strings.Join(cmd.aliases, ", "))
+	}
 	fmt.Fprintf(out, "%s.\n", strings.ToUpper(cmd.summary[:1])+cmd.summary[1:])
 	for _, line := range cmd.details {
 		fmt.Fprintf(out, "\n%s\n", wrap(line, 96))

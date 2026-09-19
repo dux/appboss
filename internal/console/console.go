@@ -21,15 +21,15 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/logstore"
-	"app-boss/internal/metrics"
-	"app-boss/internal/ops"
-	"app-boss/internal/pg"
-	"app-boss/internal/pubsub"
-	"app-boss/internal/super"
-	"app-boss/internal/sysinfo"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/logstore"
+	"dboss/internal/metrics"
+	"dboss/internal/ops"
+	"dboss/internal/pg"
+	"dboss/internal/pubsub"
+	"dboss/internal/super"
+	"dboss/internal/sysinfo"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,7 +55,7 @@ type HostConfigStore interface {
 	HostConfig() (config.Config, error)
 }
 
-// ConfigStore edits the config files appboss reads; apps.Store is the real one.
+// ConfigStore edits the config files dboss reads; apps.Store is the real one.
 type ConfigStore interface {
 	Files() ([]apps.ConfigFile, error)
 	Read(id string) (apps.ConfigFile, error)
@@ -132,7 +132,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats
 	return handler, nil
 }
 
-// LoginURL mints a one-time link for `appboss login`. It returns the console's loopback
+// LoginURL mints a one-time link for `dboss login`. It returns the console's loopback
 // address, which works without DNS and through an SSH tunnel, and the public management host
 // when one is configured. Both links carry the same single-use token.
 func (h *Handler) LoginURL() (local, public string, err error) {
@@ -240,6 +240,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.configRestore(w, r, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/keys":
 		writeJSON(w, http.StatusOK, config.Keys())
+	case r.Method == http.MethodGet && r.URL.Path == "/api/config/blocks":
+		writeJSON(w, http.StatusOK, config.Blocks())
 	case r.Method == http.MethodGet && r.URL.Path == "/api/config/form":
 		h.configForm(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/config/apply":
@@ -562,7 +564,7 @@ func (h *Handler) configApply(w http.ResponseWriter, r *http.Request, session au
 	writeJSON(w, http.StatusOK, writeResponse{File: written, Invalid: result.Invalid, RestartRequired: result.RestartRequired})
 }
 
-// ensureLocalOverride puts the edit into appboss.local.yaml next to the active file, so a deploy
+// ensureLocalOverride puts the edit into dboss.local.yaml next to the active file, so a deploy
 // never overwrites it. The host file and app files have their own helpers.
 func (h *Handler) ensureLocalOverride(file apps.ConfigFile) (apps.ConfigFile, error) {
 	if file.App != "" {
@@ -691,7 +693,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		authorization := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authorization, "Bearer ")
 		if token == authorization || subtle.ConstantTimeCompare([]byte(token), []byte(h.metricsToken)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="appboss"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dboss"`)
 			http.Error(w, "forbidden", http.StatusUnauthorized)
 			return
 		}

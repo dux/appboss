@@ -12,7 +12,7 @@ import (
 )
 
 // ListenersInRange lists PIDs listening in the reserved app range without touching them, for
-// `appboss doctor`.
+// `dboss doctor`.
 func ListenersInRange(portRange [2]int) ([]int, error) {
 	return listenerPIDs(portRange)
 }

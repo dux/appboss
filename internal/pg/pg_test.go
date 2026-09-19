@@ -3,7 +3,7 @@ package pg
 import (
 	"testing"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 )
 
 func TestCandidateDSNs(t *testing.T) {

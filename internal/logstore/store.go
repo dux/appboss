@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"app-boss/internal/logx"
-	"app-boss/internal/super"
+	"dboss/internal/logx"
+	"dboss/internal/super"
 	_ "modernc.org/sqlite"
 )
 
@@ -75,12 +75,12 @@ type Latency struct {
 // latencySampleLimit bounds how many rows a latency query reads, newest first.
 const latencySampleLimit = 50000
 
-// HostApp is the reserved app name that backs appboss's own daemon log. It never collides with a
+// HostApp is the reserved app name that backs dboss's own daemon log. It never collides with a
 // discovered app because app process names must match [a-z][a-z0-9_-]*.
-const HostApp = "_appboss"
+const HostApp = "_dboss"
 
 // Channel is one selectable log type in the console: the request table, process stdout, the
-// appboss daemon log, or one app log file.
+// dboss daemon log, or one app log file.
 type Channel struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -101,7 +101,7 @@ type TailOffset struct {
 	Offset int64
 }
 
-// LogFilter narrows SearchLogs. Channel selects one log type: "stdout", "appboss" or "file:<path>".
+// LogFilter narrows SearchLogs. Channel selects one log type: "stdout", "dboss" or "file:<path>".
 // Query is full-text over message and raw.
 type LogFilter struct {
 	Channel string
@@ -181,10 +181,10 @@ type Store struct {
 	cancel         context.CancelFunc
 }
 
-// New returns a store that writes under dir (one <app>/appboss.sqlite per app). snapshotter and
+// New returns a store that writes under dir (one <app>/dboss.sqlite per app). snapshotter and
 // pruneAt drive the daily retention prune; pass nil to disable it. vacuumAt schedules the daily
 // VACUUM (empty disables it). hostRetention bounds the reserved HostApp database that holds
-// appboss's own daemon log; auditRetention bounds the audit table (0 keeps audit rows forever).
+// dboss's own daemon log; auditRetention bounds the audit table (0 keeps audit rows forever).
 func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt, vacuumAt string, hostRetention, auditRetention time.Duration) *Store {
 	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, vacuumAt: vacuumAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
 }
@@ -283,7 +283,7 @@ func (s *Store) writer(app string) (*appWriter, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "appboss.sqlite"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "dboss.sqlite"))
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +312,7 @@ func (s *Store) writerForPrune(app string) (*appWriter, error) {
 		return w, nil
 	}
 	if app != HostApp {
-		if _, err := os.Stat(filepath.Join(s.dir, app, "appboss.sqlite")); err != nil {
+		if _, err := os.Stat(filepath.Join(s.dir, app, "dboss.sqlite")); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, nil
 			}
@@ -333,7 +333,7 @@ func (s *Store) diskApps() []string {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, statErr := os.Stat(filepath.Join(s.dir, entry.Name(), "appboss.sqlite")); statErr == nil {
+		if _, statErr := os.Stat(filepath.Join(s.dir, entry.Name(), "dboss.sqlite")); statErr == nil {
 			names = append(names, entry.Name())
 		}
 	}
@@ -596,7 +596,7 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	return result, rows.Err()
 }
 
-// Channels lists the log types an app has. The reserved HostApp exposes only the appboss daemon
+// Channels lists the log types an app has. The reserved HostApp exposes only the dboss daemon
 // log; every real app exposes the request table, one channel per service that wrote stdout, and one
 // channel per app log file.
 func (s *Store) Channels(app string) ([]Channel, error) {
@@ -681,7 +681,7 @@ func (s *Store) Tree(names []string) ([]AppTree, error) {
 
 func (s *Store) channelsFor(app string) ([]Channel, error) {
 	if app == HostApp {
-		return []Channel{{ID: "appboss", Label: "appboss"}}, nil
+		return []Channel{{ID: "dboss", Label: "dboss"}}, nil
 	}
 	channels := []Channel{}
 	requesters, err := s.distinct(app, `SELECT DISTINCT process FROM requests WHERE process <> '' ORDER BY process`)
@@ -711,7 +711,7 @@ func (s *Store) channelsFor(app string) ([]Channel, error) {
 func (s *Store) diskBytes(app string) int64 {
 	var total int64
 	dir := filepath.Join(s.dir, app)
-	for _, name := range []string{"appboss.sqlite", "appboss.sqlite-wal", "appboss.sqlite-shm"} {
+	for _, name := range []string{"dboss.sqlite", "dboss.sqlite-wal", "dboss.sqlite-shm"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			continue
@@ -729,7 +729,7 @@ func (s *Store) distinct(app, query string) ([]string, error) {
 	if w != nil {
 		return queryValues(w.db, query)
 	}
-	path := filepath.Join(s.dir, app, "appboss.sqlite")
+	path := filepath.Join(s.dir, app, "dboss.sqlite")
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -884,7 +884,7 @@ func percentile(sorted []int64, q float64) float64 {
 }
 
 // Prune deletes rows older than their retention from one app's database. Request rows and app
-// log files use retention, process stdout and the appboss daemon log use stdoutRetention. A zero
+// log files use retention, process stdout and the dboss daemon log use stdoutRetention. A zero
 // retention disables the whole store, matching Request/RecordLogs.
 func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetention time.Duration) error {
 	w, err := s.writerForPrune(app)
@@ -969,7 +969,7 @@ func (s *Store) Vacuum(ctx context.Context, app string) error {
 		_, err := w.db.ExecContext(ctx, `VACUUM`)
 		return err
 	}
-	path := filepath.Join(s.dir, app, "appboss.sqlite")
+	path := filepath.Join(s.dir, app, "dboss.sqlite")
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil

@@ -8,8 +8,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"app-boss/internal/config"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/super"
 )
 
 const (

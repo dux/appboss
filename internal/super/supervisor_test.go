@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/ports"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/ports"
 )
 
 func TestProcessEnvPriority(t *testing.T) {
@@ -28,10 +28,10 @@ func TestProcessEnvPriority(t *testing.T) {
 	spec.Config.Env = map[string]string{"A": "config", "B": "config", "D": "config"}
 	// extra stands in for Process(name).Env: app config env plus a process override.
 	extra := map[string]string{"A": "config", "B": "config", "D": "config", "E": "override"}
-	values := processEnv(spec, "web", 123, "/run/boss.sock", extra)
+	values := processEnv(spec, "web", 123, "/run/dboss.sock", extra)
 	want := map[string]string{
 		"A": "config", "B": "file", "C": "file", "D": "config", "E": "override",
-		"PATH": "/bin", "PORT": "123", "APP_NAME": "demo", "PROC_TYPE": "web", "APPBOSS_SOCKET": "/run/boss.sock",
+		"PATH": "/bin", "PORT": "123", "APP_NAME": "demo", "PROC_TYPE": "web", "DBOSS_SOCKET": "/run/dboss.sock",
 	}
 	for key, value := range want {
 		if values[key] != value {
@@ -120,7 +120,7 @@ func TestSnapshotListsEveryProcfileService(t *testing.T) {
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
@@ -283,7 +283,7 @@ func TestPortsFollowAppNameOrder(t *testing.T) {
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
@@ -398,14 +398,14 @@ func supervisorTestConfigApp(t *testing.T, portRange [2]int, extraYAML string) c
 	if err := os.WriteFile(filepath.Join(appDir, config.FileName), []byte(appConfig), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("BOSS_TEST_HELPER=1\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("dboss_TEST_HELPER=1\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Socket = filepath.Join(root, "appboss.sock")
+	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
@@ -432,7 +432,7 @@ func waitForSupervisorState(t *testing.T, manager *Manager, state State) {
 }
 
 func TestSupervisorHelperProcess(t *testing.T) {
-	if os.Getenv("BOSS_TEST_HELPER") != "1" {
+	if os.Getenv("dboss_TEST_HELPER") != "1" {
 		return
 	}
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
@@ -444,7 +444,7 @@ func TestSupervisorHelperProcess(t *testing.T) {
 	// First incarnation of an app started with HANG_ONCE passes readiness, then drops its
 	// listener while staying alive, so only the liveness check can notice it. The restarted
 	// incarnation finds the marker and serves normally.
-	if marker := os.Getenv("BOSS_TEST_HELPER_HANG_ONCE"); marker != "" {
+	if marker := os.Getenv("dboss_TEST_HELPER_HANG_ONCE"); marker != "" {
 		if _, statErr := os.Stat(marker); errors.Is(statErr, os.ErrNotExist) {
 			_ = os.WriteFile(marker, []byte("1"), 0o640)
 			go func() {
@@ -465,7 +465,7 @@ func TestSupervisorHelperProcess(t *testing.T) {
 
 func TestSupervisorRestartsUnhealthyWebProcess(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "hang-once")
-	extra := fmt.Sprintf("env:\n  BOSS_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\n", marker)
+	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\n", marker)
 	cfg := supervisorTestConfigApp(t, [2]int{32200, 32220}, extra)
 	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {

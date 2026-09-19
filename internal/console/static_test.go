@@ -9,14 +9,14 @@ import (
 // Every nav tab must resolve in viewFromHash or its section never renders.
 // The #help tab silently lost its case once, so guard the pairing from here.
 func TestEveryConsoleTabIsRouted(t *testing.T) {
-	data, err := assets.ReadFile("static/fez/ab-shell.fez")
+	data, err := assets.ReadFile("static/fez/db-shell.fez")
 	if err != nil {
 		t.Fatal(err)
 	}
 	shell := string(data)
 	tabs := regexp.MustCompile(`href="#([a-z]+)"`).FindAllStringSubmatch(shell, -1)
 	if len(tabs) == 0 {
-		t.Fatal("no nav tabs found in ab-shell.fez")
+		t.Fatal("no nav tabs found in db-shell.fez")
 	}
 	for _, tab := range tabs {
 		view := tab[1]
@@ -29,19 +29,19 @@ func TestEveryConsoleTabIsRouted(t *testing.T) {
 	}
 }
 
-// The visual config form is a child of ab-config, so index.html must load it before ab-config.
+// The visual config form is a child of db-config, so index.html must load it before db-config.
 func TestConfigFormComponentIsLoaded(t *testing.T) {
 	index, err := assets.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(index)
-	form := strings.Index(html, `fez="/assets/fez/ab-config-form.fez"`)
-	parent := strings.Index(html, `fez="/assets/fez/ab-config.fez"`)
+	form := strings.Index(html, `fez="/assets/fez/db-config-form.fez"`)
+	parent := strings.Index(html, `fez="/assets/fez/db-config.fez"`)
 	if form < 0 || parent < 0 || form > parent {
-		t.Error("index.html must load ab-config-form.fez before ab-config.fez")
+		t.Error("index.html must load db-config-form.fez before db-config.fez")
 	}
-	if _, err := assets.ReadFile("static/fez/ab-config-form.fez"); err != nil {
-		t.Fatalf("ab-config-form.fez is not embedded: %v", err)
+	if _, err := assets.ReadFile("static/fez/db-config-form.fez"); err != nil {
+		t.Fatalf("db-config-form.fez is not embedded: %v", err)
 	}
 }

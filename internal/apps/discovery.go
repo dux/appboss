@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/schedule"
+	"dboss/internal/config"
+	"dboss/internal/schedule"
 )
 
 var processName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)

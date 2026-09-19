@@ -1,6 +1,6 @@
 management:
-  host: boss.lvh.me
-  url: http://boss.lvh.me
+  host: dboss.lvh.me
+  url: http://dboss.lvh.me
   auth:
     admin_emails:
       - rejotl@gmail.com

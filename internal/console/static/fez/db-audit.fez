@@ -24,7 +24,7 @@
         if (this.state.app) params.set('app', this.state.app)
         if (this.state.actor) params.set('actor', this.state.actor)
         if (this.state.action) params.set('action', this.state.action)
-        const data = await Boss.api(`/api/audit?${params.toString()}`)
+        const data = await Dboss.api(`/api/audit?${params.toString()}`)
         this.state.rows = data.rows || []
         this.state.error = ''
       } catch (error) {

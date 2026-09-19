@@ -1,10 +1,10 @@
 package pubsub
 
-// Help is the integration guide printed by `appboss pubsub help` and shown in the console. It is
+// Help is the integration guide printed by `dboss pubsub help` and shown in the console. It is
 // the same text for both so the browser and the terminal never drift.
 const Help = `PubSub channels
 
-Enable it in the app's appboss.yaml (or in defaults: of the host file):
+Enable it in the app's dboss.yaml (or in defaults: of the host file):
 
     pubsub:
       path: /socketio      # empty disables it
@@ -65,4 +65,4 @@ Notes:
   * Channels are one path segment; client.js, _test and _selftest are reserved.
   * A slow subscriber is dropped rather than blocking the publisher. The limit is max_clients.
   * The publish secret comes from the config or is generated under state_dir. Read it with
-    ` + "`appboss pubsub`" + `, replace it with ` + "`appboss pubsub rotate`" + `.`
+    ` + "`dboss pubsub`" + `, replace it with ` + "`dboss pubsub rotate`" + `.`

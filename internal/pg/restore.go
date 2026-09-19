@@ -93,7 +93,7 @@ func (s *Service) fetch(ctx context.Context, opts options, entry Backup) (string
 	if err != nil || uploader == nil {
 		return "", nil, errors.New("s3 is not configured")
 	}
-	temp, err := os.CreateTemp("", "appboss-restore-*.dump")
+	temp, err := os.CreateTemp("", "dboss-restore-*.dump")
 	if err != nil {
 		return "", nil, err
 	}

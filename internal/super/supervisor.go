@@ -23,13 +23,13 @@ import (
 	"syscall"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/hook"
-	"app-boss/internal/logx"
-	"app-boss/internal/notify"
-	"app-boss/internal/ports"
-	"app-boss/internal/res"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/hook"
+	"dboss/internal/logx"
+	"dboss/internal/notify"
+	"dboss/internal/ports"
+	"dboss/internal/res"
 )
 
 type State string
@@ -627,7 +627,7 @@ func (m *Manager) Rescan() ([]error, error) {
 	m.mu.Lock()
 	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults
 	if len(restartRequired) > 0 && strings.Join(restartRequired, ",") != strings.Join(m.restartRequired, ",") {
-		logx.Infof("rescan: %s changed in %s, restart appboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
+		logx.Infof("rescan: %s changed in %s, restart dboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
 	}
 	m.restartRequired = restartRequired
 	seen := map[string]bool{}
@@ -1574,7 +1574,7 @@ func alive(pid int) bool { err := syscall.Kill(pid, 0); return err == nil || err
 
 // processEnv assembles one process environment in the documented priority order, lowest first:
 // the daemon environment and mise (spec.Env), then config env (extra, including a process
-// override), then .env and .env.local, then the values appboss injects.
+// override), then .env and .env.local, then the values dboss injects.
 func processEnv(spec *apps.App, processName string, port int, socket string, extra map[string]string) map[string]string {
 	values := map[string]string{}
 	for key, value := range spec.Env {
@@ -1592,7 +1592,7 @@ func processEnv(spec *apps.App, processName string, port int, socket string, ext
 	}
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
-	values["APPBOSS_SOCKET"] = socket
+	values["DBOSS_SOCKET"] = socket
 	return values
 }
 

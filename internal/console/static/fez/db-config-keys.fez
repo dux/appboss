@@ -1,13 +1,8 @@
 <script>
-  const GROUPS = [
-    { id: 'host', title: 'Host keys', note: 'appboss.yaml with apps:' },
-    { id: 'app', title: 'App keys', note: 'appboss.yaml with procfile:' },
-    { id: 'shared', title: 'Shared app keys', note: 'defaults: in the host file, top level in an app file' },
-  ]
-
   class {
     init() {
       this.state.keys = []
+      this.state.blocks = []
       this.state.query = ''
       this.state.groups = []
       this.load()
@@ -15,7 +10,12 @@
 
     async load() {
       try {
-        this.state.keys = await Boss.api('/api/config/keys')
+        const [keys, blocks] = await Promise.all([
+          Dboss.api('/api/config/keys'),
+          Dboss.api('/api/config/blocks'),
+        ])
+        this.state.keys = keys
+        this.state.blocks = blocks
       } catch (error) {
         Toast.show(error.message, true)
       }
@@ -24,13 +24,19 @@
     beforeRender() {
       const query = this.state.query.trim().toLowerCase()
       const matches = (key) => !query || key.path.includes(query) || key.description.toLowerCase().includes(query)
-      this.state.groups = GROUPS
-        .map((group) => ({ ...group, keys: this.state.keys.filter((key) => key.group === group.id && matches(key)) }))
-        .filter((group) => group.keys.length)
+      this.state.groups = this.state.blocks
+        .map((block) => ({ ...block, keys: this.state.keys.filter((key) => key.block === block.id && matches(key)) }))
+        .filter((block) => block.keys.length)
     }
 
     filter(value) {
       this.state.query = value
+    }
+
+    note(scope) {
+      if (scope === 'service') return 'root dboss.yaml'
+      if (scope === 'app') return 'app dboss.yaml'
+      return 'defaults: in the root file, top level in an app file'
     }
   }
 </script>
@@ -41,7 +47,7 @@
   </div>
   {#each state.groups as group}
     <section class="keys-group">
-      <h3>{group.title} <small>{group.note}</small></h3>
+      <h3>{group.title} <small>{note(group.scope)}</small></h3>
       {#each group.keys as key}
         <div class="key-row">
           <div class="key-name">
@@ -58,9 +64,9 @@
             {#if key.default}
               <span class="text-muted">default</span>
               <code>{key.default}</code>
-            {:else}
-              <span class="text-muted">e.g.</span>
-              <code>{key.example}</code>
+            {/if}
+            {#if key.example}
+              <span class="key-example"><span class="text-muted">e.g.</span> <code>{key.example}</code></span>
             {/if}
           </div>
         </div>

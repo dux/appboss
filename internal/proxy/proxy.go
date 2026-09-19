@@ -22,9 +22,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"app-boss/internal/config"
-	"app-boss/internal/logstore"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/logstore"
+	"dboss/internal/super"
 )
 
 const maintenanceRetryAfter = 30
@@ -241,7 +241,7 @@ type spillWriter struct {
 
 func (s *spillWriter) Write(data []byte) (int, error) {
 	if s.file == nil && s.mem.Len()+len(data) > bodyMemoryLimit {
-		file, err := os.CreateTemp("", "appboss-body-*")
+		file, err := os.CreateTemp("", "dboss-body-*")
 		if err != nil {
 			return 0, err
 		}

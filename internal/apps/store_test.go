@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 )
 
 func storeFixture(t *testing.T) (*Store, string) {
@@ -54,7 +54,7 @@ func TestStoreKeepsHistoryAndRestores(t *testing.T) {
 	if strings.Contains(restored.Contents, "www.sinatra.test") {
 		t.Fatalf("restore did not roll back: %q", restored.Contents)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".appboss", "state", "config-history")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".dboss", "state", "config-history")); err != nil {
 		t.Fatalf("history dir missing: %v", err)
 	}
 	if _, err := store.HistoryContents("app:sinatra", "deadbeef"); err == nil {

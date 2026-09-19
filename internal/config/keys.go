@@ -12,193 +12,60 @@ import (
 )
 
 // Key is one documented configuration key: what it is, where it goes and what it holds.
-// Path, Type and Default come from the config structs and Default(), so they cannot drift;
-// only Description and Example are written by hand in keyDocs.
+// Path, Type, Types, Default and PerProcess come from the config structs and Default(), so they
+// cannot drift; Block, Name, Description, Enum and the flags come from KeySpec in keyspecs.go.
 type Key struct {
-	Path        string `json:"path"`
-	Group       string `json:"group"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Default     string `json:"default,omitempty"`
-	Example     string `json:"example,omitempty"`
-	PerProcess  bool   `json:"per_process,omitempty"`
+	Path        string   `json:"path"`
+	Block       string   `json:"block"`
+	Scope       Scope    `json:"scope"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Types       []string `json:"types"`
+	Description string   `json:"description"`
+	Default     string   `json:"default,omitempty"`
+	Example     string   `json:"example,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Secret      bool     `json:"secret,omitempty"`
+	PerProcess  bool     `json:"per_process,omitempty"`
 }
 
-// Groups, in display order. Host keys live in the file with apps:, app keys in the file with
-// procfile:, shared keys under defaults: in the host file and at the top level of an app file.
-const (
-	GroupHost   = "host"
-	GroupApp    = "app"
-	GroupShared = "shared"
-)
-
-type keyDoc struct {
-	description string
-	example     string
-	def         string
-}
-
-var keyDocs = map[string]keyDoc{
-	"apps":                                   {description: "directory of app folders, one entry (folder or symlink) per app", example: "./apps"},
-	"proxy.cloudflare_only":                  {description: "accept a request only when it carries Cloudflare's CF-Ray and CF-Connecting-IP headers; headers are spoofable, so also lock the origin to Cloudflare at the firewall"},
-	"state_dir":                              {description: "session state: process state and the console signing key"},
-	"log_dir":                                {description: "process logs and per-app request logs"},
-	"socket":                                 {description: "unix socket for the control API the CLI talks to"},
-	"proxy.listen":                           {description: "one or more addresses to listen on; owns port 80 and routes every request to an app, empty disables the proxy"},
-	"proxy.trusted_cidrs":                    {description: "only these source CIDRs may connect; empty accepts anyone", example: "[173.245.48.0/20, 2400:cb00::/32]"},
-	"proxy.client_ip_headers":                {description: "headers checked in order for the real client IP"},
-	"proxy.wake.retry_after":                 {description: "seconds sent in Retry-After and the starting page refresh"},
-	"proxy.wake.starting_page":               {description: "page served while an app is stopped or starting"},
-	"proxy.wake.crashed_page":                {description: "page served when an app has crashed"},
-	"proxy.wake.unknown_page":                {description: "page served when no app matches the host"},
-	"proxy.upstream.dial_timeout":            {description: "connect timeout to an app port"},
-	"proxy.upstream.response_header_timeout": {description: "how long an app may take to start responding"},
-	"proxy.upstream.idle_conn_timeout":       {description: "idle keep-alive connection lifetime to an app"},
-	"proxy.upstream.max_idle_conns_per_app":  {description: "idle keep-alive connections kept per app"},
-	"management.host":                        {description: "one or more hostnames of the management console; omit to disable it", example: "boss.example.com"},
-	"management.url":                         {description: "public URL of the console as operators open it; defaults to https://<first management.host>", example: "https://boss.example.com"},
-	"management.auth.realm":                  {description: "AuthCog realm used for sign-in"},
-	"management.auth.admin_emails":           {description: "email addresses allowed into the console", example: "[admin@example.com]"},
-	"management.auth.session_ttl":            {description: "signed console session lifetime"},
-	"management.metrics.enabled":             {description: "serve /healthz, /readyz and /metrics on the management host"},
-	"management.metrics.token":               {description: "when set, /metrics requires this as a bearer token; health endpoints stay open", example: "$METRICS_TOKEN"},
-	"ports.range":                            {description: "inclusive port range appboss owns; the first port is the console"},
-	"daemon.idle_tick":                       {description: "how often idle apps are checked"},
-	"daemon.resume_running":                  {description: "on start, resume the apps in running.json (every app on a first start)"},
-	"daemon.prune_at":                        {description: "local time of the daily request-log prune"},
-	"daemon.vacuum_at":                       {description: "local time of the daily SQLite VACUUM; empty disables it"},
-	"daemon.log_level":                       {description: "appboss's own log level: debug, info, warn, error"},
-	"daemon.log_ingest_interval":             {description: "how often process log segments are sealed and ingested into the log store"},
-	"daemon.audit_retention":                 {description: "how long operator audit rows are kept; 0 keeps them forever"},
-	"notify.url":                             {description: "webhook that receives crash and failure events; empty disables notifications", example: "$ALERT_WEBHOOK_URL"},
-	"notify.format":                          {description: "webhook payload shape: generic, slack, discord or ntfy"},
-	"notify.events":                          {description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed"},
-	"notify.min_interval":                    {description: "quiet period per app and event, so a crash loop does not spam"},
-	"notify.headers":                         {description: "extra headers sent with every webhook request", example: "{Authorization: \"Bearer $TOKEN\"}"},
-
-	"postgres.enabled":             {description: "inspect the host PostgreSQL and run scheduled backups; false hides the console tab"},
-	"postgres.dsn":                 {description: "libpq connection string or URL; empty auto-detects the local socket then 127.0.0.1 using the PG* environment", example: "$DATABASE_URL"},
-	"postgres.backup.dir":          {description: "local directory for database dumps; empty disables local copies"},
-	"postgres.backup.s3":           {description: "default destination: copy every dump to the global s3 bucket"},
-	"postgres.backup.every":        {description: "interval between scheduled backups; 0 makes them manual only"},
-	"postgres.backup.timeout":      {description: "kill a dump that runs longer than this; 0 means no limit"},
-	"postgres.backup.globals":      {description: "also dump roles and tablespaces with pg_dumpall --globals-only"},
-	"postgres.backup.keep.hourly":  {description: "most recent dumps kept, one per hour; 0 disables the bucket"},
-	"postgres.backup.keep.daily":   {description: "most recent dumps kept, one per day; 0 disables the bucket"},
-	"postgres.backup.keep.weekly":  {description: "most recent dumps kept, one per week; 0 disables the bucket"},
-	"postgres.backup.keep.monthly": {description: "most recent dumps kept, one per month; 0 disables the bucket"},
-	"postgres.backup.databases":    {description: "databases to back up, keyed by name; the presence of a key selects it, and local/s3 override the default destinations", example: "{myapp_production: {}, reports: {local: false}}"},
-	"s3.endpoint":                  {description: "S3-compatible endpoint; empty disables object storage", example: "https://<account>.r2.cloudflarestorage.com"},
-	"s3.region":                    {description: "bucket region; auto is the R2 default"},
-	"s3.bucket":                    {description: "bucket that receives backup objects", example: "appboss-backups"},
-	"s3.prefix":                    {description: "key prefix prepended to every object", example: "pg/"},
-	"s3.access_key":                {description: "S3 access key id", example: "$S3_ACCESS_KEY"},
-	"s3.secret_key":                {description: "S3 secret access key", example: "$S3_SECRET_KEY"},
-	"s3.path_style":                {description: "use path-style addressing, required by MinIO and some other S3 servers"},
-	"s3.sse":                       {description: "server-side encryption algorithm for uploads; empty uses the bucket default", example: "AES256"},
-
-	"procfile":       {description: "process commands by name; names match [a-z][a-z0-9_-]*", example: "{web: bundle exec puma -C config/puma.rb}"},
-	"hosts":          {description: "hostnames routed to the web process; a leading *. matches subdomains, a leading . matches the domain and its subdomains", example: "[\".myapp.com\"]"},
-	"web_process":    {description: "process that receives proxied traffic", def: "web"},
-	"canonical_host": {description: "301 every other host of this app to this one; must be in hosts", example: "myapp.com"},
-	"autostart":      {description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", def: "true"},
-	"processes":      {description: "per-process overrides of the process keys, by process name", example: "{worker: {stop_timeout: 120s}}"},
-	"cron":           {description: "scheduled one-shot commands by name, run on an every interval or a cron expression", example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
-	"hooks":          {description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>", example: "{deploy: {command: git pull, restart: true}}"},
-
-	"pubsub.path":             {description: "URL prefix that serves realtime channels on the app hosts; empty disables the feature", example: "/socketio"},
-	"pubsub.secret":           {description: "bearer token HTTP publishers must present; empty generates one per app under state_dir", example: "$PUBSUB_SECRET"},
-	"pubsub.replay":           {description: "messages kept per channel and replayed to a subscriber that connects late"},
-	"pubsub.max_clients":      {description: "subscriber limit per app; further connections are refused with 503"},
-	"pubsub.max_message_size": {description: "largest accepted publish body; 0 means unlimited"},
-	"pubsub.client_events":    {description: "allow a subscribed WebSocket client to publish back to its channel"},
-	"pubsub.test":             {description: "serve an interactive self-test page at <path>/_test"},
-
-	"idle_stop":           {description: "stop the app after this long without proxied requests; 0 never"},
-	"health":              {description: "readiness check: tcp, or http:<path> expecting 2xx"},
-	"health_interval":     {description: "poll interval of the readiness and liveness checks"},
-	"health_timeout":      {description: "give-up time of the readiness check; counts as a failed restart"},
-	"unhealthy_threshold": {description: "consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks"},
-	"stop_timeout":        {description: "grace period between stop_signal and SIGKILL"},
-	"stop_signal":         {description: "signal sent to the process group on stop: TERM, INT, QUIT, USR1, USR2"},
-	"restart":             {description: "restart policy on exit: on-failure, always, never"},
-	"max_restarts":        {description: "consecutive failures before the app is marked crashed"},
-	"restart_reset":       {description: "uptime after which the failure counter resets"},
-	"restart_backoff":     {description: "delay between restarts: first delay, multiplier, cap"},
-	"log_max_size":        {description: "rotate a process log file above this size"},
-	"log_keep":            {description: "rotated log files kept per process; 0 truncates the file in place"},
-	"log_tail_lines":      {description: "lines kept in memory for appboss logs"},
-	"log_retention":       {description: "how long request rows and app log files are kept; 0 disables both"},
-	"stdout_retention":    {description: "how long process stdout and the appboss daemon log are kept; 0 disables both"},
-	"log_flush":           {description: "request log batch insert interval"},
-	"shell":               {description: "run commands through sh -c instead of exec"},
-	"env":                 {description: "extra environment for every process, lowest priority", example: "{RAILS_ENV: production}"},
-	"resources":           {description: "resource backend: auto, cgroup, procgroup"},
-	"memory_max":          {description: "memory limit, cgroup backend only; 0 unlimited"},
-	"cpu_max":             {description: "CPU limit in percent of one core, cgroup backend only; 0 unlimited"},
-	"static":              {description: "directory served straight from disk for GET and HEAD, relative to the app", example: "./public"},
-	"health_endpoint":     {description: "public status path on the app's own hosts: 200 when running, 503 otherwise; empty disables"},
-	"static_immutable":    {description: "path prefixes under static cached as immutable for a year"},
-	"max_body":            {description: "request body limit; 0 none"},
-	"basic_auth":          {description: "HTTP basic auth users to bcrypt hashes from appboss password", example: "{alice: \"$2a$10$...\"}"},
-	"allow_ips":           {description: "CIDRs allowed to reach the app; empty allows everyone", example: "[10.0.0.0/8]"},
-	"headers":             {description: "response headers added to every response; an empty value removes one", example: "{X-Frame-Options: DENY}"},
-	"maintenance_page":    {description: "file served in maintenance mode, relative to the app", example: "./public/503.html"},
-}
-
-// Keys lists every configuration key in display order: host, app, then shared keys.
+// Keys lists every configuration key in display order: service keys, app keys, then the keys
+// shared by both (shown once, with scope both).
 func Keys() []Key {
 	defaults := Default()
 	var keys []Key
-	walk(reflect.ValueOf(defaults), "", GroupHost, false, func(key Key) {
-		if key.Path != "defaults" && !strings.HasPrefix(key.Path, "defaults.") {
-			keys = append(keys, key)
-		}
-	})
-	app := App{WebProcess: "web", Autostart: AutostartOn}
-	walk(reflect.ValueOf(app), "", GroupApp, false, func(key Key) {
-		if _, shared := keyDocs[key.Path]; shared && isSharedKey(key.Path) {
+	walk(reflect.ValueOf(defaults), "", false, func(key Key) {
+		if strings.HasPrefix(key.Path, "defaults.") {
 			return
 		}
 		keys = append(keys, key)
 	})
-	walk(reflect.ValueOf(defaults.Defaults.Process), "", GroupShared, true, func(key Key) { keys = append(keys, key) })
-	walk(reflect.ValueOf(defaults.Defaults.Web), "", GroupShared, false, func(key Key) { keys = append(keys, key) })
+	app := App{WebProcess: "web", Autostart: AutostartOn}
+	walk(reflect.ValueOf(app), "", false, func(key Key) {
+		if key.Scope == ScopeBoth {
+			return
+		}
+		keys = append(keys, key)
+	})
+	walk(reflect.ValueOf(defaults.Defaults.Process), "", true, func(key Key) { keys = append(keys, key) })
+	walk(reflect.ValueOf(defaults.Defaults.Web), "", false, func(key Key) { keys = append(keys, key) })
 	return keys
 }
 
-// KeyPaths returns every path Keys documents, for the coverage test.
+// KeyPaths returns every path the registry documents, for the coverage test.
 func KeyPaths() []string {
-	paths := make([]string, 0, len(keyDocs))
-	for path := range keyDocs {
+	paths := make([]string, 0, len(keySpecs))
+	for path := range keySpecs {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	return paths
 }
 
-func isSharedKey(path string) bool {
-	if strings.HasPrefix(path, "pubsub.") {
-		return true
-	}
-	for _, group := range []reflect.Type{reflect.TypeOf(Process{}), reflect.TypeOf(Web{})} {
-		for i := 0; i < group.NumField(); i++ {
-			if yamlName(group.Field(i)) == path {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func yamlName(field reflect.StructField) string {
-	name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
-	return name
-}
-
 // walk visits the yaml-tagged fields of value depth first, expanding inline structs in place
 // and nested structs under their key. Leaf values become Keys.
-func walk(value reflect.Value, prefix, group string, perProcess bool, visit func(Key)) {
+func walk(value reflect.Value, prefix string, perProcess bool, visit func(Key)) {
 	valueType := value.Type()
 	for i := 0; i < valueType.NumField(); i++ {
 		field := valueType.Field(i)
@@ -208,56 +75,69 @@ func walk(value reflect.Value, prefix, group string, perProcess bool, visit func
 		}
 		name, options, _ := strings.Cut(tag, ",")
 		if strings.Contains(options, "inline") {
-			walk(value.Field(i), prefix, group, perProcess, visit)
+			walk(value.Field(i), prefix, perProcess, visit)
 			continue
 		}
 		path := prefix + name
 		if field.Type.Kind() == reflect.Struct {
-			walk(value.Field(i), path+".", group, perProcess, visit)
+			walk(value.Field(i), path+".", perProcess, visit)
 			continue
 		}
-		doc := keyDocs[path]
-		key := Key{Path: path, Group: group, Type: typeName(field.Type), Description: doc.description, PerProcess: perProcess}
-		key.Default = doc.def
-		if key.Default == "" {
-			key.Default = formatValue(value.Field(i))
+		spec := keySpecs[path]
+		types := typesOf(field.Type)
+		key := Key{
+			Path:        path,
+			Block:       spec.Block,
+			Scope:       blockScope(spec.Block),
+			Name:        spec.Name,
+			Type:        strings.Join(types, " | "),
+			Types:       types,
+			Description: spec.Description,
+			Enum:        spec.Enum,
+			Required:    spec.Required,
+			Secret:      spec.Secret,
+			PerProcess:  perProcess,
 		}
-		if key.Default == "" {
-			key.Example = doc.example
+		key.Default = formatValue(value.Field(i))
+		key.Example = spec.Example
+		if key.Example == key.Default {
+			key.Example = ""
 		}
 		visit(key)
 	}
 }
 
-func typeName(t reflect.Type) string {
+// typesOf lists the YAML shapes a field accepts. Most Go types have one; List also takes a
+// single scalar, and Autostart the booleans plus the word button.
+func typesOf(t reflect.Type) []string {
 	switch t {
 	case reflect.TypeOf(Duration(0)):
-		return "duration"
+		return []string{"duration"}
 	case reflect.TypeOf(Size(0)):
-		return "size"
+		return []string{"size"}
 	case reflect.TypeOf(List(nil)):
-		return "list"
+		return []string{"string", "list"}
 	case reflect.TypeOf(Autostart("")):
-		return "bool | button"
+		return []string{"bool", "button"}
 	}
 	switch t.Kind() {
 	case reflect.String:
-		return "string"
+		return []string{"string"}
 	case reflect.Int:
-		return "int"
+		return []string{"int"}
 	case reflect.Bool:
-		return "bool"
+		return []string{"bool"}
 	case reflect.Slice:
-		return "list"
+		return []string{"list"}
 	case reflect.Array:
-		return "[from, to]"
+		return []string{"[from, to]"}
 	case reflect.Map:
-		return "map"
+		return []string{"map"}
 	}
-	return t.Kind().String()
+	return []string{t.Kind().String()}
 }
 
-// formatValue renders a default the way it is written in appboss.yaml. Empty strings, lists
+// formatValue renders a default the way it is written in dboss.yaml. Empty strings, lists
 // and maps render as "" so the caller falls back to the example.
 func formatValue(value reflect.Value) string {
 	switch v := value.Interface().(type) {

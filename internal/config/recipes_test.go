@@ -41,12 +41,12 @@ func TestRecipesReferenceRealKeys(t *testing.T) {
 			}
 			switch recipe.Scope {
 			case RecipeHost:
-				if key.Group != GroupHost {
-					t.Errorf("host recipe %q field %q has group %s", recipe.ID, field.Path, key.Group)
+				if key.Scope != ScopeService {
+					t.Errorf("host recipe %q field %q has scope %s", recipe.ID, field.Path, key.Scope)
 				}
 			case RecipeApp:
-				if key.Group != GroupApp && key.Group != GroupShared {
-					t.Errorf("app recipe %q field %q has group %s", recipe.ID, field.Path, key.Group)
+				if key.Scope != ScopeApp && key.Scope != ScopeBoth {
+					t.Errorf("app recipe %q field %q has scope %s", recipe.ID, field.Path, key.Scope)
 				}
 			}
 			if len(field.Options) > 0 && field.Kind != "select" {
@@ -58,23 +58,23 @@ func TestRecipesReferenceRealKeys(t *testing.T) {
 
 func TestWidgetKind(t *testing.T) {
 	for _, test := range []struct {
-		key     Key
-		options []string
-		want    string
+		key  Key
+		want string
 	}{
-		{key: Key{Type: "string"}, want: "text"},
-		{key: Key{Type: "int"}, want: "number"},
-		{key: Key{Type: "bool"}, want: "bool"},
-		{key: Key{Type: "duration"}, want: "duration"},
-		{key: Key{Type: "size"}, want: "size"},
-		{key: Key{Type: "list"}, want: "list"},
-		{key: Key{Type: "map"}, want: "map"},
-		{key: Key{Type: "[from, to]"}, want: "range"},
-		{key: Key{Type: "string"}, options: []string{"a"}, want: "select"},
-		{key: Key{Type: "bool | button"}, options: []string{"true", "false", "button"}, want: "select"},
+		{key: Key{Types: []string{"string"}}, want: "text"},
+		{key: Key{Types: []string{"int"}}, want: "number"},
+		{key: Key{Types: []string{"bool"}}, want: "bool"},
+		{key: Key{Types: []string{"duration"}}, want: "duration"},
+		{key: Key{Types: []string{"size"}}, want: "size"},
+		{key: Key{Types: []string{"list"}}, want: "list"},
+		{key: Key{Types: []string{"string", "list"}}, want: "list"},
+		{key: Key{Types: []string{"map"}}, want: "map"},
+		{key: Key{Types: []string{"[from, to]"}}, want: "range"},
+		{key: Key{Types: []string{"string"}, Enum: []string{"a"}}, want: "select"},
+		{key: Key{Types: []string{"bool", "button"}, Enum: []string{"true", "false", "button"}}, want: "select"},
 	} {
-		if got := widgetKind(test.key, test.options); got != test.want {
-			t.Errorf("widgetKind(%s, %v) = %s, want %s", test.key.Type, test.options, got, test.want)
+		if got := widgetKind(test.key); got != test.want {
+			t.Errorf("widgetKind(%v, %v) = %s, want %s", test.key.Types, test.key.Enum, got, test.want)
 		}
 	}
 }

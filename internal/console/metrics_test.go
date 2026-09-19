@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"app-boss/internal/super"
+	"dboss/internal/super"
 )
 
 func TestHealthAndReadyEndpoints(t *testing.T) {
@@ -17,13 +17,13 @@ func TestHealthAndReadyEndpoints(t *testing.T) {
 	handler := newTestHandler(t, manager, nil)
 
 	health := httptest.NewRecorder()
-	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/healthz", nil))
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/healthz", nil))
 	if health.Code != http.StatusOK || health.Body.String() != "ok\n" {
 		t.Fatalf("healthz = %d %q", health.Code, health.Body.String())
 	}
 
 	ready := httptest.NewRecorder()
-	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/readyz", nil))
+	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/readyz", nil))
 	if ready.Code != http.StatusOK {
 		t.Fatalf("readyz = %d: %s", ready.Code, ready.Body.String())
 	}
@@ -37,7 +37,7 @@ func TestReadyzFailsWhileAnAutostartAppIsDown(t *testing.T) {
 	}}
 	handler := newTestHandler(t, manager, nil)
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/readyz", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/readyz", nil))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz = %d: %s", response.Code, response.Body.String())
 	}
@@ -51,18 +51,18 @@ func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
 	handler := newTestHandler(t, manager, nil)
 
 	open := httptest.NewRecorder()
-	handler.ServeHTTP(open, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/metrics", nil))
-	if open.Code != http.StatusOK || !strings.Contains(open.Body.String(), `appboss_app_up{app="web"} 1`) {
+	handler.ServeHTTP(open, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil))
+	if open.Code != http.StatusOK || !strings.Contains(open.Body.String(), `dboss_app_up{app="web"} 1`) {
 		t.Fatalf("open metrics = %d: %s", open.Code, open.Body.String())
 	}
 
 	handler.metricsToken = "s3cret"
 	denied := httptest.NewRecorder()
-	handler.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/metrics", nil))
+	handler.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil))
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("tokenless metrics = %d", denied.Code)
 	}
-	allowed := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/metrics", nil)
+	allowed := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil)
 	allowed.Header.Set("Authorization", "Bearer s3cret")
 	allowedResponse := httptest.NewRecorder()
 	handler.ServeHTTP(allowedResponse, allowed)
@@ -76,8 +76,8 @@ func TestMetricsDisabledHidesEndpoints(t *testing.T) {
 	handler.metricsEnabled = false
 	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081"+path, nil))
-		if response.Code == http.StatusOK || strings.Contains(response.Body.String(), "appboss_app_up") {
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081"+path, nil))
+		if response.Code == http.StatusOK || strings.Contains(response.Body.String(), "dboss_app_up") {
 			t.Fatalf("%s = %d, want the endpoint disabled", path, response.Code)
 		}
 	}

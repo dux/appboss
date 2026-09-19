@@ -1,23 +1,23 @@
 #!/bin/sh
-# Install an appboss release for this machine.
+# Install a dboss release for this machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dux/appboss/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh
 #
 # Overrides:
-#   APPBOSS_VERSION      release tag to install, e.g. v0.1.0 (default: latest)
-#   APPBOSS_INSTALL_DIR  target directory (default: /usr/local/bin)
+#   DBOSS_VERSION      release tag to install, e.g. v0.1.0 (default: latest)
+#   DBOSS_INSTALL_DIR  target directory (default: /usr/local/bin)
 
 set -eu
 
-repo="dux/appboss"
-version="${APPBOSS_VERSION:-latest}"
-dir="${APPBOSS_INSTALL_DIR:-/usr/local/bin}"
+repo="dux/dboss"
+version="${DBOSS_VERSION:-latest}"
+dir="${DBOSS_INSTALL_DIR:-/usr/local/bin}"
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$os" in
 	linux | darwin) ;;
 	*)
-		printf 'appboss: unsupported OS: %s\n' "$os" >&2
+		printf 'dboss: unsupported OS: %s\n' "$os" >&2
 		exit 1
 		;;
 esac
@@ -27,7 +27,7 @@ case "$arch" in
 	x86_64 | amd64) arch=amd64 ;;
 	arm64 | aarch64) arch=arm64 ;;
 	*)
-		printf 'appboss: unsupported architecture: %s\n' "$arch" >&2
+		printf 'dboss: unsupported architecture: %s\n' "$arch" >&2
 		exit 1
 		;;
 esac
@@ -37,11 +37,11 @@ if [ "$version" = latest ]; then
 		sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 fi
 if [ -z "$version" ]; then
-	printf 'appboss: could not resolve a release for %s\n' "$repo" >&2
+	printf 'dboss: could not resolve a release for %s\n' "$repo" >&2
 	exit 1
 fi
 
-asset="appboss_${os}_${arch}"
+asset="dboss_${os}_${arch}"
 base="https://github.com/$repo/releases/download/$version"
 
 tmp=$(mktemp -d)
@@ -52,7 +52,7 @@ curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt"
 
 expected=$(awk -v asset="$asset" '$2 == asset {print $1}' "$tmp/checksums.txt")
 if [ -z "$expected" ]; then
-	printf 'appboss: no checksum for %s in %s\n' "$asset" "$version" >&2
+	printf 'dboss: no checksum for %s in %s\n' "$asset" "$version" >&2
 	exit 1
 fi
 
@@ -63,17 +63,17 @@ else
 fi
 
 if [ "$expected" != "$actual" ]; then
-	printf 'appboss: checksum mismatch for %s\n  expected %s\n  actual   %s\n' "$asset" "$expected" "$actual" >&2
+	printf 'dboss: checksum mismatch for %s\n  expected %s\n  actual   %s\n' "$asset" "$expected" "$actual" >&2
 	exit 1
 fi
 
 chmod +x "$tmp/$asset"
 if [ -w "$dir" ]; then
-	mv "$tmp/$asset" "$dir/appboss"
+	mv "$tmp/$asset" "$dir/dboss"
 else
 	sudo mkdir -p "$dir"
-	sudo mv "$tmp/$asset" "$dir/appboss"
+	sudo mv "$tmp/$asset" "$dir/dboss"
 fi
 
-printf 'installed appboss %s to %s/appboss\n' "$version" "$dir"
-printf 'next: appboss start   # runs the host in this folder, apps in ./apps\n'
+printf 'installed dboss %s to %s/dboss\n' "$version" "$dir"
+printf 'next: dboss start   # runs the host in this folder, apps in ./apps\n'

@@ -60,7 +60,7 @@ func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 	if cfg.Apps != filepath.Join(dir, "apps") || cfg.Defaults.IdleStop.Value() != 2*time.Hour || cfg.Ports.Range[0] != 3100 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.Dir != dir || cfg.App != nil || cfg.Socket != filepath.Join(dir, ".appboss", "appboss.sock") {
+	if cfg.Dir != dir || cfg.App != nil || cfg.Socket != filepath.Join(dir, ".dboss", "dboss.sock") {
 		t.Fatalf("unexpected root fields: dir=%q app=%v socket=%q", cfg.Dir, cfg.App, cfg.Socket)
 	}
 	writeConfigFile(t, path, "apps: ./apps\nunknown: true\n")
@@ -111,12 +111,12 @@ func TestManagementPublicURLDerivesFromHost(t *testing.T) {
 	if url := cfg.Management.PublicURL(); url != "" {
 		t.Fatalf("disabled management url = %q", url)
 	}
-	cfg.Management.Host = List{"boss.example.com", "boss.internal"}
-	if url := cfg.Management.PublicURL(); url != "https://boss.example.com" {
+	cfg.Management.Host = List{"dboss.example.com", "dboss.internal"}
+	if url := cfg.Management.PublicURL(); url != "https://dboss.example.com" {
 		t.Fatalf("derived management url = %q", url)
 	}
-	cfg.Management.URL = "http://boss.example.com/"
-	if url := cfg.Management.PublicURL(); url != "http://boss.example.com" {
+	cfg.Management.URL = "http://dboss.example.com/"
+	if url := cfg.Management.PublicURL(); url != "http://dboss.example.com" {
 		t.Fatalf("url override = %q", url)
 	}
 }
@@ -226,15 +226,15 @@ func TestListKeysAcceptScalarOrSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, FileName)
-	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", 127.0.0.1:8081]\n  trusted_cidrs: 10.0.0.0/8\nmanagement:\n  host: [boss.example.com, boss.internal]\n  auth:\n    admin_emails: admin@example.com\n")
+	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", 127.0.0.1:8081]\n  trusted_cidrs: 10.0.0.0/8\nmanagement:\n  host: [dboss.example.com, dboss.internal]\n  auth:\n    admin_emails: admin@example.com\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(cfg.Proxy.Listen, ",") != ":8080,127.0.0.1:8081" || strings.Join(cfg.Management.Host, ",") != "boss.example.com,boss.internal" || strings.Join(cfg.Proxy.TrustedCIDRs, ",") != "10.0.0.0/8" || strings.Join(cfg.Management.Auth.AdminEmails, ",") != "admin@example.com" {
+	if strings.Join(cfg.Proxy.Listen, ",") != ":8080,127.0.0.1:8081" || strings.Join(cfg.Management.Host, ",") != "dboss.example.com,dboss.internal" || strings.Join(cfg.Proxy.TrustedCIDRs, ",") != "10.0.0.0/8" || strings.Join(cfg.Management.Auth.AdminEmails, ",") != "admin@example.com" {
 		t.Fatalf("unexpected lists: listen=%v host=%v cidrs=%v emails=%v", cfg.Proxy.Listen, cfg.Management.Host, cfg.Proxy.TrustedCIDRs, cfg.Management.Auth.AdminEmails)
 	}
-	writeConfigFile(t, path, "apps: ./apps\nmanagement:\n  host: [boss.example.com, Boss.Example.com]\n  auth:\n    admin_emails: admin@example.com\n")
+	writeConfigFile(t, path, "apps: ./apps\nmanagement:\n  host: [dboss.example.com, dboss.Example.com]\n  auth:\n    admin_emails: admin@example.com\n")
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("duplicate management host = %v", err)
 	}
@@ -247,7 +247,7 @@ func TestListKeysAcceptScalarOrSequence(t *testing.T) {
 func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	cfg := Default()
 	cfg.Apps = "/apps"
-	cfg.Management.Host = List{"boss.example.com"}
+	cfg.Management.Host = List{"dboss.example.com"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing admin email error")
 	}
@@ -264,14 +264,14 @@ func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 func TestManagementURLMustMatchAHost(t *testing.T) {
 	cfg := Default()
 	cfg.Apps = "/apps"
-	cfg.Management.Host = List{"boss.example.com"}
+	cfg.Management.Host = List{"dboss.example.com"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	for value, wantErr := range map[string]string{
-		"https://boss.example.com":      "",
-		"http://Boss.Example.com:8080/": "",
-		"boss.example.com":              "invalid URL",
-		"ftp://boss.example.com":        "invalid URL",
-		"https://other.example.com":     "not one of management.host",
+		"https://dboss.example.com":      "",
+		"http://dboss.Example.com:8080/": "",
+		"dboss.example.com":              "invalid URL",
+		"ftp://dboss.example.com":        "invalid URL",
+		"https://other.example.com":      "not one of management.host",
 	} {
 		cfg.Management.URL = value
 		err := cfg.Validate()
@@ -393,7 +393,7 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	defaults.Headers = map[string]string{"X-Frame-Options": "DENY"}
 	defaults.BasicAuth = map[string]string{"ops": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}
 	data := "procfile:\n  web: ./server\nhosts: [demo.test, www.demo.test]\ncanonical_host: demo.test\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic: ./public\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
-	app, err := ParseApp([]byte(data), "app/appboss.yaml", defaults)
+	app, err := ParseApp([]byte(data), "app/dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestUnhealthyThreshold(t *testing.T) {
 		t.Fatalf("default unhealthy_threshold = %d, want 3", got)
 	}
 	defaults := Default().Defaults
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: 5\nprocesses:\n  web:\n    unhealthy_threshold: 0\n"), "appboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: 5\nprocesses:\n  web:\n    unhealthy_threshold: 0\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestUnhealthyThreshold(t *testing.T) {
 	if got := app.Process("web").UnhealthyThreshold; got != 0 {
 		t.Fatalf("process unhealthy_threshold = %d, want 0", got)
 	}
-	_, err = ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: -1\n"), "appboss.yaml", defaults)
+	_, err = ParseApp([]byte("procfile:\n  web: ./server\nunhealthy_threshold: -1\n"), "dboss.yaml", defaults)
 	if err == nil || !strings.Contains(err.Error(), "unhealthy_threshold") {
 		t.Fatalf("negative unhealthy_threshold: got %v", err)
 	}
@@ -445,7 +445,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
 	} {
-		_, err := ParseApp([]byte(test.data), "appboss.yaml", defaults)
+		_, err := ParseApp([]byte(test.data), "dboss.yaml", defaults)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: got %v, want error containing %q", test.name, err, test.want)
 		}
@@ -453,45 +453,45 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 }
 
 func TestParseRootValidatesWithoutDisk(t *testing.T) {
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  static: ./public\n"), "/srv/appboss.yaml")
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  static: ./public\n"), "/srv/dboss.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Apps != "/srv/apps" || cfg.Defaults.Static != "./public" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  nope: 1\n"), "/srv/appboss.yaml"); err == nil {
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  nope: 1\n"), "/srv/dboss.yaml"); err == nil {
 		t.Fatal("expected unknown key error")
 	}
 }
 
 func TestEnvExpansion(t *testing.T) {
-	t.Setenv("APPBOSS_TEST_HOST", "myapp.com")
-	t.Setenv("APPBOSS_TEST_COUNT", "2")
-	t.Setenv("APPBOSS_TEST_IDLE", "90s")
-	t.Setenv("APPBOSS_TEST_MAX", "512m")
+	t.Setenv("DBOSS_TEST_HOST", "myapp.com")
+	t.Setenv("DBOSS_TEST_COUNT", "2")
+	t.Setenv("DBOSS_TEST_IDLE", "90s")
+	t.Setenv("DBOSS_TEST_MAX", "512m")
 
 	const hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 	cfg, err := Parse([]byte(`apps: ./apps
-state_dir: /var/lib/$APPBOSS_TEST_HOST
+state_dir: /var/lib/$DBOSS_TEST_HOST
 proxy:
   listen: [":8080"]
   wake:
-    retry_after: $APPBOSS_TEST_COUNT
+    retry_after: $DBOSS_TEST_COUNT
 management:
-  host: [$APPBOSS_TEST_HOST]
+  host: [$DBOSS_TEST_HOST]
   auth:
     admin_emails: [admin@example.com]
 defaults:
-  idle_stop: $APPBOSS_TEST_IDLE
-  memory_max: $APPBOSS_TEST_MAX
+  idle_stop: $DBOSS_TEST_IDLE
+  memory_max: $DBOSS_TEST_MAX
   headers:
-    X-Test: $lower $1 $APPBOSS_TEST_UNSET
+    X-Test: $lower $1 $DBOSS_TEST_UNSET
   env:
-    MALLOC_ARENA_MAX: $APPBOSS_TEST_COUNT
+    MALLOC_ARENA_MAX: $DBOSS_TEST_COUNT
   basic_auth:
     ops: `+hash+`
-`), "/srv/appboss.yaml")
+`), "/srv/dboss.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +507,7 @@ defaults:
 	if cfg.Defaults.IdleStop.Value() != 90*time.Second || cfg.Defaults.MemoryMax != Size(512<<20) {
 		t.Errorf("idle_stop/memory_max = %v/%v", cfg.Defaults.IdleStop, cfg.Defaults.MemoryMax)
 	}
-	if cfg.Defaults.Headers["X-Test"] != "$lower $1 $APPBOSS_TEST_UNSET" {
+	if cfg.Defaults.Headers["X-Test"] != "$lower $1 $DBOSS_TEST_UNSET" {
 		t.Errorf("unset/lowercase must stay literal, got %q", cfg.Defaults.Headers["X-Test"])
 	}
 	if cfg.Defaults.Env["MALLOC_ARENA_MAX"] != "2" {
@@ -519,21 +519,21 @@ defaults:
 }
 
 func TestEnvExpansionSkipsCommands(t *testing.T) {
-	t.Setenv("APPBOSS_TEST_PORT", "7777")
+	t.Setenv("DBOSS_TEST_PORT", "7777")
 	app, err := ParseApp([]byte(`procfile:
-  web: run --port $APPBOSS_TEST_PORT
+  web: run --port $DBOSS_TEST_PORT
 cron:
   tick:
     schedule: every 5m
-    command: run $APPBOSS_TEST_PORT
-`), "/srv/apps/demo/appboss.yaml", Default().Defaults)
+    command: run $DBOSS_TEST_PORT
+`), "/srv/apps/demo/dboss.yaml", Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.Procfile["web"] != "run --port $APPBOSS_TEST_PORT" {
+	if app.Procfile["web"] != "run --port $DBOSS_TEST_PORT" {
 		t.Errorf("procfile expanded: %q", app.Procfile["web"])
 	}
-	if app.Cron["tick"].Command != "run $APPBOSS_TEST_PORT" {
+	if app.Cron["tick"].Command != "run $DBOSS_TEST_PORT" {
 		t.Errorf("cron command expanded: %q", app.Cron["tick"].Command)
 	}
 }
@@ -542,11 +542,11 @@ func TestStdoutRetentionDefaultsAndValidates(t *testing.T) {
 	if got := Default().Defaults.StdoutRetention.Value(); got != 3*time.Hour {
 		t.Fatalf("stdout_retention default = %v, want 3h", got)
 	}
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: 6h\n"), "/srv/appboss.yaml")
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: 6h\n"), "/srv/dboss.yaml")
 	if err != nil || cfg.Defaults.StdoutRetention.Value() != 6*time.Hour {
 		t.Fatalf("stdout_retention override: %v %v", err, cfg.Defaults.StdoutRetention.Value())
 	}
-	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: -1h\n"), "/srv/appboss.yaml"); err == nil {
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  stdout_retention: -1h\n"), "/srv/dboss.yaml"); err == nil {
 		t.Fatal("negative stdout_retention should fail")
 	}
 }
@@ -568,23 +568,23 @@ func TestRestartRequiredListsHostKeys(t *testing.T) {
 
 func TestErrorsPointAtLineAndKey(t *testing.T) {
 	for _, test := range []struct{ name, data, want, hint string }{
-		{"typo", "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n", "appboss.yaml:3: defaults.idle_stpo: unknown key", `did you mean "idle_stop"?`},
-		{"duration", "apps: ./apps\ndefaults:\n  idle_stop: 2 hours\n", `appboss.yaml:3: defaults.idle_stop: invalid duration "2 hours"`, "durations look like"},
-		{"enum", "apps: ./apps\ndefaults:\n  restart: sometimes\n", `appboss.yaml:3: defaults.restart: must be on-failure, always or never, not "sometimes"`, ""},
-		{"listen", "apps: ./apps\nproxy:\n  listen: 80\n", `appboss.yaml:3: proxy.listen: invalid address "80"`, "host:port"},
-		{"syntax", "apps: ./apps\ndefaults:\n  idle_stop: [1\n", "appboss.yaml:2: syntax error", ""},
+		{"typo", "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n", "dboss.yaml:3: defaults.idle_stpo: unknown key", `did you mean "idle_stop"?`},
+		{"duration", "apps: ./apps\ndefaults:\n  idle_stop: 2 hours\n", `dboss.yaml:3: defaults.idle_stop: invalid duration "2 hours"`, "durations look like"},
+		{"enum", "apps: ./apps\ndefaults:\n  restart: sometimes\n", `dboss.yaml:3: defaults.restart: must be on-failure, always or never, not "sometimes"`, ""},
+		{"listen", "apps: ./apps\nproxy:\n  listen: 80\n", `dboss.yaml:3: proxy.listen: invalid address "80"`, "host:port"},
+		{"syntax", "apps: ./apps\ndefaults:\n  idle_stop: [1\n", "dboss.yaml:2: syntax error", ""},
 	} {
-		_, err := Parse([]byte(test.data), "/srv/appboss.yaml")
+		_, err := Parse([]byte(test.data), "/srv/dboss.yaml")
 		if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), test.hint) {
 			t.Errorf("%s: got %v, want %q with hint %q", test.name, err, test.want, test.hint)
 		}
 	}
-	_, err := ParseApp([]byte("procfile:\n  web: ./x\nhost: [a.test]\n"), "/srv/apps/demo/appboss.yaml", Default().Defaults)
-	if err == nil || !strings.Contains(err.Error(), `appboss.yaml:3: host: unknown key`) || !strings.Contains(err.Error(), `did you mean "hosts"?`) {
+	_, err := ParseApp([]byte("procfile:\n  web: ./x\nhost: [a.test]\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
+	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: host: unknown key`) || !strings.Contains(err.Error(), `did you mean "hosts"?`) {
 		t.Errorf("app typo: got %v", err)
 	}
 	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/appboss.yaml" {
+	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
 		t.Errorf("structured error = %+v", cfgErr)
 	}
 }
@@ -595,7 +595,7 @@ func TestPubsubConfig(t *testing.T) {
 		t.Fatalf("unexpected pubsub defaults: %+v", defaults.Pubsub)
 	}
 
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\npubsub:\n  path: /socketio\n  replay: 0\n"), "appboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\npubsub:\n  path: /socketio\n  replay: 0\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestPubsubConfig(t *testing.T) {
 		t.Fatalf("override did not merge with defaults: %+v", app.Pubsub)
 	}
 
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  pubsub:\n    path: /events\n    client_events: false\n"), "/srv/appboss.yaml")
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  pubsub:\n    path: /events\n    client_events: false\n"), "/srv/dboss.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestPubsubConfig(t *testing.T) {
 
 	for _, path := range []string{"/", "socketio", "/socketio/", "/socket io", "/a//b", "/a$b"} {
 		data := "procfile:\n  web: ./server\npubsub:\n  path: \"" + path + "\"\n"
-		if _, err := ParseApp([]byte(data), "appboss.yaml", defaults); err == nil {
+		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("path %q should be invalid", path)
 		}
 	}

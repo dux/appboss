@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 )
 
 func TestParseProcfile(t *testing.T) {

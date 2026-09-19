@@ -25,8 +25,8 @@
       this.state.loading = true
       try {
         const data = refresh
-          ? await Boss.api('/api/sys/refresh', { method: 'POST', body: '{}' })
-          : await Boss.api('/api/sys')
+          ? await Dboss.api('/api/sys/refresh', { method: 'POST', body: '{}' })
+          : await Dboss.api('/api/sys')
         this.state.snapshot = data.snapshot
         this.state.error = ''
       } catch (error) {
@@ -178,7 +178,7 @@
       <div class="datagrid-item"><span class="subheader">Kernel</span><span class="datagrid-content">{state.host.kernel || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">Uptime</span><span class="datagrid-content">{duration(state.host.uptime_seconds)}</span></div>
       <div class="datagrid-item"><span class="subheader">CPUs</span><span class="datagrid-content">{state.host.cpus}</span></div>
-      <div class="datagrid-item"><span class="subheader">appboss</span><span class="datagrid-content">{state.runtime.appboss || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">dboss</span><span class="datagrid-content">{state.runtime.dboss || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">Go</span><span class="datagrid-content">{state.runtime.go_version || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">PID</span><span class="datagrid-content">{state.runtime.pid || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">Goroutines</span><span class="datagrid-content">{state.runtime.goroutines || '-'}</span></div>

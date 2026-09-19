@@ -26,9 +26,9 @@ jobs:
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}
             arch=${target#*/}
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/appboss_${os}_${arch}" ./cmd/appboss
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "dist/dboss_${os}_${arch}" ./cmd/dboss
           done
-          (cd dist && sha256sum appboss_* > checksums.txt)
+          (cd dist && sha256sum dboss_* > checksums.txt)
 
       - name: Publish release
         env:

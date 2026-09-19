@@ -1,4 +1,4 @@
-// app-boss pubsub client. No dependencies. Serve it from the app's own host and use:
+// dboss pubsub client. No dependencies. Serve it from the app's own host and use:
 //
 //   const bus = Pubsub.connect();
 //   const chat = bus.channel('chat');

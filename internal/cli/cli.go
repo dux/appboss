@@ -19,15 +19,15 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/ctl"
-	"app-boss/internal/daemon"
-	"app-boss/internal/logstore"
-	"app-boss/internal/ops"
-	"app-boss/internal/pg"
-	"app-boss/internal/pubsub"
-	"app-boss/internal/super"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/ctl"
+	"dboss/internal/daemon"
+	"dboss/internal/logstore"
+	"dboss/internal/ops"
+	"dboss/internal/pg"
+	"dboss/internal/pubsub"
+	"dboss/internal/super"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -56,16 +56,18 @@ func (c CLI) Run(args []string) int {
 	command := args[0]
 	if command == "help" {
 		if err := c.help(c.Out, args[1]); err != nil {
-			fmt.Fprintln(c.Err, "appboss:", err)
+			fmt.Fprintln(c.Err, "dboss:", err)
 			return 2
 		}
 		return 0
 	}
-	if findCommand(command) == nil {
-		fmt.Fprintf(c.Err, "appboss: unknown command %q\n\n", command)
+	cmd := findCommand(command)
+	if cmd == nil {
+		fmt.Fprintf(c.Err, "dboss: unknown command %q\n\n", command)
 		c.usage(c.Err)
 		return 2
 	}
+	command = cmd.name
 	if wantsHelp(args[1:]) {
 		_ = c.help(c.Out, command)
 		return 0
@@ -78,6 +80,8 @@ func (c CLI) Run(args []string) int {
 		err = c.systemd(args[1:])
 	case "password":
 		err = c.password(args[1:])
+	case "init":
+		err = c.init(args[1:])
 	case "config", "check", "kill", "doctor":
 		err = c.local(command, args[1:])
 	default:
@@ -88,13 +92,13 @@ func (c CLI) Run(args []string) int {
 		if errors.As(err, &exitErr) {
 			return exitErr.code
 		}
-		fmt.Fprintln(c.Err, "appboss:", err)
+		fmt.Fprintln(c.Err, "dboss:", err)
 		return 1
 	}
 	return 0
 }
 
-// exitError carries a child process's exit code out of `appboss exec` so it becomes appboss's own
+// exitError carries a child process's exit code out of `dboss exec` so it becomes dboss's own
 // exit code, like a shell.
 type exitError struct{ code int }
 
@@ -103,7 +107,7 @@ func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code
 // configFlag registers -c and --config on set; both write to the same variable.
 func configFlag(set *flag.FlagSet) *string {
 	var path string
-	set.StringVar(&path, "c", "", "config file (default: APPBOSS_CONFIG, then ./appboss.local.yaml or ./appboss.yaml)")
+	set.StringVar(&path, "c", "", "config file (default: DBOSS_CONFIG, then ./dboss.local.yaml or ./dboss.yaml)")
 	set.StringVar(&path, "config", "", "config file")
 	return &path
 }
@@ -118,7 +122,7 @@ func (c CLI) start(args []string) error {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: appboss start [-c path]")
+		return errors.New("usage: dboss start [-c path]")
 	}
 	cfg, err := loadHostConfig(*configPath)
 	if err != nil {
@@ -142,7 +146,7 @@ func (c CLI) start(args []string) error {
 // input is read as one line so the hash can be scripted.
 func (c CLI) password(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: appboss password")
+		return errors.New("usage: dboss password")
 	}
 	password, err := c.readPassword("Password: ")
 	if err != nil {
@@ -181,6 +185,169 @@ func (c CLI) readPassword(prompt string) ([]byte, error) {
 	return []byte(strings.TrimRight(line, "\r\n")), nil
 }
 
+// init prints a fully commented starter config for a service (the root dboss.yaml) or an app.
+// With no argument it asks which one to generate, defaulting to service.
+func (c CLI) init(args []string) error {
+	if len(args) > 1 {
+		return errors.New("usage: dboss init [service|app]")
+	}
+	role := ""
+	if len(args) == 1 {
+		role = templateRole(args[0])
+		if role == "" {
+			return fmt.Errorf("unknown config type %q (use service or app)", args[0])
+		}
+	} else {
+		selected, err := c.selectTemplateRole()
+		if err != nil {
+			return err
+		}
+		role = selected
+	}
+	template, err := config.Template(role)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(c.Out, template)
+	return err
+}
+
+// askTemplateRole prompts for the config type and defaults to service on an empty answer. It
+// reads one line, so `printf '2\n' | dboss init` works without a terminal.
+func (c CLI) askTemplateRole() (string, error) {
+	fmt.Fprint(c.Err, "Generate config for:\n  1) service (root dboss.yaml)\n  2) app (an app's dboss.yaml)\nSelect [1]: ")
+	line, err := bufio.NewReader(c.In).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	answer := strings.TrimSpace(line)
+	if answer == "" {
+		return config.TemplateService, nil
+	}
+	role := templateRole(answer)
+	if role == "" {
+		return "", fmt.Errorf("unknown selection %q (use 1 or 2)", answer)
+	}
+	return role, nil
+}
+
+// selectTemplateRole shows an arrow-key menu on a terminal; when input or output is not a
+// terminal it falls back to the typed prompt so scripts and tests still work.
+func (c CLI) selectTemplateRole() (string, error) {
+	in, ok := c.In.(*os.File)
+	if !ok || !term.IsTerminal(int(in.Fd())) {
+		return c.askTemplateRole()
+	}
+	out := c.Err
+	if file, ok := c.Err.(*os.File); !ok || !term.IsTerminal(int(file.Fd())) {
+		file, ok := c.Out.(*os.File)
+		if !ok || !term.IsTerminal(int(file.Fd())) {
+			return c.askTemplateRole()
+		}
+		out = file
+	}
+	labels := []string{"service (root dboss.yaml)", "app (an app's dboss.yaml)"}
+	roles := []string{config.TemplateService, config.TemplateApp}
+	selected := 0
+	draw := func(first bool) {
+		if !first {
+			fmt.Fprint(out, "\x1b[2A")
+		}
+		for i, label := range labels {
+			marker := "  "
+			if i == selected {
+				marker = "> "
+			}
+			fmt.Fprintf(out, "\r\x1b[2K%s%s\n", marker, label)
+		}
+	}
+	fmt.Fprint(out, "Generate config for (up/down, Enter):\n")
+	draw(true)
+	state, err := term.MakeRaw(int(in.Fd()))
+	if err != nil {
+		return "", err
+	}
+	defer term.Restore(int(in.Fd()), state)
+	for {
+		key, err := readKey(in)
+		if err != nil {
+			return "", err
+		}
+		switch key {
+		case "up":
+			if selected > 0 {
+				selected--
+				draw(false)
+			}
+		case "down":
+			if selected < len(labels)-1 {
+				selected++
+				draw(false)
+			}
+		case "1", "2", "enter":
+			if key == "1" {
+				selected = 0
+			}
+			if key == "2" {
+				selected = 1
+			}
+			fmt.Fprintf(out, "\x1b[2A\r\x1b[2K%s\n\r\x1b[2K", labels[selected])
+			return roles[selected], nil
+		case "cancel":
+			fmt.Fprint(out, "\x1b[2A\r\x1b[2K\r\x1b[2K")
+			return "", errors.New("cancelled")
+		}
+	}
+}
+
+// readKey reads one key in raw mode, translating arrows to up/down and Enter to enter. It
+// returns "" for keys it does not use.
+func readKey(in *os.File) (string, error) {
+	buf := make([]byte, 1)
+	if _, err := in.Read(buf); err != nil {
+		return "", err
+	}
+	switch buf[0] {
+	case '\r', '\n':
+		return "enter", nil
+	case 0x03, 'q':
+		return "cancel", nil
+	case 'k':
+		return "up", nil
+	case 'j':
+		return "down", nil
+	case '1':
+		return "1", nil
+	case '2':
+		return "2", nil
+	case 0x1b:
+		sequence := make([]byte, 2)
+		if _, err := io.ReadFull(in, sequence); err != nil {
+			return "", err
+		}
+		if sequence[0] == '[' {
+			switch sequence[1] {
+			case 'A':
+				return "up", nil
+			case 'B':
+				return "down", nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// templateRole maps an argument or prompt answer to a template role, "" when unknown.
+func templateRole(answer string) string {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "1", "service", "s":
+		return config.TemplateService
+	case "2", "app", "a":
+		return config.TemplateApp
+	}
+	return ""
+}
+
 func (c CLI) local(command string, args []string) error {
 	set := flag.NewFlagSet(command, flag.ContinueOnError)
 	set.SetOutput(c.Err)
@@ -200,7 +367,7 @@ func (c CLI) local(command string, args []string) error {
 	}
 	if command == "config" && *keys {
 		if set.NArg() > 1 {
-			return errors.New("usage: appboss config --keys [filter]")
+			return errors.New("usage: dboss config --keys [filter]")
 		}
 		return c.printKeys(set.Arg(0), *jsonOutput)
 	}
@@ -230,13 +397,13 @@ func (c CLI) local(command string, args []string) error {
 	}
 	if command == "doctor" {
 		if set.NArg() != 0 {
-			return errors.New("usage: appboss doctor [-c path]")
+			return errors.New("usage: dboss doctor [-c path]")
 		}
 		return c.doctor(cfg, *jsonOutput)
 	}
 	if command == "kill" {
 		if set.NArg() != 0 {
-			return errors.New("usage: appboss kill [-c path]")
+			return errors.New("usage: dboss kill [-c path]")
 		}
 		return c.kill(cfg, *jsonOutput)
 	}
@@ -259,7 +426,7 @@ func (c CLI) local(command string, args []string) error {
 		return nil
 	}
 	if set.NArg() > 1 {
-		return errors.New("usage: appboss config [app] [-d|--defaults]")
+		return errors.New("usage: dboss config [app] [-d|--defaults]")
 	}
 	if set.NArg() == 0 {
 		if withDefaults {
@@ -312,7 +479,7 @@ func (c CLI) configHistory(cfg config.Config, args []string, jsonOutput bool) er
 // the next rescan.
 func (c CLI) configRestore(cfg config.Config, args []string, jsonOutput bool) error {
 	if len(args) == 0 {
-		return errors.New("usage: appboss config restore [app] <revision>")
+		return errors.New("usage: dboss config restore [app] <revision>")
 	}
 	revision := args[len(args)-1]
 	id, err := configID(cfg, args[:len(args)-1])
@@ -328,7 +495,7 @@ func (c CLI) configRestore(cfg config.Config, args []string, jsonOutput bool) er
 		fmt.Fprintln(c.Out, string(encoded))
 		return nil
 	}
-	fmt.Fprintf(c.Out, "restored %s to revision %s; run `appboss rescan` to apply it\n", file.ID, revision)
+	fmt.Fprintf(c.Out, "restored %s to revision %s; run `dboss rescan` to apply it\n", file.ID, revision)
 	return nil
 }
 
@@ -342,7 +509,7 @@ func configID(cfg config.Config, args []string) (string, error) {
 		return "host", nil
 	}
 	if len(args) != 1 {
-		return "", errors.New("usage: appboss config history|restore [app]")
+		return "", errors.New("usage: dboss config history|restore [app]")
 	}
 	app, err := apps.Lookup(cfg, args[0])
 	if err != nil {
@@ -367,7 +534,7 @@ func (c CLI) doctor(cfg config.Config, jsonOutput bool) error {
 		}
 	}
 	if _, err := exec.LookPath("lsof"); err != nil {
-		add("fail", "lsof is not on PATH; appboss needs it to clear the port range")
+		add("fail", "lsof is not on PATH; dboss needs it to clear the port range")
 	} else {
 		add("ok", "lsof found")
 	}
@@ -415,7 +582,7 @@ func writable(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, ".appboss-doctor-*")
+	file, err := os.CreateTemp(dir, ".dboss-doctor-*")
 	if err != nil {
 		return err
 	}
@@ -508,22 +675,22 @@ func (c CLI) remote(command string, args []string) error {
 	switch command {
 	case "ls", "rescan", "ports", "login":
 		if len(opts.rest) != 0 {
-			return fmt.Errorf("usage: appboss %s", command)
+			return fmt.Errorf("usage: dboss %s", command)
 		}
 	case "run", "stop", "restart", "status":
 		if len(opts.rest) > 1 {
-			return fmt.Errorf("usage: appboss %s [app]", command)
+			return fmt.Errorf("usage: dboss %s [app]", command)
 		}
 		if request.App, err = appArgument(opts.rest, opts.config); err != nil {
-			return fmt.Errorf("usage: appboss %s <app> (%w)", command, err)
+			return fmt.Errorf("usage: dboss %s <app> (%w)", command, err)
 		}
 	case "maintenance":
 		if len(opts.rest) == 0 || len(opts.rest) > 2 || (opts.rest[len(opts.rest)-1] != "on" && opts.rest[len(opts.rest)-1] != "off") {
-			return errors.New("usage: appboss maintenance [app] on|off")
+			return errors.New("usage: dboss maintenance [app] on|off")
 		}
 		request.On = opts.rest[len(opts.rest)-1] == "on"
 		if request.App, err = appArgument(opts.rest[:len(opts.rest)-1], opts.config); err != nil {
-			return fmt.Errorf("usage: appboss maintenance <app> on|off (%w)", err)
+			return fmt.Errorf("usage: dboss maintenance <app> on|off (%w)", err)
 		}
 	case "logs":
 		var appArgs []string
@@ -531,7 +698,7 @@ func (c CLI) remote(command string, args []string) error {
 			appArgs, opts.rest = opts.rest[:1], opts.rest[1:]
 		}
 		if request.App, err = appArgument(appArgs, opts.config); err != nil {
-			return fmt.Errorf("usage: appboss logs <app> [-f] [-n 200] [--process name] (%w)", err)
+			return fmt.Errorf("usage: dboss logs <app> [-f] [-n 200] [--process name] (%w)", err)
 		}
 		set := flag.NewFlagSet("logs", flag.ContinueOnError)
 		set.SetOutput(c.Err)
@@ -545,7 +712,7 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		if set.NArg() != 0 {
-			return errors.New("usage: appboss logs [app] [-f] [-n 200] [--process name] [--search q] [--level l] [--channel c]")
+			return errors.New("usage: dboss logs [app] [-f] [-n 200] [--process name] [--search q] [--level l] [--channel c]")
 		}
 		request.Lines, request.Process = *lines, *processName
 		if *follow && opts.json {
@@ -565,16 +732,16 @@ func (c CLI) remote(command string, args []string) error {
 			request.Method = ops.ActionCronRun
 			jobs := opts.rest[1:]
 			if len(jobs) == 0 {
-				return errors.New("usage: appboss cron run [app] <job>")
+				return errors.New("usage: dboss cron run [app] <job>")
 			}
 			request.Job = jobs[len(jobs)-1]
 			if request.App, err = appArgument(jobs[:len(jobs)-1], opts.config); err != nil {
-				return fmt.Errorf("usage: appboss cron run <app> <job> (%w)", err)
+				return fmt.Errorf("usage: dboss cron run <app> <job> (%w)", err)
 			}
 		} else {
 			request.Method = ops.ActionCron
 			if request.App, err = appArgument(opts.rest, opts.config); err != nil {
-				return fmt.Errorf("usage: appboss cron <app> (%w)", err)
+				return fmt.Errorf("usage: dboss cron <app> (%w)", err)
 			}
 		}
 	case "hooks":
@@ -582,7 +749,7 @@ func (c CLI) remote(command string, args []string) error {
 		if len(hooks) > 0 && (hooks[0] == "run" || hooks[0] == "rotate") {
 			sub, args := hooks[0], hooks[1:]
 			if len(args) == 0 {
-				return fmt.Errorf("usage: appboss hooks %s [app] <hook>", sub)
+				return fmt.Errorf("usage: dboss hooks %s [app] <hook>", sub)
 			}
 			request.Hook = args[len(args)-1]
 			if sub == "run" {
@@ -591,12 +758,12 @@ func (c CLI) remote(command string, args []string) error {
 				request.Method = ops.ActionHookRotate
 			}
 			if request.App, err = appArgument(args[:len(args)-1], opts.config); err != nil {
-				return fmt.Errorf("usage: appboss hooks %s <app> <hook> (%w)", sub, err)
+				return fmt.Errorf("usage: dboss hooks %s <app> <hook> (%w)", sub, err)
 			}
 		} else {
 			request.Method = ops.ActionHook
 			if request.App, err = appArgument(hooks, opts.config); err != nil {
-				return fmt.Errorf("usage: appboss hooks <app> (%w)", err)
+				return fmt.Errorf("usage: dboss hooks <app> (%w)", err)
 			}
 		}
 	case "audit":
@@ -618,12 +785,12 @@ func (c CLI) remote(command string, args []string) error {
 			request.Method = ops.ActionPG
 		case pgArgs[0] == "backups":
 			if len(pgArgs) != 1 {
-				return errors.New("usage: appboss pg backups")
+				return errors.New("usage: dboss pg backups")
 			}
 			request.Method = ops.ActionPGBackups
 		case pgArgs[0] == "backup":
 			if len(pgArgs) > 2 {
-				return errors.New("usage: appboss pg backup [database]")
+				return errors.New("usage: dboss pg backup [database]")
 			}
 			request.Method = ops.ActionPGBackup
 			if len(pgArgs) == 2 {
@@ -638,7 +805,7 @@ func (c CLI) remote(command string, args []string) error {
 				return err
 			}
 			if set.NArg() != 1 {
-				return errors.New("usage: appboss pg restore <backup-id> [--target name] [--force]")
+				return errors.New("usage: dboss pg restore <backup-id> [--target name] [--force]")
 			}
 			request.Method = ops.ActionPGRestore
 			request.BackupID = set.Arg(0)
@@ -647,7 +814,7 @@ func (c CLI) remote(command string, args []string) error {
 				request.Confirm = *target
 			}
 		default:
-			return errors.New("usage: appboss pg [backups | backup [database] | restore <backup-id>]")
+			return errors.New("usage: dboss pg [backups | backup [database] | restore <backup-id>]")
 		}
 	case "pubsub":
 		pub := opts.rest
@@ -658,12 +825,12 @@ func (c CLI) remote(command string, args []string) error {
 		case len(pub) > 0 && pub[0] == "rotate":
 			request.Method = ops.ActionPubsubRotate
 			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
-				return fmt.Errorf("usage: appboss pubsub rotate [app] (%w)", err)
+				return fmt.Errorf("usage: dboss pubsub rotate [app] (%w)", err)
 			}
 		case len(pub) > 0 && pub[0] == "secret":
 			request.Method = ops.ActionPubsubSecret
 			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
-				return fmt.Errorf("usage: appboss pubsub secret [app] (%w)", err)
+				return fmt.Errorf("usage: dboss pubsub secret [app] (%w)", err)
 			}
 		case len(pub) > 0 && pub[0] == "publish":
 			request.Method = ops.ActionPubsubPublish
@@ -676,11 +843,11 @@ func (c CLI) remote(command string, args []string) error {
 				return err
 			}
 			if len(positionals) == 0 {
-				return errors.New("usage: appboss pubsub publish [app] <channel> [--event name] [--data json|-]")
+				return errors.New("usage: dboss pubsub publish [app] <channel> [--event name] [--data json|-]")
 			}
 			request.Channel = positionals[len(positionals)-1]
 			if request.App, err = appArgument(positionals[:len(positionals)-1], opts.config); err != nil {
-				return fmt.Errorf("usage: appboss pubsub publish <app> <channel> (%w)", err)
+				return fmt.Errorf("usage: dboss pubsub publish <app> <channel> (%w)", err)
 			}
 			request.Event = *event
 			request.Data, err = pubsubData(*data, c.In)
@@ -691,7 +858,7 @@ func (c CLI) remote(command string, args []string) error {
 			request.Method = ops.ActionPubsub
 			if len(pub) > 0 {
 				if request.App, err = appArgument(pub, opts.config); err != nil {
-					return fmt.Errorf("usage: appboss pubsub [app] (%w)", err)
+					return fmt.Errorf("usage: dboss pubsub [app] (%w)", err)
 				}
 			}
 		}
@@ -841,15 +1008,15 @@ func (c CLI) exec(args []string) error {
 		app = filepath.Base(cfg.Dir)
 	} else {
 		if len(parsed.rest) < 2 {
-			return errors.New("usage: appboss exec [app] <command> [args...]")
+			return errors.New("usage: dboss exec [app] <command> [args...]")
 		}
 		if _, lookupErr := apps.Lookup(cfg, parsed.rest[0]); lookupErr != nil {
-			return fmt.Errorf("usage: appboss exec <app> <command> (%w)", lookupErr)
+			return fmt.Errorf("usage: dboss exec <app> <command> (%w)", lookupErr)
 		}
 		app, command = parsed.rest[0], parsed.rest[1:]
 	}
 	if len(command) == 0 {
-		return errors.New("usage: appboss exec [app] <command> [args...]")
+		return errors.New("usage: dboss exec [app] <command> [args...]")
 	}
 	resolved, err := findSocket(parsed.socket, parsed.configPath)
 	if err != nil {
@@ -914,8 +1081,8 @@ func parseExecArgs(args []string) (execOptions, error) {
 	return options, nil
 }
 
-// flagsFirst moves flags ahead of positional arguments so `appboss config app -d` and
-// `appboss config --keys static --json` parse the same as with the flags in front.
+// flagsFirst moves flags ahead of positional arguments so `dboss config app -d` and
+// `dboss config --keys static --json` parse the same as with the flags in front.
 func flagsFirst(args []string) []string {
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
@@ -933,14 +1100,8 @@ func flagsFirst(args []string) []string {
 	return append(flags, positional...)
 }
 
-var keyGroups = []struct{ id, title, note string }{
-	{config.GroupHost, "Host keys", "the host appboss.yaml (apps defaults to ./apps)"},
-	{config.GroupApp, "App keys", "appboss.yaml with procfile:"},
-	{config.GroupShared, "Shared app keys", "defaults: in the host file, top level in an app file; per-process ones also under processes.<name>"},
-}
-
-// printKeys lists the documented config keys, grouped by file role. filter narrows by a
-// substring of the key path.
+// printKeys lists the documented config keys, grouped by block. filter narrows by a substring
+// of the key path.
 func (c CLI) printKeys(filter string, jsonOutput bool) error {
 	var keys []config.Key
 	for _, key := range config.Keys() {
@@ -957,19 +1118,21 @@ func (c CLI) printKeys(filter string, jsonOutput bool) error {
 		return fmt.Errorf("no config key matches %q", filter)
 	}
 	writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-	for _, group := range keyGroups {
+	for _, block := range config.Blocks() {
 		first := true
 		for _, key := range keys {
-			if key.Group != group.id {
+			if key.Block != block.ID {
 				continue
 			}
 			if first {
-				fmt.Fprintf(writer, "%s  (%s)\n", group.title, group.note)
+				fmt.Fprintf(writer, "%s  (%s)\n", block.Title, blockNote(block.Scope))
 				first = false
 			}
 			value := key.Default
 			if value == "" {
 				value = "e.g. " + key.Example
+			} else if key.Example != "" {
+				value = value + "  e.g. " + key.Example
 			}
 			// The last text on a line is not a padded cell, so lines without the scope
 			// column end right after the value instead of trailing spaces.
@@ -984,6 +1147,18 @@ func (c CLI) printKeys(filter string, jsonOutput bool) error {
 		}
 	}
 	return writer.Flush()
+}
+
+// blockNote says which file a block belongs in, printed next to the block title.
+func blockNote(scope config.Scope) string {
+	switch scope {
+	case config.ScopeService:
+		return "root dboss.yaml"
+	case config.ScopeApp:
+		return "app dboss.yaml"
+	default:
+		return "defaults: in the root file, top level in an app file; per-process ones also under processes.<name>"
+	}
 }
 
 func (c CLI) printHuman(method string, data any) error {
@@ -1121,7 +1296,7 @@ func (c CLI) printHuman(method string, data any) error {
 			fmt.Fprintf(c.Out, "  %v\n", message)
 		}
 		if keys, _ := result["restart_required"].([]any); len(keys) > 0 {
-			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart appboss, or Ctrl-C and appboss start)\n", joinAny(keys))
+			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart dboss, or Ctrl-C and dboss start)\n", joinAny(keys))
 		}
 	case "login":
 		links := data.(map[string]string)
@@ -1189,7 +1364,7 @@ func (c CLI) printHuman(method string, data any) error {
 	case ops.ActionPubsub:
 		apps := data.([]pubsub.App)
 		if len(apps) == 0 {
-			fmt.Fprintln(c.Out, "no app serves realtime channels (set pubsub.path in appboss.yaml)")
+			fmt.Fprintln(c.Out, "no app serves realtime channels (set pubsub.path in dboss.yaml)")
 			return nil
 		}
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
@@ -1352,16 +1527,16 @@ func commonArgs(args []string) (remoteOptions, error) {
 	return opts, nil
 }
 
-const defaultSocket = "/run/appboss/appboss.sock"
+const defaultSocket = "/run/dboss/dboss.sock"
 
-// findSocket resolves the control socket: --socket, APPBOSS_SOCKET, the socket of the config in
+// findSocket resolves the control socket: --socket, DBOSS_SOCKET, the socket of the config in
 // reach if it exists on disk, then the well-known production path. The last step is what lets
-// `appboss restart` inside a deployed app folder reach the host session started elsewhere.
+// `dboss restart` inside a deployed app folder reach the host session started elsewhere.
 func findSocket(explicit, configPath string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if env := os.Getenv("APPBOSS_SOCKET"); env != "" {
+	if env := os.Getenv("DBOSS_SOCKET"); env != "" {
 		return env, nil
 	}
 	path, err := findConfig(configPath)
@@ -1403,7 +1578,7 @@ func appArgument(args []string, configPath string) (string, error) {
 func loadHostConfig(explicit string) (config.Config, error) {
 	path, err := findConfig(explicit)
 	if err != nil {
-		if explicit != "" || os.Getenv("APPBOSS_CONFIG") != "" {
+		if explicit != "" || os.Getenv("DBOSS_CONFIG") != "" {
 			return config.Config{}, err
 		}
 		dir, wdErr := os.Getwd()
@@ -1419,12 +1594,12 @@ func findConfig(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if env := os.Getenv("APPBOSS_CONFIG"); env != "" {
+	if env := os.Getenv("DBOSS_CONFIG"); env != "" {
 		return env, nil
 	}
 	path, err := config.FindInDir(".")
 	if err != nil {
-		return "", fmt.Errorf("%w (use -c or APPBOSS_CONFIG)", err)
+		return "", fmt.Errorf("%w (use -c or DBOSS_CONFIG)", err)
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {

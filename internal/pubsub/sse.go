@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/super"
 )
 
 func (s *Service) serveSSE(w http.ResponseWriter, r *http.Request, app super.Snapshot, cfg config.Pubsub, channel string) {

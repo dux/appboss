@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -57,7 +57,7 @@ func TestParseExecArgsStopsAtTheCommand(t *testing.T) {
 
 func TestFindConfigOrder(t *testing.T) {
 	dir := chdir(t, t.TempDir())
-	t.Setenv("APPBOSS_CONFIG", "")
+	t.Setenv("DBOSS_CONFIG", "")
 	if _, err := findConfig(""); err == nil {
 		t.Fatal("expected no config error")
 	}
@@ -69,18 +69,18 @@ func TestFindConfigOrder(t *testing.T) {
 	if path, err := findConfig(""); err != nil || path != filepath.Join(dir, config.LocalFileName) {
 		t.Fatalf("local file should win: got %q, %v", path, err)
 	}
-	t.Setenv("APPBOSS_CONFIG", "/env/appboss.yaml")
-	if path, _ := findConfig(""); path != "/env/appboss.yaml" {
+	t.Setenv("DBOSS_CONFIG", "/env/dboss.yaml")
+	if path, _ := findConfig(""); path != "/env/dboss.yaml" {
 		t.Fatalf("env should win over folder lookup: got %q", path)
 	}
-	if path, _ := findConfig("/flag/appboss.yaml"); path != "/flag/appboss.yaml" {
+	if path, _ := findConfig("/flag/dboss.yaml"); path != "/flag/dboss.yaml" {
 		t.Fatalf("flag should win over env: got %q", path)
 	}
 }
 
 func TestAppArgumentDefaultsToFolderApp(t *testing.T) {
 	dir := chdir(t, t.TempDir())
-	t.Setenv("APPBOSS_CONFIG", "")
+	t.Setenv("DBOSS_CONFIG", "")
 	if name, err := appArgument([]string{"explicit"}, ""); err != nil || name != "explicit" {
 		t.Fatalf("got %q, %v", name, err)
 	}
@@ -97,8 +97,8 @@ func TestAppArgumentDefaultsToFolderApp(t *testing.T) {
 
 func TestFindSocketFallsBackToWellKnownPath(t *testing.T) {
 	dir := chdir(t, t.TempDir())
-	t.Setenv("APPBOSS_CONFIG", "")
-	t.Setenv("APPBOSS_SOCKET", "")
+	t.Setenv("DBOSS_CONFIG", "")
+	t.Setenv("DBOSS_SOCKET", "")
 	if socket, _ := findSocket("", ""); socket != defaultSocket {
 		t.Fatalf("got %q", socket)
 	}
@@ -106,7 +106,7 @@ func TestFindSocketFallsBackToWellKnownPath(t *testing.T) {
 	if socket, _ := findSocket("", ""); socket != defaultSocket {
 		t.Fatalf("missing socket file should fall back, got %q", socket)
 	}
-	socketPath := filepath.Join(dir, ".appboss", "appboss.sock")
+	socketPath := filepath.Join(dir, ".dboss", "dboss.sock")
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFindSocketFallsBackToWellKnownPath(t *testing.T) {
 	if socket, _ := findSocket("", ""); socket != socketPath {
 		t.Fatalf("existing config socket should win, got %q", socket)
 	}
-	t.Setenv("APPBOSS_SOCKET", "/env.sock")
+	t.Setenv("DBOSS_SOCKET", "/env.sock")
 	if socket, _ := findSocket("", ""); socket != "/env.sock" {
 		t.Fatalf("env should win, got %q", socket)
 	}
@@ -131,8 +131,8 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unit := renderUnit(cfg, "deploy", "", "/usr/local/bin/appboss")
-	for _, want := range []string{"User=\"deploy\"\n", "WorkingDirectory=\"" + dir + "\"\n", "ExecStart=\"/usr/local/bin/appboss\" start -c \"" + path + "\"\n", "WantedBy=multi-user.target\n"} {
+	unit := renderUnit(cfg, "deploy", "", "/usr/local/bin/dboss")
+	for _, want := range []string{"User=\"deploy\"\n", "WorkingDirectory=\"" + dir + "\"\n", "ExecStart=\"/usr/local/bin/dboss\" start -c \"" + path + "\"\n", "WantedBy=multi-user.target\n"} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
@@ -140,7 +140,7 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	if strings.Contains(unit, "Group=") {
 		t.Fatalf("Group should be omitted by default:\n%s", unit)
 	}
-	if grouped := renderUnit(cfg, "deploy", "staff", "/usr/local/bin/appboss"); !strings.Contains(grouped, "Group=\"staff\"\n") {
+	if grouped := renderUnit(cfg, "deploy", "staff", "/usr/local/bin/dboss"); !strings.Contains(grouped, "Group=\"staff\"\n") {
 		t.Fatalf("explicit group missing:\n%s", grouped)
 	}
 }
@@ -187,22 +187,40 @@ func TestPasswordPrintsBcryptHash(t *testing.T) {
 
 func TestConfigReferenceIsEmbedded(t *testing.T) {
 	var out strings.Builder
-	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "--reference"}); code != 0 || !strings.Contains(out.String(), "PART 1: <host>/appboss.yaml") {
+	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "--reference"}); code != 0 || !strings.Contains(out.String(), "PART 1: <host>/dboss.yaml") {
 		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+func TestInitGeneratesTemplates(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := (CLI{In: strings.NewReader(""), Out: &out, Err: &errOut}).Run([]string{"init", "app"}); code != 0 || !strings.Contains(out.String(), "# procfile:") {
+		t.Fatalf("init app: exit %d %s", code, errOut.String())
+	}
+	out.Reset()
+	if code := (CLI{In: strings.NewReader("2\n"), Out: &out, Err: &errOut}).Run([]string{"init"}); code != 0 || !strings.Contains(out.String(), "an app's dboss.yaml") {
+		t.Fatalf("init prompt: exit %d %s", code, errOut.String())
+	}
+	out.Reset()
+	if code := (CLI{In: strings.NewReader(""), Out: &out, Err: &errOut}).Run([]string{"init"}); code != 0 || !strings.Contains(out.String(), "root dboss.yaml") {
+		t.Fatalf("init default: exit %d %s", code, errOut.String())
+	}
+	if code := (CLI{In: strings.NewReader(""), Out: &out, Err: &errOut}).Run([]string{"init", "nope"}); code == 0 {
+		t.Fatal("init with an unknown type must fail")
 	}
 }
 
 func TestHelpOutput(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := (CLI{Out: &out, Err: &errOut}).Run(nil); code != 0 || !strings.Contains(out.String(), "maintenance") || !strings.Contains(out.String(), "Host session") {
-		t.Fatalf("bare appboss: exit %d %s", code, out.String())
+		t.Fatalf("bare dboss: exit %d %s", code, out.String())
 	}
 	out.Reset()
 	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"help", "logs"}); code != 0 || !strings.Contains(out.String(), "--process <name>") {
 		t.Fatalf("help logs: exit %d %s", code, out.String())
 	}
 	out.Reset()
-	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"logs", "--help"}); code != 0 || !strings.Contains(out.String(), "appboss logs [app]") {
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"logs", "--help"}); code != 0 || !strings.Contains(out.String(), "dboss logs [app]") {
 		t.Fatalf("logs --help: exit %d %s", code, out.String())
 	}
 	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"nope"}); code != 2 || !strings.Contains(errOut.String(), `unknown command "nope"`) {
@@ -212,6 +230,16 @@ func TestHelpOutput(t *testing.T) {
 		if findCommand(name) == nil {
 			t.Errorf("%s has no help entry", name)
 		}
+	}
+}
+
+func TestStartAlias(t *testing.T) {
+	if cmd := findCommand("s"); cmd == nil || cmd.name != "start" {
+		t.Fatalf("s does not resolve to start: %+v", cmd)
+	}
+	var out, errOut strings.Builder
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"s", "--help"}); code != 0 || !strings.Contains(out.String(), "dboss start [-c path]") || !strings.Contains(out.String(), "Alias: s") {
+		t.Fatalf("s --help: exit %d %s", code, out.String())
 	}
 }
 
@@ -229,7 +257,7 @@ func TestConfigPrintsGivenFileOrDefaults(t *testing.T) {
 	}
 	var errOut strings.Builder
 	writeFile(t, path, "apps: ./apps\ndefaults:\n  idle_stpo: 2h\n")
-	if code := (CLI{Out: io.Discard, Err: &errOut}).Run([]string{"config", "-c", path}); code != 1 || !strings.Contains(errOut.String(), "appboss.yaml:3: defaults.idle_stpo: unknown key\n  did you mean \"idle_stop\"?") {
+	if code := (CLI{Out: io.Discard, Err: &errOut}).Run([]string{"config", "-c", path}); code != 1 || !strings.Contains(errOut.String(), "dboss.yaml:3: defaults.idle_stpo: unknown key\n  did you mean \"idle_stop\"?") {
 		t.Fatalf("typo: exit %d %s", code, errOut.String())
 	}
 }

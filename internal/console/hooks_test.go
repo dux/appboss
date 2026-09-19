@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"app-boss/internal/super"
+	"dboss/internal/super"
 )
 
 func hookSignature(secret, body string) string {
@@ -21,7 +21,7 @@ func hookSignature(secret, body string) string {
 func TestHookEndpointAcceptsQueryToken(t *testing.T) {
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "tok3n"}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/hooks/sinatra/deploy?token=tok3n", strings.NewReader(`{"ref":"main"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy?token=tok3n", strings.NewReader(`{"ref":"main"}`))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {
@@ -36,7 +36,7 @@ func TestHookEndpointAcceptsGitHubSignature(t *testing.T) {
 	body := `{"ref":"refs/heads/main"}`
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "s3cret"}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/hooks/sinatra/deploy", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy", strings.NewReader(body))
 	request.Header.Set("X-Hub-Signature-256", hookSignature("s3cret", body))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -48,7 +48,7 @@ func TestHookEndpointAcceptsGitHubSignature(t *testing.T) {
 func TestHookEndpointRejectsBadSecret(t *testing.T) {
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "s3cret"}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/hooks/sinatra/deploy?token=wrong", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy?token=wrong", strings.NewReader(`{}`))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
@@ -63,7 +63,7 @@ func TestHookEndpointAnswersPing(t *testing.T) {
 	body := `{"zen":"keep it simple"}`
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "s3cret"}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/hooks/sinatra/deploy", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy", strings.NewReader(body))
 	request.Header.Set("X-Hub-Signature-256", hookSignature("s3cret", body))
 	request.Header.Set("X-GitHub-Event", "ping")
 	response := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func TestHookEndpointAnswersPing(t *testing.T) {
 func TestHookEndpointHidesUnknownHook(t *testing.T) {
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "s3cret"}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/hooks/sinatra/missing?token=s3cret", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/missing?token=s3cret", strings.NewReader(`{}`))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
@@ -101,7 +101,7 @@ func TestHookEndpointOnlyAnswersOnTheManagementHost(t *testing.T) {
 func TestHookAPIRequiresSession(t *testing.T) {
 	manager := &fakeManager{hooks: map[string][]super.HookInfo{"sinatra": {{HookSnapshot: super.HookSnapshot{Name: "deploy"}}}}}
 	handler := newTestHandler(t, manager, nil)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/api/hooks?app=sinatra", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/hooks?app=sinatra", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code == http.StatusOK {

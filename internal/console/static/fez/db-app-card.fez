@@ -14,7 +14,7 @@
 
     async loadHooks() {
       try {
-        const data = await Boss.api(`/api/hooks?app=${encodeURIComponent(this.props.app.name)}`)
+        const data = await Dboss.api(`/api/hooks?app=${encodeURIComponent(this.props.app.name)}`)
         const meta = {}
         for (const hook of data.hooks || []) meta[hook.name] = hook
         this.state.hookMeta = meta
@@ -66,7 +66,7 @@
     }
 
     act(action) {
-      Boss.runAction(this.props.app.name, action)
+      Dboss.runAction(this.props.app.name, action)
     }
 
     clock(value) {
@@ -96,12 +96,12 @@
     }
 
     runCron(job) {
-      Boss.runAction(this.props.app.name, 'cron-run', { job: job.name })
+      Dboss.runAction(this.props.app.name, 'cron-run', { job: job.name })
     }
 
     async runHook(hook) {
       try {
-        await Boss.api('/api/hooks/run', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
+        await Dboss.api('/api/hooks/run', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
         Toast.show(`${this.props.app.name}: ${hook.name} started`)
         this.loadHooks()
       } catch (error) {
@@ -112,7 +112,7 @@
     async rotateHook(hook) {
       if (!window.confirm(`Rotate the secret for ${hook.name}? Existing ping URLs stop working.`)) return
       try {
-        await Boss.api('/api/hooks/rotate', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
+        await Dboss.api('/api/hooks/rotate', { method: 'POST', body: JSON.stringify({ app: this.props.app.name, hook: hook.name }) })
         Toast.show('Secret rotated')
         this.loadHooks()
       } catch (error) {

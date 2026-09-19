@@ -1,10 +1,10 @@
-// Package version identifies the running binary for metrics and `appboss version`.
+// Package version identifies the running binary for metrics and `dboss version`.
 package version
 
 import "runtime/debug"
 
 // Version is the release version. A release build sets it with
-// -ldflags "-X app-boss/internal/version.Version=v0.1.0".
+// -ldflags "-X dboss/internal/version.Version=v0.1.0".
 var Version = "dev"
 
 // String returns the injected version, or the module version or short VCS revision from the

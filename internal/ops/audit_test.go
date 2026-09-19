@@ -3,8 +3,8 @@ package ops
 import (
 	"testing"
 
-	"app-boss/internal/logstore"
-	"app-boss/internal/notify"
+	"dboss/internal/logstore"
+	"dboss/internal/notify"
 )
 
 type auditStore struct {

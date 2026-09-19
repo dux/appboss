@@ -1,4 +1,4 @@
-// Package logx is appboss's own leveled logger. It wraps the standard logger, so the daemon log
+// Package logx is dboss's own leveled logger. It wraps the standard logger, so the daemon log
 // sink still receives every line, and drops calls below daemon.log_level.
 package logx
 

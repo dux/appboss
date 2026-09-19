@@ -18,22 +18,22 @@ import (
 	"syscall"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/console"
-	"app-boss/internal/ctl"
-	"app-boss/internal/ingest"
-	"app-boss/internal/logstore"
-	"app-boss/internal/logx"
-	"app-boss/internal/module"
-	"app-boss/internal/notify"
-	"app-boss/internal/ops"
-	"app-boss/internal/pg"
-	"app-boss/internal/ports"
-	"app-boss/internal/proxy"
-	"app-boss/internal/pubsub"
-	"app-boss/internal/super"
-	"app-boss/internal/sysinfo"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/console"
+	"dboss/internal/ctl"
+	"dboss/internal/ingest"
+	"dboss/internal/logstore"
+	"dboss/internal/logx"
+	"dboss/internal/module"
+	"dboss/internal/notify"
+	"dboss/internal/ops"
+	"dboss/internal/pg"
+	"dboss/internal/ports"
+	"dboss/internal/proxy"
+	"dboss/internal/pubsub"
+	"dboss/internal/super"
+	"dboss/internal/sysinfo"
 )
 
 // Daemon is one running host session. New builds and binds it; Run serves until the context is
@@ -139,12 +139,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	if d.management != nil {
-		logx.Infof("management console: http://127.0.0.1:%d (run `appboss login` for a one-time sign-in link)", d.managementPort)
+		logx.Infof("management console: http://127.0.0.1:%d (run `dboss login` for a one-time sign-in link)", d.managementPort)
 		if publicURL := d.cfg.Management.PublicURL(); publicURL != "" {
 			logx.Infof("management console: %s (AuthCog sign-in)", publicURL)
 		}
 	}
-	logx.Infof("appboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
+	logx.Infof("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
 	<-ctx.Done()
 	return nil
 }
@@ -172,7 +172,7 @@ func (d *Daemon) Close() error {
 // is discovered, so app ports never shift when the console is turned on or off.
 func newAllocator(cfg config.Config) (*ports.Allocator, int) {
 	allocator := ports.New(cfg.Ports.Range)
-	port, _ := allocator.Allocate("appboss", "management")
+	port, _ := allocator.Allocate("dboss", "management")
 	return allocator, port
 }
 

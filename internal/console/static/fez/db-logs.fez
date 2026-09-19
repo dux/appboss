@@ -9,4 +9,4 @@
   </div>
 </div>
 
-<ab-log-view />
+<db-log-view />

@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"app-boss/internal/config"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/super"
 )
 
 // Reserved path segments that never name a user channel.

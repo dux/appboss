@@ -32,7 +32,7 @@
 
     async showReference() {
       try {
-        this.open('Configuration reference', await Boss.apiText('/api/config/reference'))
+        this.open('Configuration reference', await Dboss.apiText('/api/config/reference'))
       } catch (error) {
         Toast.show(error.message, true)
       }
@@ -61,7 +61,7 @@
       </div>
     </div>
     {#if state.mode === 'keys'}
-      <ab-config-keys />
+      <db-config-keys />
     {:else}
       <pre>{state.text}</pre>
     {/if}

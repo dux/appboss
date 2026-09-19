@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/schedule"
+	"dboss/internal/schedule"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -144,11 +144,11 @@ func (l *List) UnmarshalYAML(node *yaml.Node) error {
 // FileName and LocalFileName are the two config file names looked up in a folder.
 // The local file is server-only and, when present, replaces the committed one entirely.
 const (
-	FileName      = "appboss.yaml"
-	LocalFileName = "appboss.local.yaml"
+	FileName      = "dboss.yaml"
+	LocalFileName = "dboss.local.yaml"
 )
 
-// FindInDir returns the config file to use for dir: appboss.local.yaml when it exists, else appboss.yaml.
+// FindInDir returns the config file to use for dir: dboss.local.yaml when it exists, else dboss.yaml.
 func FindInDir(dir string) (string, error) {
 	for _, name := range []string{LocalFileName, FileName} {
 		path := filepath.Join(dir, name)
@@ -159,7 +159,7 @@ func FindInDir(dir string) (string, error) {
 	return "", fmt.Errorf("no %s in %s", FileName, dir)
 }
 
-// Config is the root appboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
+// Config is the root dboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
 type Config struct {
 	SourcePath string     `yaml:"-" json:"-"`
 	Dir        string     `yaml:"-" json:"-"`
@@ -324,7 +324,7 @@ type Process struct {
 }
 
 // Web drives the proxy in front of the app. BasicAuth never leaves the process as JSON so the
-// hashes stay out of the console and `appboss status --json`.
+// hashes stay out of the console and `dboss status --json`.
 type Web struct {
 	HealthEndpoint  string            `yaml:"health_endpoint" json:"health_endpoint"`
 	Static          string            `yaml:"static" json:"static"`
@@ -339,7 +339,7 @@ type Web struct {
 }
 
 // Pubsub serves realtime channels on the app's own hosts under Path. An empty Path disables it.
-// Secret is the bearer token HTTP publishers present; when empty appboss generates a per-app
+// Secret is the bearer token HTTP publishers present; when empty dboss generates a per-app
 // secret under state_dir. It never leaves the process as JSON, like the basic-auth hashes.
 type Pubsub struct {
 	Path           string `yaml:"path" json:"path"`
@@ -379,19 +379,19 @@ type Notify struct {
 func Default() Config {
 	return Config{
 		Apps:     "./apps",
-		StateDir: ".appboss/state", LogDir: ".appboss/log", Socket: ".appboss/appboss.sock",
+		StateDir: ".dboss/state", LogDir: ".dboss/log", Socket: ".dboss/dboss.sock",
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/appboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
 		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
-		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".appboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
+		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".dboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
 		S3:         S3{Region: "auto"},
 	}
 }
 
-// file is the full appboss.yaml schema: host keys plus app keys. Which role the file plays
+// file is the full dboss.yaml schema: host keys plus app keys. Which role the file plays
 // is decided after decoding from whether procfile or apps is present.
 type file struct {
 	Config  `yaml:",inline"`
@@ -498,7 +498,7 @@ func Parse(data []byte, path string) (Config, error) {
 	cfg.Dir = filepath.Dir(absolutePath)
 	hasApp := keys["procfile"]
 	if hasApp && keys["apps"] {
-		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root appboss.yaml or drop apps"}, path, root)
+		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root dboss.yaml or drop apps"}, path, root)
 	}
 	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
 	if hasApp {
@@ -758,7 +758,7 @@ func validateManagement(management Management, proxyEnabled bool) error {
 	if management.URL != "" {
 		parsed, err := url.Parse(management.URL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return &Error{Key: "url", Message: fmt.Sprintf("invalid URL %q", management.URL), Hint: "use the address operators open, e.g. https://boss.example.com"}
+			return &Error{Key: "url", Message: fmt.Sprintf("invalid URL %q", management.URL), Hint: "use the address operators open, e.g. https://dboss.example.com"}
 		}
 		if !hosts[strings.ToLower(parsed.Hostname())] {
 			return keyErr("url", "host %q is not one of management.host", parsed.Hostname())
@@ -886,7 +886,7 @@ func validateWeb(w Web) error {
 			return keyErr("basic_auth", "invalid user %q", user)
 		}
 		if _, err := bcrypt.Cost([]byte(hash)); err != nil {
-			return &Error{Key: "basic_auth." + user, Message: "must be a bcrypt hash", Hint: "run `appboss password` to print one"}
+			return &Error{Key: "basic_auth." + user, Message: "must be a bcrypt hash", Hint: "run `dboss password` to print one"}
 		}
 	}
 	for name := range w.Headers {
@@ -1030,7 +1030,7 @@ type CronJob struct {
 
 // Hook is one named one-shot command triggered by a signed HTTP ping to
 // /hooks/<app>/<hook>. Restart restarts the app when the command exits 0. Secret is the token
-// the caller must present; when empty, appboss generates one under state_dir and it never
+// the caller must present; when empty, dboss generates one under state_dir and it never
 // belongs in the committed config.
 type Hook struct {
 	Command  string   `yaml:"command" json:"command"`
@@ -1053,8 +1053,8 @@ type appFile struct {
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }
 
-// LoadApp reads an app's appboss.yaml under a host. Host keys are rejected here because only the
-// root file appboss start was pointed at owns the proxy, ports and runtime directories.
+// LoadApp reads an app's dboss.yaml under a host. Host keys are rejected here because only the
+// root file dboss start was pointed at owns the proxy, ports and runtime directories.
 func LoadApp(path string, defaults Defaults) (App, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

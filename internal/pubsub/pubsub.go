@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/super"
 )
 
 // outBuffer is how many messages may queue for one slow subscriber before it is dropped.

@@ -199,7 +199,7 @@ func (n *Notifier) body(event Event) ([]byte, error) {
 	case "discord":
 		return json.Marshal(map[string]string{"content": message})
 	case "ntfy":
-		return json.Marshal(map[string]any{"title": "appboss " + event.Type, "message": message, "tags": []string{event.Type}})
+		return json.Marshal(map[string]any{"title": "dboss " + event.Type, "message": message, "tags": []string{event.Type}})
 	default:
 		return json.Marshal(event)
 	}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 
 	"github.com/jackc/pgx/v5"
 )

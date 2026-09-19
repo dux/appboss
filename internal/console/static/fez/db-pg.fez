@@ -33,8 +33,8 @@
       this.state.loading = true
       try {
         const data = refresh
-          ? await Boss.api('/api/pg/refresh', { method: 'POST', body: '{}' })
-          : await Boss.api('/api/pg')
+          ? await Dboss.api('/api/pg/refresh', { method: 'POST', body: '{}' })
+          : await Dboss.api('/api/pg')
         this.apply(data)
         this.state.error = ''
       } catch (error) {
@@ -155,7 +155,7 @@
       }
       try {
         this.state.busy = true
-        const data = await Boss.api('/api/pg/config', { method: 'POST', body: JSON.stringify({ backup }) })
+        const data = await Dboss.api('/api/pg/config', { method: 'POST', body: JSON.stringify({ backup }) })
         this.apply(data)
         this.message('Backup settings saved.')
         Toast.show('PostgreSQL backup settings saved')
@@ -175,7 +175,7 @@
       }
       try {
         this.state.busy = true
-        const data = await Boss.api('/api/pg/backup', { method: 'POST', body: JSON.stringify({ database: name }) })
+        const data = await Dboss.api('/api/pg/backup', { method: 'POST', body: JSON.stringify({ database: name }) })
         this.state.backups = data.backups || []
         this.message(name ? `Backup finished for ${name}.` : 'Backup finished.')
         Toast.show(name ? `${name}: backup finished` : 'Backup finished')
@@ -195,7 +195,7 @@
       if (!window.confirm(`Restore backup ${entry.id} into ${target}?`)) return
       try {
         this.state.busy = true
-        const result = await Boss.api('/api/pg/restore', { method: 'POST', body: JSON.stringify({ id: entry.id, target }) })
+        const result = await Dboss.api('/api/pg/restore', { method: 'POST', body: JSON.stringify({ id: entry.id, target }) })
         Toast.show(`Restored into ${result.target}`)
         this.message(`Restored into ${result.target}.`)
       } catch (error) {

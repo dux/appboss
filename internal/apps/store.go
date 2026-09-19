@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,7 +33,7 @@ type ConfigRevision struct {
 	name     string
 }
 
-// ConfigFile is one file appboss reads. IDs are "host" or "app:<name>" and map to paths only on
+// ConfigFile is one file dboss reads. IDs are "host" or "app:<name>" and map to paths only on
 // the server, so a client never names a path.
 type ConfigFile struct {
 	ID       string `json:"id"`
@@ -148,7 +148,7 @@ func (s *Store) Validate(id, contents string) error {
 			return err
 		}
 		if (parsed.App != nil) != (s.root.App != nil) {
-			return errors.New("the host file cannot switch between apps and procfile while appboss runs")
+			return errors.New("the host file cannot switch between apps and procfile while dboss runs")
 		}
 		if parsed.App != nil {
 			_, err = validateApp(*parsed.App)
@@ -280,7 +280,7 @@ func (s *Store) pruneHistory(id string) error {
 
 func safeID(id string) string { return strings.ReplaceAll(id, ":", "-") }
 
-// CreateLocal copies an app's appboss.yaml to appboss.local.yaml so edits made on the server live
+// CreateLocal copies an app's dboss.yaml to dboss.local.yaml so edits made on the server live
 // in the file the next deploy does not overwrite.
 func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	file, err := s.lookup("app:" + app)
@@ -313,7 +313,7 @@ func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	return s.Read("app:" + app)
 }
 
-// EnsureLocal creates an app's appboss.local.yaml from its appboss.yaml when the override is
+// EnsureLocal creates an app's dboss.local.yaml from its dboss.yaml when the override is
 // missing, and otherwise returns the existing one. The console's visual editor calls it before
 // a write, so an edit lands in the file the next deploy does not overwrite.
 func (s *Store) EnsureLocal(app string) (ConfigFile, error) {
@@ -327,7 +327,7 @@ func (s *Store) EnsureLocal(app string) (ConfigFile, error) {
 	return s.CreateLocal(app)
 }
 
-// CreateHostLocal copies the host config to appboss.local.yaml so console writes there survive a
+// CreateHostLocal copies the host config to dboss.local.yaml so console writes there survive a
 // deploy. It is a no-op when the local file already exists.
 func (s *Store) CreateHostLocal() (ConfigFile, error) {
 	target := filepath.Join(s.root.Dir, config.LocalFileName)

@@ -52,7 +52,7 @@
         return
       }
       try {
-        const data = await Boss.api(`/api/config/form?id=${encodeURIComponent(this.props.file_id)}`)
+        const data = await Dboss.api(`/api/config/form?id=${encodeURIComponent(this.props.file_id)}`)
         this.state.file = data.file
         this.state.values = data.values || {}
         this.state.recipes = data.recipes || []
@@ -220,7 +220,7 @@
         this.state.busy = true
         const response = await fetch('/api/config/apply', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': Boss.state.csrf },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': Dboss.state.csrf },
           body: JSON.stringify({ id: this.props.file_id, revision: this.state.revision, recipe: recipe.id, values, reset }),
         })
         if (response.status === 401) {
@@ -240,12 +240,12 @@
         await this.load()
         this.message(`Saved ${data.file.source}.`)
         Toast.show(`Saved ${recipe.title}.`)
-        Boss.globalState.restartRequired = data.restart_required || []
+        Dboss.globalState.restartRequired = data.restart_required || []
         if (data.invalid && data.invalid.length) {
           Toast.show(`Rescan found ${data.invalid.length} invalid app(s): ${data.invalid[0]}`, true)
         }
         Fez.publish('config:changed')
-        Boss.reload({ quiet: true })
+        Dboss.reload({ quiet: true })
       } catch (error) {
         this.message(error.message, true)
         Toast.show(error.message, true)
@@ -331,12 +331,15 @@
                   <input class="config-input" type={field.kind === 'number' ? 'number' : 'text'} id={('config-' + field.path)} data-path={field.path} data-kind={field.kind} placeholder={placeholder(field)} />
                 {/if}
                 <span class="config-field-desc">{field.description}</span>
+                {#if field.example}
+                  <span class="config-field-example">e.g. <code>{field.example}</code></span>
+                {/if}
               </div>
             {/each}
           {/each}
         </div>
         <div class="config-form-note text-muted">
-          Saved to the server-only override (appboss.local.yaml) next to {state.file ? state.file.source : 'the file'}, so a deploy never overwrites it.
+          Saved to the server-only override (dboss.local.yaml) next to {state.file ? state.file.source : 'the file'}, so a deploy never overwrites it.
         </div>
         {#if state.message}
           <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>

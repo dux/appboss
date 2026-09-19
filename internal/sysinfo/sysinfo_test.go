@@ -90,7 +90,7 @@ func TestRefreshCollectsHostAndDirs(t *testing.T) {
 }
 
 func TestCollectDirsReportsMissingPath(t *testing.T) {
-	inspector := NewInspector([]DirSpec{{Name: "gone", Path: "/appboss/does/not/exist"}})
+	inspector := NewInspector([]DirSpec{{Name: "gone", Path: "/dboss/does/not/exist"}})
 	dirs := collectDirs(inspector.dirs)
 	if len(dirs) != 1 || dirs[0].Error == "" {
 		t.Fatalf("missing path should carry an error: %+v", dirs)

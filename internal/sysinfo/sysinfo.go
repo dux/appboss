@@ -1,5 +1,5 @@
 // Package sysinfo inspects the host the daemon runs on: OS and kernel facts, live resource
-// samples and the toolchains that are installed. It is read-only: it never changes appboss or
+// samples and the toolchains that are installed. It is read-only: it never changes dboss or
 // app state, runs no mutating command and writes no audit row. A Module keeps a snapshot warm
 // for the console's Sys tab.
 package sysinfo
@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"app-boss/internal/version"
+	"dboss/internal/version"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	probeTimeout       = 2 * time.Second
 )
 
-// toolEnv is the non-secret environment appboss forwards to the console for context.
+// toolEnv is the non-secret environment dboss forwards to the console for context.
 var toolEnv = []string{"PATH", "HOME", "USER", "SHELL", "LANG", "TZ"}
 
 // Tool is one probed executable: where it is, what version it reports, or that it is missing.
@@ -40,13 +40,13 @@ type Tool struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// DirSpec names a directory appboss uses, so the inspector can report its disk usage.
+// DirSpec names a directory dboss uses, so the inspector can report its disk usage.
 type DirSpec struct {
 	Name string
 	Path string
 }
 
-// Dir is one directory appboss uses plus the filesystem it lives on.
+// Dir is one directory dboss uses plus the filesystem it lives on.
 type Dir struct {
 	Name       string  `json:"name"`
 	Path       string  `json:"path"`
@@ -57,7 +57,7 @@ type Dir struct {
 	Error      string  `json:"error,omitempty"`
 }
 
-// Host is the machine appboss runs on.
+// Host is the machine dboss runs on.
 type Host struct {
 	Hostname  string  `json:"hostname"`
 	OS        string  `json:"os"`
@@ -76,9 +76,9 @@ type Host struct {
 	SwapFree  int64   `json:"swap_free,omitempty"`
 }
 
-// Runtime is the running appboss process itself.
+// Runtime is the running dboss process itself.
 type Runtime struct {
-	AppBoss    string            `json:"appboss"`
+	Dboss      string            `json:"dboss"`
 	GoVersion  string            `json:"go_version"`
 	PID        int               `json:"pid"`
 	Goroutines int               `json:"goroutines"`
@@ -233,7 +233,7 @@ func collectRuntime() Runtime {
 		}
 	}
 	return Runtime{
-		AppBoss:    version.String(),
+		Dboss:      version.String(),
 		GoVersion:  runtime.Version(),
 		PID:        os.Getpid(),
 		Goroutines: runtime.NumGoroutine(),

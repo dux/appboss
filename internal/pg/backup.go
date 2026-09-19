@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"app-boss/internal/logx"
-	"app-boss/internal/notify"
+	"dboss/internal/logx"
+	"dboss/internal/notify"
 
 	"github.com/jackc/pgx/v5"
 )

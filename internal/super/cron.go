@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/logx"
-	"app-boss/internal/schedule"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/logx"
+	"dboss/internal/schedule"
 )
 
 // cronTick is how often the manager asks each app for due jobs. It bounds how late an "every"

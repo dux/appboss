@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// DefaultCgroupRoot is the parent cgroup appboss creates one directory under per process. It is
+// DefaultCgroupRoot is the parent cgroup dboss creates one directory under per process. It is
 // on the cgroup v2 unified hierarchy; a box without it falls back to the procgroup backend.
-const DefaultCgroupRoot = "/sys/fs/cgroup/boss"
+const DefaultCgroupRoot = "/sys/fs/cgroup/dboss"
 
 type cpuSample struct {
 	usage int64
@@ -31,14 +31,14 @@ func NewCgroup(root string) *Cgroup { return &Cgroup{root: root, cpu: map[string
 
 func (*Cgroup) Name() string { return "cgroup" }
 
-// Available reports whether the cgroup hierarchy exists and appboss can write to it. It enables
+// Available reports whether the cgroup hierarchy exists and dboss can write to it. It enables
 // the memory and cpu controllers for child cgroups, which a delegated parent must allow.
 func Available(root string) bool {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return false
 	}
 	_ = os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory +cpu"), 0o644)
-	probe := filepath.Join(root, ".appboss-write-test")
+	probe := filepath.Join(root, ".dboss-write-test")
 	if err := os.WriteFile(probe, []byte("1"), 0o644); err != nil {
 		return false
 	}

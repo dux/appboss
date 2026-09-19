@@ -10,7 +10,7 @@ import (
 func TestAuditEndpointListsRows(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/api/audit", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/audit", nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -24,7 +24,7 @@ func TestAuditEndpointListsRows(t *testing.T) {
 
 func TestAuditEndpointRequiresSession(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/api/audit", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/audit", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code == http.StatusOK {

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/notify"
-	"app-boss/internal/ports"
+	"dboss/internal/notify"
+	"dboss/internal/ports"
 )
 
 type recordingSink struct {

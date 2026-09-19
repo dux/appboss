@@ -20,11 +20,11 @@
   </div>
   <div class="page-actions">
     <span class="refresh-status">{globalState.status}</span>
-    <button class="btn" type="button" onclick="Boss.reload()" disabled={globalState.busy}>
+    <button class="btn" type="button" onclick="Dboss.reload()" disabled={globalState.busy}>
       <svg class="icon"><use href="#i-refresh"></use></svg>
       Refresh
     </button>
-    <button class="btn btn-primary" type="button" onclick="Boss.rescan()" disabled={globalState.busy}>
+    <button class="btn btn-primary" type="button" onclick="Dboss.rescan()" disabled={globalState.busy}>
       <svg class="icon"><use href="#i-scan"></use></svg>
       Rescan apps
     </button>
@@ -68,7 +68,7 @@
     </div>
   {:else}
     {#each globalState.apps as app}
-      <ab-app-card :app="app" />
+      <db-app-card :app="app" />
     {:else}
       <div class="card empty-state">
         <strong>No services found</strong>

@@ -1,4 +1,4 @@
-module app-boss
+module dboss
 
 go 1.25.0
 

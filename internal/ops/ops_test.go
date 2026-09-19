@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/config"
-	"app-boss/internal/logstore"
-	"app-boss/internal/pg"
-	"app-boss/internal/super"
+	"dboss/internal/config"
+	"dboss/internal/logstore"
+	"dboss/internal/pg"
+	"dboss/internal/super"
 )
 
 type fakeRuntime struct {
@@ -64,7 +64,7 @@ func (f *fakeRuntime) RunHook(name, hook string) error {
 
 func (f *fakeRuntime) RotateHook(name, hook string) (super.HookInfo, error) {
 	f.actions = append(f.actions, "hook-rotate "+name+"/"+hook)
-	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, URL: "https://boss.example.com/hooks/" + name + "/" + hook}, nil
+	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, URL: "https://dboss.example.com/hooks/" + name + "/" + hook}, nil
 }
 
 func (f *fakeRuntime) Hooks(name string) ([]super.HookInfo, error) {

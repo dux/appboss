@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"app-boss/internal/config"
+	"dboss/internal/config"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"

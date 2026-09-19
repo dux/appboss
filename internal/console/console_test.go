@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"app-boss/internal/apps"
-	"app-boss/internal/config"
-	"app-boss/internal/logstore"
-	"app-boss/internal/ops"
-	"app-boss/internal/super"
-	"app-boss/internal/sysinfo"
+	"dboss/internal/apps"
+	"dboss/internal/config"
+	"dboss/internal/logstore"
+	"dboss/internal/ops"
+	"dboss/internal/super"
+	"dboss/internal/sysinfo"
 )
 
 // fakeSys is a SysReader whose refresh is observable.
@@ -101,7 +101,7 @@ func (m *fakeManager) RunHook(app, hook string) error {
 
 func (m *fakeManager) RotateHook(app, hook string) (super.HookInfo, error) {
 	m.actions = append(m.actions, fmt.Sprintf("hook-rotate %s %s", app, hook))
-	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://boss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
+	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://dboss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
 }
 
 func (m *fakeManager) Hooks(app string) ([]super.HookInfo, error) {
@@ -139,8 +139,8 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{files: map[string]*apps.ConfigFile{
-		"host":        {ID: "host", Path: "/srv/appboss.yaml", Source: "appboss.yaml", Contents: "apps: ./apps\n"},
-		"app:sinatra": {ID: "app:sinatra", App: "sinatra", Path: "/srv/apps/sinatra/appboss.yaml", Source: "appboss.yaml", Contents: "procfile:\n  web: ./server\n"},
+		"host":        {ID: "host", Path: "/srv/dboss.yaml", Source: "dboss.yaml", Contents: "apps: ./apps\n"},
+		"app:sinatra": {ID: "app:sinatra", App: "sinatra", Path: "/srv/apps/sinatra/dboss.yaml", Source: "dboss.yaml", Contents: "procfile:\n  web: ./server\n"},
 	}, invalid: map[string]string{}, history: map[string][]apps.ConfigRevision{}, historyContents: map[string]string{}}
 }
 
@@ -196,7 +196,7 @@ func (s *fakeStore) CreateLocal(app string) (apps.ConfigFile, error) {
 	if file == nil || file.HasLocal {
 		return apps.ConfigFile{}, errors.New("cannot create override")
 	}
-	file.HasLocal, file.Source, file.Path = true, "appboss.local.yaml", "/srv/apps/sinatra/appboss.local.yaml"
+	file.HasLocal, file.Source, file.Path = true, "dboss.local.yaml", "/srv/apps/sinatra/dboss.local.yaml"
 	return s.Read("app:" + app)
 }
 
@@ -276,7 +276,7 @@ func (fakeLogs) Tree([]string) ([]logstore.AppTree, error) {
 	}, {
 		Name:     logstore.HostApp,
 		Bytes:    1024,
-		Channels: []logstore.Channel{{ID: "appboss", Label: "appboss"}},
+		Channels: []logstore.Channel{{ID: "dboss", Label: "dboss"}},
 	}}, nil
 }
 
@@ -291,7 +291,7 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	handler := newTestHandler(t, manager, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}})
 	cookie, session := sessionCookie(t, handler)
 
-	bootstrapRequest := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/api/bootstrap", nil)
+	bootstrapRequest := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/bootstrap", nil)
 	bootstrapRequest.AddCookie(cookie)
 	bootstrapResponse := httptest.NewRecorder()
 	handler.ServeHTTP(bootstrapResponse, bootstrapRequest)
@@ -306,9 +306,9 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 		t.Fatalf("unexpected dashboard: %+v", dashboard)
 	}
 
-	actionRequest := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"restart"}`))
+	actionRequest := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"restart"}`))
 	actionRequest.Header.Set("Content-Type", "application/json")
-	actionRequest.Header.Set("Origin", "http://boss.lvh.me:8081")
+	actionRequest.Header.Set("Origin", "http://dboss.lvh.me:8081")
 	actionRequest.Header.Set("X-CSRF-Token", session.CSRF)
 	actionRequest.AddCookie(cookie)
 	actionResponse := httptest.NewRecorder()
@@ -322,9 +322,9 @@ func TestConsoleRunsCronJob(t *testing.T) {
 	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "bun"}}}
 	handler := newTestHandler(t, manager, nil)
 	cookie, session := sessionCookie(t, handler)
-	request := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/api/action", strings.NewReader(`{"app":"bun","action":"cron-run","job":"heartbeat"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"bun","action":"cron-run","job":"heartbeat"}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Origin", "http://boss.lvh.me:8081")
+	request.Header.Set("Origin", "http://dboss.lvh.me:8081")
 	request.Header.Set("X-CSRF-Token", session.CSRF)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
@@ -337,7 +337,7 @@ func TestConsoleRunsCronJob(t *testing.T) {
 func TestConsoleServesFavicon(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/favicon.ico", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/favicon.ico", nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -352,15 +352,15 @@ func TestConsoleServesFavicon(t *testing.T) {
 func TestConsoleServesLogViewerPageAndTextExport(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	page := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs?app=sinatra", nil)
+	page := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/logs?app=sinatra", nil)
 	page.AddCookie(cookie)
 	pageResponse := httptest.NewRecorder()
 	handler.ServeHTTP(pageResponse, page)
-	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "ab-log-view") {
+	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "db-log-view") {
 		t.Fatalf("unexpected viewer page: %d %s", pageResponse.Code, pageResponse.Body.String())
 	}
 
-	text := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/logs.txt?app=sinatra&channel=stdout", nil)
+	text := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/logs.txt?app=sinatra&channel=stdout", nil)
 	text.AddCookie(cookie)
 	textResponse := httptest.NewRecorder()
 	handler.ServeHTTP(textResponse, text)
@@ -382,7 +382,7 @@ func TestConsoleRejectsWrongHostAndMissingCSRF(t *testing.T) {
 		t.Fatalf("wrong host status = %d", wrongHostResponse.Code)
 	}
 
-	actionRequest := httptest.NewRequest(http.MethodPost, "http://boss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"start"}`))
+	actionRequest := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"start"}`))
 	actionRequest.Header.Set("Content-Type", "application/json")
 	actionRequest.AddCookie(cookie)
 	actionResponse := httptest.NewRecorder()
@@ -394,7 +394,7 @@ func TestConsoleRejectsWrongHostAndMissingCSRF(t *testing.T) {
 
 func TestConsoleAssetsRequireAuthentication(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusFound || !strings.Contains(response.Header().Get("Location"), "auth.authcog.com") {
@@ -405,11 +405,11 @@ func TestConsoleAssetsRequireAuthentication(t *testing.T) {
 func TestConsoleServesAuthenticatedRoot(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/", nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "App Boss") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "dboss") {
 		t.Fatalf("unexpected root response: %d %s", response.Code, response.Body.String())
 	}
 }
@@ -445,7 +445,7 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handle
 	cfg := config.Default()
 	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
-	cfg.Management.Host = config.List{"boss.lvh.me", "boss.internal"}
+	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}, nil, nil), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
@@ -471,7 +471,7 @@ func TestConsoleServesSystemInspection(t *testing.T) {
 func TestConsoleAnswersForEveryManagementHost(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	for host, want := range map[string]int{"boss.lvh.me:8081": http.StatusOK, "boss.internal": http.StatusOK, "other.lvh.me:8081": http.StatusNotFound} {
+	for host, want := range map[string]int{"dboss.lvh.me:8081": http.StatusOK, "dboss.internal": http.StatusOK, "other.lvh.me:8081": http.StatusNotFound} {
 		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/api/apps", nil)
 		request.AddCookie(cookie)
 		response := httptest.NewRecorder()
@@ -489,11 +489,11 @@ func call(t *testing.T, handler *Handler, cookie *http.Cookie, session authSessi
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
-	request := httptest.NewRequest(method, "http://boss.lvh.me:8081"+target, reader)
+	request := httptest.NewRequest(method, "http://dboss.lvh.me:8081"+target, reader)
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("Origin", "http://boss.lvh.me:8081")
+	request.Header.Set("Origin", "http://dboss.lvh.me:8081")
 	request.Header.Set("X-CSRF-Token", session.CSRF)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
@@ -505,7 +505,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 	manager := &fakeManager{warnings: []error{errors.New("bun: procfile.web command is empty")}}
 	handler := newTestHandler(t, manager, nil)
 	store := handler.store.(*fakeStore)
-	store.invalid["broken"] = "decode appboss.yaml: yaml: line 3: mapping values are not allowed in this context"
+	store.invalid["broken"] = "decode dboss.yaml: yaml: line 3: mapping values are not allowed in this context"
 	cookie, session := sessionCookie(t, handler)
 
 	list := call(t, handler, cookie, session, http.MethodGet, "/api/config", "")
@@ -536,7 +536,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 	}
 
 	local := call(t, handler, cookie, session, http.MethodPost, "/api/config/local", `{"app":"sinatra"}`)
-	if local.Code != http.StatusOK || !strings.Contains(local.Body.String(), `"source":"appboss.local.yaml"`) {
+	if local.Code != http.StatusOK || !strings.Contains(local.Body.String(), `"source":"dboss.local.yaml"`) {
 		t.Fatalf("unexpected override: %d %s", local.Code, local.Body.String())
 	}
 	effective := call(t, handler, cookie, session, http.MethodGet, "/api/config/effective?app=sinatra", "")
@@ -548,7 +548,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected reference: %d", reference.Code)
 	}
 
-	noCSRF := httptest.NewRequest(http.MethodPut, "http://boss.lvh.me:8081/api/config/file", strings.NewReader(`{"id":"host","contents":"","revision":""}`))
+	noCSRF := httptest.NewRequest(http.MethodPut, "http://dboss.lvh.me:8081/api/config/file", strings.NewReader(`{"id":"host","contents":"","revision":""}`))
 	noCSRF.Header.Set("Content-Type", "application/json")
 	noCSRF.AddCookie(cookie)
 	noCSRFResponse := httptest.NewRecorder()
@@ -654,7 +654,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	cfg.Apps = filepath.Join(hostDir, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
-	cfg.Management.Host = config.List{"boss.lvh.me"}
+	cfg.Management.Host = config.List{"dboss.lvh.me"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	store := apps.NewStore(cfg)
 	manager := &fakeManager{}
@@ -698,7 +698,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(base), "socketio") {
-		t.Fatal("the base appboss.yaml was modified")
+		t.Fatal("the base dboss.yaml was modified")
 	}
 	if manager.actions[len(manager.actions)-1] != "rescan" {
 		t.Fatalf("apply did not rescan: %v", manager.actions)
@@ -739,13 +739,13 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 
 func sessionCookie(t *testing.T, handler *Handler) (*http.Cookie, authSession) {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/", nil)
 	response := httptest.NewRecorder()
 	if err := handler.auth.setSessionCookie(response, request, "admin@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	cookie := cookieNamed(t, response.Result().Cookies(), authSessionCookie)
-	authorized := httptest.NewRequest(http.MethodGet, "http://boss.lvh.me:8081/", nil)
+	authorized := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/", nil)
 	authorized.AddCookie(cookie)
 	session, ok := handler.auth.validSession(authorized)
 	if !ok || session.ExpiresAt <= time.Now().Unix() {

@@ -19,7 +19,7 @@ func TestPostgresBackupValidation(t *testing.T) {
 		{"bad name", "postgres:\n  backup:\n    databases:\n      \"app-production\": {}\n", "invalid database name"},
 		{"bad keep", "postgres:\n  backup:\n    keep:\n      hourly: -1\n", "cannot be negative"},
 	} {
-		_, err := Parse([]byte(base+test.data), "/srv/appboss.yaml")
+		_, err := Parse([]byte(base+test.data), "/srv/dboss.yaml")
 		if test.want == "" {
 			if err != nil {
 				t.Errorf("%s: unexpected error %v", test.name, err)
@@ -41,7 +41,7 @@ func TestS3RequiresEndpointAndCredentials(t *testing.T) {
 		{"endpoint only", "s3:\n  endpoint: https://x.example.com\n", "endpoint and bucket"},
 		{"no credentials", "s3:\n  endpoint: https://x.example.com\n  region: auto\n  bucket: b\n", "access_key and secret_key are required"},
 	} {
-		_, err := Parse([]byte("apps: ./apps\n"+test.data), "/srv/appboss.yaml")
+		_, err := Parse([]byte("apps: ./apps\n"+test.data), "/srv/dboss.yaml")
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: got %v, want %q", test.name, err, test.want)
 		}
@@ -49,7 +49,7 @@ func TestS3RequiresEndpointAndCredentials(t *testing.T) {
 }
 
 func TestPostgresIsHostOnly(t *testing.T) {
-	_, err := ParseApp([]byte("procfile:\n  web: ./x\npostgres:\n  dsn: \"\"\n"), "/srv/apps/demo/appboss.yaml", Default().Defaults)
+	_, err := ParseApp([]byte("procfile:\n  web: ./x\npostgres:\n  dsn: \"\"\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
 	if err == nil || !strings.Contains(err.Error(), "postgres") || !strings.Contains(err.Error(), "only valid in the root") {
 		t.Fatalf("postgres must be rejected in an app file, got %v", err)
 	}
