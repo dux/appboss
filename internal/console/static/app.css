@@ -47,6 +47,7 @@ body {
 button,
 a,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -377,6 +378,53 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* --- Form controls --------------------------------------------------------- */
+
+input:where(:not([type="checkbox"], [type="radio"])),
+select,
+textarea {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--card);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input:where(:not([type="checkbox"], [type="radio"])):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #a0aab5;
+}
+
+input:where(:not([type="checkbox"], [type="radio"])):disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--muted);
+  background: var(--surface);
+  cursor: not-allowed;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
 }
 
 /* --- Cards ----------------------------------------------------------------- */
@@ -911,14 +959,6 @@ code {
   padding-top: 4px;
 }
 
-.pg-databases input[type='checkbox'],
-.pg-settings input[type='checkbox'],
-.pg-backup-row input[type='checkbox'] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--primary);
-}
-
 .pg-note {
   padding: 0 20px 16px;
 }
@@ -1317,19 +1357,6 @@ code {
 
 .keys-search input {
   width: 100%;
-  min-height: 38px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  background: var(--card);
-  font-size: var(--text-size-normal);
-}
-
-.keys-search input:focus {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
 .keys-group {
@@ -1600,21 +1627,10 @@ code {
 .log-filters select {
   min-height: 34px;
   padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  background: var(--card);
 }
 
 .log-filters input {
   flex: 1 1 220px;
-}
-
-.log-filters input:focus,
-.log-filters select:focus {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
 .log-table {
@@ -1799,10 +1815,6 @@ code {
 .log-control {
   min-height: 32px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  background: var(--card);
 }
 
 select.log-control { max-width: 220px; }
@@ -1828,17 +1840,6 @@ select.log-control { max-width: 220px; }
   width: 100%;
   min-height: 32px;
   padding: 0 10px 0 30px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  background: var(--card);
-}
-
-.log-control:focus,
-.log-search input:focus {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
 .log-spacer { flex: 1 1 auto; }
@@ -2047,31 +2048,12 @@ select.log-control { max-width: 220px; }
 .config-input,
 .config-textarea {
   width: 100%;
-  min-height: 38px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  background: var(--card);
-}
-
-.config-input:focus,
-.config-textarea:focus {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: 0 0 0 3px var(--primary-soft);
-}
-
-.config-input::placeholder,
-.config-textarea::placeholder {
-  color: #a0aab5;
 }
 
 .config-textarea {
   min-height: 62px;
   font-family: var(--mono);
   font-size: var(--text-size-small);
-  resize: vertical;
 }
 
 .config-range {
