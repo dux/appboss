@@ -552,3 +552,35 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 		t.Fatal("maintenance flag not cleared")
 	}
 }
+
+func TestIdleStopKeepsAppWithInFlightRequest(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{33300, 33320}, "idle_stop: 150ms\n")
+	cfg.Daemon.IdleTick = config.Duration(20 * time.Millisecond)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(invalid) != 0 {
+		t.Fatalf("invalid apps: %v", invalid)
+	}
+	waitForSupervisorState(t, manager, Running)
+
+	runtime, err := manager.runtime("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.call(request{kind: requestTouch}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An open request, a websocket being the long-lived case, must outlast idle_stop.
+	counter := manager.Enter("demo")
+	time.Sleep(500 * time.Millisecond)
+	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != Running {
+		t.Fatalf("idle_stop stopped an app with an in-flight request: %+v", snapshot)
+	}
+
+	manager.Leave(counter)
+	waitForSupervisorState(t, manager, Stopped)
+}

@@ -731,6 +731,11 @@ func (m *Manager) idleLoop(ctx context.Context) {
 			}
 			m.mu.RUnlock()
 			for _, runtime := range runtimes {
+				// An in-flight request, a websocket being the long-lived case, counts as
+				// activity for as long as it runs, so idle_stop cannot cut it off.
+				if m.traffic(runtime.spec.Name).Load() > 0 {
+					continue
+				}
 				result := runtime.query(request{kind: requestIdle, now: now})
 				if result.idleStopped {
 					_ = m.setDesired(result.snapshot.Name, false)
