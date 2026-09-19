@@ -122,8 +122,8 @@
 
 <div class="page-header">
   <div>
-    <p class="page-pretitle">Realtime</p>
-    <h1 class="page-title">Realtime channels</h1>
+    <p class="page-pretitle">PubSub</p>
+    <h1 class="page-title">Channels</h1>
   </div>
   <div class="page-actions">
     <button class="btn" type="button" onclick="fez.load()" disabled={state.loading}>
@@ -170,7 +170,7 @@
 {:else}
   {#if !state.loading}
     <div class="card empty-state">
-      <strong>No app serves realtime channels</strong>
+      <strong>No app serves PubSub channels</strong>
       <span>Set <code>pubsub.path</code> in an app's appboss.yaml, then rescan.</span>
     </div>
   {/if}

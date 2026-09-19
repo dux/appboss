@@ -2,7 +2,7 @@ package pubsub
 
 // Help is the integration guide printed by `appboss pubsub help` and shown in the console. It is
 // the same text for both so the browser and the terminal never drift.
-const Help = `Realtime channels (pubsub)
+const Help = `PubSub channels
 
 Enable it in the app's appboss.yaml (or in defaults: of the host file):
 

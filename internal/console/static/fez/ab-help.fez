@@ -8,7 +8,7 @@
     { id: 'logs', title: 'Logs' },
     { id: 'cron', title: 'Scheduled jobs' },
     { id: 'hooks', title: 'Deploy hooks' },
-    { id: 'pubsub', title: 'Realtime channels' },
+    { id: 'pubsub', title: 'PubSub' },
     { id: 'audit', title: 'Audit & history' },
     { id: 'health', title: 'Health & alerts' },
     { id: 'cli', title: 'CLI' },
@@ -100,9 +100,9 @@
           <li><code>restart: true</code> rolls the app after a clean run; <code>appboss exec</code> runs one-off commands in the same environment.</li>
         </ul>
 
-        <h3><a class="help-jump" onclick="fez.select('pubsub')">Realtime channels</a></h3>
+        <h3><a class="help-jump" onclick="fez.select('pubsub')">PubSub</a></h3>
         <ul>
-          <li><code>pubsub.path</code> serves realtime channels on the app's own hosts: subscribers connect over a WebSocket or SSE, publishers POST with a secret.</li>
+          <li><code>pubsub.path</code> serves PubSub channels on the app's own hosts: subscribers connect over a WebSocket or SSE, publishers POST with a secret.</li>
           <li>The last <code>pubsub.replay</code> messages are replayed to a late subscriber; the bundled <code>&lt;path&gt;/client.js</code> needs no dependency.</li>
           <li>A generated per-app publish secret, a browser self-test at <code>&lt;path&gt;/_test</code>, and <code>appboss pubsub</code> for the secret, channels and publishing.</li>
         </ul>
@@ -264,7 +264,7 @@ appboss logs shop --search timeout --level error --channel stdout</pre>
 
     {#if state.topic === 'pubsub'}
       <section>
-        <h2>Realtime channels</h2>
+        <h2>PubSub</h2>
         <p><code>pubsub.path</code> turns a URL prefix on the app's own hosts into a pub/sub hub. It is served by appboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
         <pre>pubsub:
   path: /socketio
@@ -285,7 +285,7 @@ appboss logs shop --search timeout --level error --channel stdout</pre>
   -H "Authorization: Bearer $PUBSUB_SECRET" \
   -d '&#123;"event":"message","data":&#123;"text":"hello"&#125;&#125;'</pre>
         <p>Each message is <code>&#123;"event","data","ts"&#125;</code>; the last <code>replay</code> messages are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher. <code>client_events: true</code> lets a WebSocket client publish to its own channel with the same envelope.</p>
-        <p>With no <code>secret</code> in the config, appboss generates one per app under <code>state_dir</code>; the Realtime tab and <code>appboss pubsub</code> print it and <code>appboss pubsub rotate</code> replaces it. The self-test at <code>&lt;path&gt;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
+        <p>With no <code>secret</code> in the config, appboss generates one per app under <code>state_dir</code>; the PubSub tab and <code>appboss pubsub</code> print it and <code>appboss pubsub rotate</code> replaces it. The self-test at <code>&lt;path&gt;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
       </section>
     {/if}
 

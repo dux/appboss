@@ -224,7 +224,7 @@ With no `secret` in the config, appboss generates a 64-character secret under `s
 
 `appboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes appboss's exit code.
 
-## Realtime channels
+## PubSub channels
 
 An app can serve a pub/sub hub on its own hosts. Set a path and appboss answers it instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it:
 
@@ -269,7 +269,7 @@ The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`
 
 **Self-test.** With `test: true`, `GET <path>/_test` serves a page that opens a WebSocket and an SSE connection and reports PASS or FAIL in the browser.
 
-`appboss pubsub [app]` lists channels and subscriber counts, `appboss pubsub secret [app]` prints the credential and example URLs, `appboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `appboss pubsub help` prints the integration guide. The console's **Realtime** tab (when any app sets a path) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `appboss_pubsub_clients`, `appboss_pubsub_channels` and `appboss_pubsub_messages_total`, each labeled by app.
+`appboss pubsub [app]` lists channels and subscriber counts, `appboss pubsub secret [app]` prints the credential and example URLs, `appboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `appboss pubsub help` prints the integration guide. The console's **PubSub** tab (when any app sets a path) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `appboss_pubsub_clients`, `appboss_pubsub_channels` and `appboss_pubsub_messages_total`, each labeled by app.
 
 ## Health and metrics
 
@@ -399,7 +399,7 @@ management console: http://127.0.0.1:3100 (run `appboss login` for a one-time si
 management console: https://boss.example.com (AuthCog sign-in)
 ```
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, links to the process logs, and edits the host and app `appboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
-The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (Realtime channels, Web, Health and runtime for an app; S3, Notifications and the PostgreSQL connection for the host).
+The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; S3, Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
 A form save is written to the server-only `appboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
 The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, uptime, load, memory and disk use, the appboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.

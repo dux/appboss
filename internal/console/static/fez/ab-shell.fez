@@ -192,7 +192,7 @@
         <li><a class="nav-link" class:active={state.view === 'pg'} href="#pg"><svg class="icon"><use href="#i-database"></use></svg>PG SQL</a></li>
       {/if}
       {#if globalState.pubsubAvailable}
-        <li><a class="nav-link" class:active={state.view === 'pubsub'} href="#pubsub"><svg class="icon"><use href="#i-broadcast"></use></svg>Realtime</a></li>
+        <li><a class="nav-link" class:active={state.view === 'pubsub'} href="#pubsub"><svg class="icon"><use href="#i-broadcast"></use></svg>PubSub</a></li>
       {/if}
       <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Config</a></li>
       <li><a class="nav-link" class:active={state.view === 'help'} href="#help"><svg class="icon"><use href="#i-help"></use></svg>Help</a></li>

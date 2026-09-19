@@ -54,7 +54,7 @@ type recipeSpec struct {
 var recipeSpecs = []recipeSpec{
 	{
 		id:          "pubsub",
-		title:       "Realtime channels",
+		title:       "PubSub channels",
 		description: "Serve WebSocket channels on the app's hosts and choose who may publish.",
 		scope:       RecipeApp,
 		fields: []recipeField{
