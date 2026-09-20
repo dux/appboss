@@ -180,8 +180,19 @@ The supervisor owns the process log file: every `daemon.log_ingest_interval` (de
 seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
 ingestion module parses the sealed segment, commits its rows to the database and only then deletes the file, so a transient database error cannot lose lines.
 A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
+A segment whose commit failed stays on disk and is picked up again by the next pass.
 keyword guess for the level.
 `dboss logs -f` still tails the live file, while `dboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
+
+One row is one record, not one physical line:
+
+* A line that starts with a space or a tab belongs to the line above it, so a stack trace or an indented dump is a single row.
+* A Rails `Started GET "/path" ...` line opens a request row that runs to its `Completed <status>` line; a `5xx` status makes the row `error`, a `4xx` makes it `warn`.
+* A leading `[<request id>]` tag (Rails `config.log_tags = [:request_id]`) fills `request_id` and is removed from the message. dboss sends the id as `X-Request-ID`, the same one stored on the `REQUEST` row. Lines only join a row with the same id, so concurrent requests split into more rows instead of mixing.
+* Blank lines are dropped and ANSI colors are stripped from the message; the expanded row still shows the lines as written in `raw`.
+* A row is capped at 1000 lines or 256 KiB. Its level comes from its first line.
+
+A record that is still being written is not cut: while a log was written to in the last 2 seconds its last open row waits for the next pass.
 
 The full-screen viewer at `/logs` (the **Logs** button on an app card, opened in a new window)
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,

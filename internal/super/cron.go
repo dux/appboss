@@ -344,24 +344,19 @@ func (a *appRuntime) jobLog(state *jobState) (*logWriter, error) {
 }
 
 // sealJobLogs seals every cron and hook log so the ingestion module picks up finished runs.
-func (a *appRuntime) sealJobLogs() ([]string, error) {
-	var sealed []string
+func (a *appRuntime) sealJobLogs() error {
 	for _, states := range []map[string]*jobState{a.cron, a.hooks} {
 		for _, name := range slices.Sorted(maps.Keys(states)) {
 			state := states[name]
 			if state.log == nil {
 				continue
 			}
-			path, err := state.log.Seal()
-			if err != nil {
-				return sealed, err
-			}
-			if path != "" {
-				sealed = append(sealed, path)
+			if _, err := state.log.Seal(); err != nil {
+				return err
 			}
 		}
 	}
-	return sealed, nil
+	return nil
 }
 
 func (a *appRuntime) cronSnapshot() []CronSnapshot {

@@ -3,6 +3,7 @@ package super
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,14 @@ func TestCronListsAndRunsManually(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("cron log was not sealed: %v", sealed)
+	}
+	// Nobody ingested the segment, so the next seal has to hand it out again.
+	again, err := manager.SealLogs("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(again, sealed) {
+		t.Fatalf("leftover segment was dropped: %v, want %v", again, sealed)
 	}
 }
 

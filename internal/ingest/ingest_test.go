@@ -22,17 +22,29 @@ func TestParseLineReadsJSONAndPlain(t *testing.T) {
 	}
 }
 
-func TestParseFileNamesTheProcess(t *testing.T) {
+func TestParseFilesNamesTheProcess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "web.log.1234.sealed")
-	if err := os.WriteFile(path, []byte("one\n{\"level\":\"warn\",\"msg\":\"two\"}\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := ParseFile(path, "stdout")
+	writeLog(t, path, "one\n{\"level\":\"warn\",\"msg\":\"two\"}\n")
+	group, err := parseFiles([]string{path}, "stdout")
 	if err != nil {
 		t.Fatal(err)
 	}
+	group.flush()
+	entries := group.entries
 	if len(entries) != 2 || entries[0].Process != "web" || entries[0].Source != "stdout" || entries[1].Level != "warn" || entries[1].Message != "two" {
 		t.Fatalf("unexpected entries: %+v", entries)
+	}
+}
+
+// writeLog writes a log that went quiet a minute ago, so its last row counts as finished.
+func writeLog(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	quiet := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(path, quiet, quiet); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -93,9 +105,7 @@ func snapshot(dir string) super.Snapshot {
 
 func TestRunOnceIngestsSealedStdoutThenDeletes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "web.log.1.sealed")
-	if err := os.WriteFile(path, []byte("hello\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "hello\n")
 	sink := &memorySink{}
 	module := New(&fakeSealer{paths: []string{path}}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
 	module.runOnce()
@@ -109,18 +119,14 @@ func TestRunOnceIngestsSealedStdoutThenDeletes(t *testing.T) {
 
 func TestCommitFailureKeepsSegmentAndOffset(t *testing.T) {
 	segment := filepath.Join(t.TempDir(), "web.log.1.sealed")
-	if err := os.WriteFile(segment, []byte("hello\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, segment, "hello\n")
 	dir := t.TempDir()
 	logDir := filepath.Join(dir, "log")
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(logDir, "production.log")
-	if err := os.WriteFile(path, []byte("one\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "one\n")
 	sink := &memorySink{appendErr: errors.New("database unavailable")}
 	module := New(&fakeSealer{paths: []string{segment}}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
 	module.runOnce()
@@ -140,9 +146,7 @@ func TestTailFileReadsOnlyNewBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(logDir, "production.log")
-	if err := os.WriteFile(path, []byte("one\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "one\n")
 	sink := &memorySink{}
 	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
 
@@ -154,9 +158,7 @@ func TestTailFileReadsOnlyNewBytes(t *testing.T) {
 		t.Fatalf("offset not committed: %+v", sink.offsets[path])
 	}
 
-	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "one\ntwo\n")
 	module.runOnce()
 	if len(sink.entries) != 2 || sink.entries[1].Message != "two" {
 		t.Fatalf("second pass should read only the new line: %+v", sink.entries)
@@ -170,9 +172,7 @@ func TestTailHoldsBackPartialLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(logDir, "app.log")
-	if err := os.WriteFile(path, []byte("full\npart"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "full\npart")
 	sink := &memorySink{}
 	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
 
@@ -180,9 +180,7 @@ func TestTailHoldsBackPartialLine(t *testing.T) {
 	if len(sink.entries) != 1 || sink.entries[0].Message != "full" {
 		t.Fatalf("partial line should wait: %+v", sink.entries)
 	}
-	if err := os.WriteFile(path, []byte("full\npartial\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "full\npartial\n")
 	module.runOnce()
 	if len(sink.entries) != 2 || sink.entries[1].Message != "partial" {
 		t.Fatalf("second pass should read the completed line: %+v", sink.entries)
@@ -196,16 +194,12 @@ func TestTailResetsOnTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(logDir, "app.log")
-	if err := os.WriteFile(path, []byte("long enough first line\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "long enough first line\n")
 	sink := &memorySink{}
 	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
 	module.runOnce()
 
-	if err := os.WriteFile(path, []byte("new\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
+	writeLog(t, path, "new\n")
 	module.runOnce()
 	if len(sink.entries) != 2 || sink.entries[1].Message != "new" {
 		t.Fatalf("truncated file should restart: %+v", sink.entries)
@@ -237,5 +231,120 @@ func TestDaemonSinkBuffersLines(t *testing.T) {
 	}
 	if len(sink.entries) != 2 || sink.entries[0].Source != "dboss" || sink.entries[1].Message != "partial done" {
 		t.Fatalf("unexpected daemon entries: %+v", sink.entries)
+	}
+}
+
+func TestTailHoldsOpenRowWhileFileIsFresh(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "log")
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(logDir, "app.log")
+	sink := &memorySink{}
+	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+
+	// Just written: the last row may still get more lines.
+	if err := os.WriteFile(path, []byte("done\nhead\n  one\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	module.runOnce()
+	if len(sink.entries) != 1 || sink.entries[0].Message != "done" {
+		t.Fatalf("open row should wait: %+v", sink.entries)
+	}
+	if sink.offsets[path].Offset != int64(len("done\n")) {
+		t.Fatalf("offset should stay at the open row: %+v", sink.offsets[path])
+	}
+
+	writeLog(t, path, "done\nhead\n  one\n  two\n")
+	module.runOnce()
+	if len(sink.entries) != 2 || sink.entries[1].Message != "head\n  one\n  two" {
+		t.Fatalf("row should arrive whole, once: %+v", sink.entries)
+	}
+	module.runOnce()
+	if len(sink.entries) != 2 {
+		t.Fatalf("nothing new to read: %+v", sink.entries)
+	}
+}
+
+// diskSealer hands out every sealed segment in dir, like the supervisor does.
+type diskSealer struct{ dir string }
+
+func (d diskSealer) SealLogs(string) ([]string, error) {
+	return filepath.Glob(filepath.Join(d.dir, "*.sealed"))
+}
+
+func TestSealedRowSplitAcrossSegmentsIsOneRow(t *testing.T) {
+	logs := t.TempDir()
+	first := filepath.Join(logs, "web.log.1000000000000000001.sealed")
+	sink := &memorySink{}
+	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+
+	// The seal landed in the middle of a record of a busy process.
+	if err := os.WriteFile(first, []byte("done\nhead\n  one\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	module.runOnce()
+	if len(sink.entries) != 1 || sink.entries[0].Message != "done" {
+		t.Fatalf("open row should be carried: %+v", sink.entries)
+	}
+	carried, err := os.ReadFile(first)
+	if err != nil || string(carried) != "head\n  one\n" {
+		t.Fatalf("carried segment = %q, %v", carried, err)
+	}
+
+	second := filepath.Join(logs, "web.log.1000000000000000002.sealed")
+	writeLog(t, second, "  two\nnext\n")
+	module.runOnce()
+	if len(sink.entries) != 3 || sink.entries[1].Message != "head\n  one\n  two" || sink.entries[2].Message != "next" {
+		t.Fatalf("row should be joined across segments: %+v", sink.entries)
+	}
+	if left, _ := filepath.Glob(filepath.Join(logs, "*")); len(left) != 0 {
+		t.Fatalf("segments should be removed: %v", left)
+	}
+}
+
+func TestSealedCarryFlushesWhenProcessGoesQuiet(t *testing.T) {
+	logs := t.TempDir()
+	path := filepath.Join(logs, "web.log.1000000000000000001.sealed")
+	if err := os.WriteFile(path, []byte("head\n  one\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sink := &memorySink{}
+	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module.runOnce()
+	if len(sink.entries) != 0 {
+		t.Fatalf("fresh row should be carried: %+v", sink.entries)
+	}
+	quiet := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(path, quiet, quiet); err != nil {
+		t.Fatal(err)
+	}
+	module.runOnce()
+	if len(sink.entries) != 1 || sink.entries[0].Message != "head\n  one" {
+		t.Fatalf("carried row should flush: %+v", sink.entries)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("segment should be removed: %v", err)
+	}
+}
+
+func TestSealedSegmentsAreRetriedAfterFailedCommit(t *testing.T) {
+	logs := t.TempDir()
+	writeLog(t, filepath.Join(logs, "web.log.1000000000000000001.sealed"), "one\n")
+	writeLog(t, filepath.Join(logs, "worker.log.1000000000000000001.sealed"), "job\n")
+	sink := &memorySink{appendErr: errors.New("database unavailable")}
+	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module.runOnce()
+
+	sink.appendErr = nil
+	writeLog(t, filepath.Join(logs, "web.log.1000000000000000002.sealed"), "two\n")
+	module.runOnce()
+	if len(sink.entries) != 3 || sink.entries[0].Message != "one" || sink.entries[1].Message != "two" || sink.entries[2].Process != "worker" {
+		t.Fatalf("leftover segments should be ingested once, in order: %+v", sink.entries)
+	}
+	module.runOnce()
+	if len(sink.entries) != 3 {
+		t.Fatalf("segments were ingested twice: %+v", sink.entries)
 	}
 }

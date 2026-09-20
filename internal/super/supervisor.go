@@ -913,28 +913,23 @@ func (a *appRuntime) rotateHook(name string) error {
 	return a.secrets.Set(a.spec.Name, name, secret)
 }
 
-// sealLogs renames every process's current log segment aside and opens a fresh one, returning
-// the sealed paths for the ingestion module.
+// sealLogs renames every process's current log segment aside and opens a fresh one. It returns
+// every sealed segment on disk, oldest first per log, so one left behind by a failed ingest
+// commit is handed out again.
 func (a *appRuntime) sealLogs() ([]string, error) {
-	var sealed []string
 	for _, name := range slices.Sorted(maps.Keys(a.processes)) {
 		writer, ok := a.processes[name].log.(*logWriter)
 		if !ok {
 			continue
 		}
-		path, err := writer.Seal()
-		if err != nil {
-			return sealed, err
-		}
-		if path != "" {
-			sealed = append(sealed, path)
+		if _, err := writer.Seal(); err != nil {
+			return nil, err
 		}
 	}
-	cronSealed, err := a.sealJobLogs()
-	if err != nil {
-		return sealed, err
+	if err := a.sealJobLogs(); err != nil {
+		return nil, err
 	}
-	return append(sealed, cronSealed...), nil
+	return filepath.Glob(filepath.Join(a.cfg.LogDir, a.spec.Name, "*.sealed"))
 }
 
 func (a *appRuntime) start() error {

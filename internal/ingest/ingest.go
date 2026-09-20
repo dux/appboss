@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -108,22 +109,77 @@ func (m *Module) ingestStdout(snapshot super.Snapshot) {
 		logx.Warnf("seal logs %s: %v", snapshot.Name, err)
 		return
 	}
-	for _, path := range sealed {
-		if err := m.ingestSealed(snapshot.Name, path); err != nil {
-			logx.Warnf("ingest %s: %v", path, err)
+	for _, paths := range byProcess(sealed) {
+		if err := m.ingestSealed(snapshot.Name, paths); err != nil {
+			logx.Warnf("ingest %s: %v", paths[len(paths)-1], err)
 		}
 	}
 }
 
-func (m *Module) ingestSealed(app, path string) error {
-	entries, err := ParseFile(path, "stdout")
+// byProcess splits sealed segment paths into one list per process log, oldest segment first.
+func byProcess(sealed []string) [][]string {
+	var keys []string
+	groups := map[string][]string{}
+	for _, path := range sealed {
+		key := filepath.Join(filepath.Dir(path), processName(path))
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], path)
+	}
+	result := make([][]string, 0, len(keys))
+	for _, key := range keys {
+		slices.Sort(groups[key])
+		result = append(result, groups[key])
+	}
+	return result
+}
+
+// ingestSealed commits one process's segments as a single stream and removes them. A row still
+// open at the end of a segment that was written to moments ago is carried into the next pass, so
+// a seal never cuts a record in two.
+func (m *Module) ingestSealed(app string, paths []string) error {
+	newest := paths[len(paths)-1]
+	info, err := os.Stat(newest)
 	if err != nil {
 		return err
 	}
-	if err := m.store.AppendLogs(app, entries); err != nil {
+	group, err := parseFiles(paths, "stdout")
+	if err != nil {
 		return err
 	}
-	return os.Remove(path)
+	hold := group.open() && time.Since(info.ModTime()) < tailQuiet
+	if !hold {
+		group.flush()
+	}
+	if err := m.store.AppendLogs(app, group.entries); err != nil {
+		return err
+	}
+	if hold {
+		if err := carryTail(newest, group.tail(), info.ModTime()); err != nil {
+			return err
+		}
+		paths = paths[:len(paths)-1]
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// carryTail replaces a sealed segment with just the lines of its open row. The modification time
+// is kept, so the carried row is flushed once the process has gone quiet.
+func carryTail(path string, lines []string, modified time.Time) error {
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, []byte(strings.Join(lines, "\n")+"\n"), 0o640); err != nil {
+		return err
+	}
+	if err := os.Chtimes(temporary, modified, modified); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 // tailFiles reads new bytes from every *.log file under the app's ./log directory. The files are
@@ -184,7 +240,7 @@ func (m *Module) tailFile(snapshot super.Snapshot, dir, path string, previous lo
 	if err != nil {
 		name = filepath.Base(path)
 	}
-	entries, next, err := parseRange(file, start, "file", name)
+	entries, next, err := parseRange(file, start, "file", name, time.Since(info.ModTime()) < tailQuiet)
 	if err != nil {
 		return err
 	}
@@ -225,46 +281,65 @@ func inodeOf(info os.FileInfo) uint64 {
 	return 0
 }
 
-// parseRange reads whole lines starting at offset, returning the entries and the offset just past
-// the last complete line. A trailing partial line is left for the next pass.
-func parseRange(file *os.File, start int64, source, name string) ([]logstore.LogEntry, int64, error) {
+// tailQuiet is how long a log must have been silent before its last row counts as finished.
+const tailQuiet = 2 * time.Second
+
+// parseRange reads whole lines starting at offset, returning the entries and the offset to resume
+// from. A trailing partial line is left for the next pass, and with hold so is a row that is
+// still open, so a pass never cuts a record that is being written.
+func parseRange(file *os.File, start int64, source, name string, hold bool) ([]logstore.LogEntry, int64, error) {
 	if _, err := file.Seek(start, io.SeekStart); err != nil {
 		return nil, start, err
 	}
 	reader := bufio.NewReaderSize(file, 64*1024)
-	var entries []logstore.LogEntry
-	next := start
+	group := &grouper{source: source, name: name}
+	next, rowStart := start, start
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 && line[len(line)-1] == '\n' {
-			entries = append(entries, ParseLine(source, name, strings.TrimRight(string(line), "\r\n")))
+			if group.add(strings.TrimRight(string(line), "\r\n")) {
+				rowStart = next
+			}
 			next += int64(len(line))
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return entries, next, nil
+			if !errors.Is(err, io.EOF) {
+				return nil, start, err
 			}
-			return entries, next, err
+			if hold && group.open() {
+				return group.entries, rowStart, nil
+			}
+			group.flush()
+			return group.entries, next, nil
 		}
 	}
 }
 
-// ParseFile reads a sealed stdout segment into log rows. The process name comes from the file
+// parseFiles reads one process's sealed stdout segments, oldest first, as a single stream. The
+// last row is left open for the caller to flush or carry. The process name comes from the file
 // name, which is <log_dir>/<app>/<process>.log.<unixnano>.sealed.
-func ParseFile(path, source string) ([]logstore.LogEntry, error) {
+func parseFiles(paths []string, source string) (*grouper, error) {
+	group := &grouper{source: source, name: processName(paths[0])}
+	for _, path := range paths {
+		if err := group.addFile(path); err != nil {
+			return nil, err
+		}
+	}
+	return group, nil
+}
+
+func (g *grouper) addFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer file.Close()
-	name := processName(path)
-	entries := make([]logstore.LogEntry, 0, 256)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
-		entries = append(entries, ParseLine(source, name, scanner.Text()))
+		g.add(scanner.Text())
 	}
-	return entries, scanner.Err()
+	return scanner.Err()
 }
 
 func processName(path string) string {
@@ -275,24 +350,30 @@ func processName(path string) string {
 	return base
 }
 
-// ParseLine turns one line into a row. A JSON object is read for level, message and request_id;
-// anything else keeps the whole line as the message and guesses the level from a keyword.
+// ParseLine turns one line into a row. Colors and a leading request id tag are taken out of the
+// message; raw keeps the line as written. A JSON object is read for level, message and
+// request_id; anything else keeps the whole line as the message and guesses the level from a
+// keyword.
 func ParseLine(source, name, line string) logstore.LogEntry {
-	entry := logstore.LogEntry{Time: time.Now(), Source: source, Process: name, Stream: "combined", Message: line, Raw: line}
-	trimmed := strings.TrimSpace(line)
+	id, text := splitTag(stripANSI(line))
+	entry := logstore.LogEntry{Time: time.Now(), Source: source, Process: name, Stream: "combined", Message: text, RequestID: id, Raw: line}
+	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") {
 		var fields map[string]any
 		if json.Unmarshal([]byte(trimmed), &fields) == nil {
 			entry.Level = stringField(fields, "level")
 			entry.Message = firstString(fields, "message", "msg")
-			entry.RequestID = stringField(fields, "request_id")
+			// Case is kept: the id has to match the one the proxy recorded for the request.
+			if requestID := firstString(fields, "request_id"); requestID != "" {
+				entry.RequestID = requestID
+			}
 		}
 	}
 	if entry.Message == "" {
-		entry.Message = line
+		entry.Message = text
 	}
 	if entry.Level == "" {
-		entry.Level = detectLevel(line)
+		entry.Level = detectLevel(text)
 	}
 	return entry
 }
