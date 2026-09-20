@@ -79,7 +79,7 @@ func renderUnit(cfg config.Config, userName, groupName, binary string) string {
 	// named after the user.
 	groupLine := ""
 	if groupName != "" {
-		groupLine = "Group=" + quoteUnit(groupName) + "\n"
+		groupLine = "Group=" + groupName + "\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=dboss host %s
@@ -100,11 +100,12 @@ LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-`, cfg.Dir, quoteUnit(userName), groupLine, quoteUnit(cfg.Dir), quoteUnit(binary), quoteUnit(cfg.SourcePath))
+`, cfg.Dir, userName, groupLine, cfg.Dir, quoteUnit(binary), quoteUnit(cfg.SourcePath))
 }
 
 // quoteUnit wraps a value in systemd's double quotes and escapes the two characters systemd
-// treats specially there, so a path with spaces survives.
+// treats specially there, so a path with spaces survives. Only Exec* lines support quoting;
+// User, Group and WorkingDirectory parse their value literally and must not be quoted.
 func quoteUnit(value string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 }
