@@ -549,7 +549,8 @@ input[type="radio"] {
 }
 
 .app-stats {
-  margin-top: 2px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--text-size-small);

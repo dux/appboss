@@ -145,12 +145,6 @@
       {:else}
         <span class="service-host">No hosts configured</span>
       {/if}
-      <div class="app-stats">
-        uptime: <b>{props.app.uptime || '-'}</b> &sdot;
-        memory: <b>{bytes(props.app.resources?.memory_bytes)}</b> &sdot;
-        last activity: <b>{activity(props.app.last_activity)}</b> &sdot;
-        requests / hour: <b>{number(props.app.request_rates?.last_hour)}</b>
-      </div>
     </div>
     <div class="app-status">
       <span class="badge">{props.app.state}</span>
@@ -186,6 +180,13 @@
         Stop
       </button>
     </div>
+  </div>
+
+  <div class="app-stats">
+    uptime: <b>{props.app.uptime || '-'}</b> &sdot;
+    memory: <b>{bytes(props.app.resources?.memory_bytes)}</b> &sdot;
+    last activity: <b>{activity(props.app.last_activity)}</b> &sdot;
+    requests / hour: <b>{number(props.app.request_rates?.last_hour)}</b>
   </div>
 
   {#if props.app.error}
