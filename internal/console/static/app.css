@@ -548,6 +548,18 @@ input[type="radio"] {
   color: var(--muted);
 }
 
+.app-stats {
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+}
+
+.app-stats b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .app-status {
   display: flex;
   align-items: center;

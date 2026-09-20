@@ -145,6 +145,12 @@
       {:else}
         <span class="service-host">No hosts configured</span>
       {/if}
+      <div class="app-stats">
+        uptime: <b>{props.app.uptime || '-'}</b> &sdot;
+        memory: <b>{bytes(props.app.resources?.memory_bytes)}</b> &sdot;
+        last activity: <b>{activity(props.app.last_activity)}</b> &sdot;
+        requests / hour: <b>{number(props.app.request_rates?.last_hour)}</b>
+      </div>
     </div>
     <div class="app-status">
       <span class="badge">{props.app.state}</span>
@@ -194,25 +200,6 @@
       </div>
     </div>
   {/if}
-
-  <div class="datagrid">
-    <div class="datagrid-item">
-      <span class="subheader">Uptime</span>
-      <span class="datagrid-content">{props.app.uptime || '-'}</span>
-    </div>
-    <div class="datagrid-item">
-      <span class="subheader">Memory</span>
-      <span class="datagrid-content">{bytes(props.app.resources?.memory_bytes)}</span>
-    </div>
-    <div class="datagrid-item">
-      <span class="subheader">Last activity</span>
-      <span class="datagrid-content">{activity(props.app.last_activity)}</span>
-    </div>
-    <div class="datagrid-item">
-      <span class="subheader">Requests / hour</span>
-      <span class="datagrid-content">{number(props.app.request_rates?.last_hour)}</span>
-    </div>
-  </div>
 
   <div class="service-list">
     <div class="service-row service-head">
