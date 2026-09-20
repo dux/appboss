@@ -1393,7 +1393,7 @@ input[type="radio"] {
 
 .key-row {
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr) 220px;
+  grid-template-columns: 330px minmax(0, 1fr);
   gap: 6px 16px;
   padding: 8px 0;
   border-top: 1px solid var(--border-soft);
@@ -1441,22 +1441,13 @@ input[type="radio"] {
 }
 
 .key-value {
-  min-width: 0;
+  margin-top: 3px;
   overflow-wrap: anywhere;
   font-size: var(--text-size-small);
 }
 
 .key-value code {
   font-size: var(--text-size-small);
-}
-
-.key-value .text-muted {
-  margin-right: 4px;
-  font-size: var(--text-size-small);
-}
-
-.key-value .key-example {
-  margin-left: 10px;
 }
 
 .keys-empty {
@@ -1484,6 +1475,19 @@ input[type="radio"] {
   align-self: start;
 }
 
+.help-nav-title {
+  padding: 12px 12px 4px;
+  color: var(--muted);
+  font-size: var(--text-size-small);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.help-nav-title:first-child {
+  padding-top: 4px;
+}
+
 .help-body {
   min-width: 0;
   padding: 20px 24px 28px;
@@ -1504,15 +1508,33 @@ input[type="radio"] {
   text-transform: uppercase;
 }
 
-.help-body h3 a.help-jump {
-  color: inherit;
+.help-index a.help-jump {
+  color: var(--primary);
+  font-weight: 500;
   cursor: pointer;
 }
 
-.help-body h3 a.help-jump:hover {
-  color: var(--text);
+.help-index a.help-jump:hover {
   text-decoration: underline;
 }
+
+/* key rows of one feature, inline in the help text column */
+.help-body .keys-embed {
+  margin-bottom: 16px;
+}
+
+.help-body .keys-embed .keys-group {
+  padding: 0;
+}
+
+.help-body .keys-embed .keys-group h3 {
+  margin: 12px 0 4px;
+  color: var(--text);
+  font-size: var(--text-size-small);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 
 .help-body p {
   max-width: 74ch;
@@ -1599,6 +1621,8 @@ input[type="radio"] {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
+
+  .help-nav-title { flex-basis: 100%; }
 
   .help-cmd { grid-template-columns: 1fr; gap: 2px; }
 }

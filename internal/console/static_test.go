@@ -2,8 +2,11 @@ package console
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"dboss/internal/config"
 )
 
 // Every nav tab must resolve in viewFromHash or its section never renders.
@@ -43,5 +46,26 @@ func TestConfigFormComponentIsLoaded(t *testing.T) {
 	}
 	if _, err := assets.ReadFile("static/fez/db-config-form.fez"); err != nil {
 		t.Fatalf("db-config-form.fez is not embedded: %v", err)
+	}
+}
+
+// Help feature pages list their config keys by path and render them from the registry,
+// so a renamed or removed key must fail here instead of silently vanishing from the page.
+func TestHelpKeyPathsExist(t *testing.T) {
+	data, err := assets.ReadFile("static/fez/db-help.fez")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lists := regexp.MustCompile(`<db-config-keys paths="([^"]+)"`).FindAllStringSubmatch(string(data), -1)
+	if len(lists) == 0 {
+		t.Fatal("no feature key lists found in db-help.fez")
+	}
+	known := config.KeyPaths()
+	for _, list := range lists {
+		for _, path := range strings.Split(list[1], ",") {
+			if !slices.Contains(known, path) {
+				t.Errorf("db-help.fez lists unknown config key %q", path)
+			}
+		}
 	}
 }

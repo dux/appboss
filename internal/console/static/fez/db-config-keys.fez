@@ -1,5 +1,24 @@
 <script>
+  // The registry is static for a running daemon, so every instance shares one request.
+  let registry = null
+
+  const loadRegistry = () => {
+    registry ||= Promise.all([
+      Dboss.api('/api/config/keys'),
+      Dboss.api('/api/config/blocks'),
+    ]).catch((error) => {
+      registry = null
+      throw error
+    })
+    return registry
+  }
+
   class {
+    // paths="a, b" limits the list to those keys and drops the filter box
+    PROPS = {
+      paths: { type: Array, default: (raw) => (raw || '').split(/\s*,\s*/).filter(Boolean) },
+    }
+
     init() {
       this.state.keys = []
       this.state.blocks = []
@@ -10,10 +29,7 @@
 
     async load() {
       try {
-        const [keys, blocks] = await Promise.all([
-          Dboss.api('/api/config/keys'),
-          Dboss.api('/api/config/blocks'),
-        ])
+        const [keys, blocks] = await loadRegistry()
         this.state.keys = keys
         this.state.blocks = blocks
       } catch (error) {
@@ -23,7 +39,10 @@
 
     beforeRender() {
       const query = this.state.query.trim().toLowerCase()
-      const matches = (key) => !query || key.path.includes(query) || key.description.toLowerCase().includes(query)
+      const paths = this.props.paths
+      const matches = (key) => paths.length
+        ? paths.includes(key.path)
+        : !query || key.path.includes(query) || key.description.toLowerCase().includes(query)
       this.state.groups = this.state.blocks
         .map((block) => ({ ...block, keys: this.state.keys.filter((key) => key.block === block.id && matches(key)) }))
         .filter((block) => block.keys.length)
@@ -41,10 +60,12 @@
   }
 </script>
 
-<div class="keys">
-  <div class="keys-search">
-    <input type="search" id="config-keys-filter" placeholder="Filter keys" aria-label="Filter keys" fez:keep="search" oninput="fez.filter(this.value)" />
-  </div>
+<div class="keys" class:keys-embed={props.paths.length}>
+  {#unless props.paths}
+    <div class="keys-search">
+      <input type="search" id="config-keys-filter" placeholder="Filter keys" aria-label="Filter keys" fez:keep="search" oninput="fez.filter(this.value)" />
+    </div>
+  {/unless}
   {#each state.groups as group}
     <section class="keys-group">
       <h3>{group.title} <small>{note(group.scope)}</small></h3>
@@ -59,14 +80,10 @@
             {#if key.per_process}
               <span class="key-tag">per process</span>
             {/if}
-          </div>
-          <div class="key-value">
             {#if key.default}
-              <span class="text-muted">default</span>
-              <code>{key.default}</code>
-            {/if}
-            {#if key.example}
-              <span class="key-example"><span class="text-muted">e.g.</span> <code>{key.example}</code></span>
+              <div class="key-value"><span class="text-muted">Default:</span> <code>{key.default}</code></div>
+            {:else if key.example}
+              <div class="key-value"><span class="text-muted">Example:</span> <code>{key.example}</code></div>
             {/if}
           </div>
         </div>

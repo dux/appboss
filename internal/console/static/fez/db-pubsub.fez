@@ -163,7 +163,7 @@
           <span class="service-value">{channel.messages}</span>
         </div>
       {:else}
-        <div class="sys-row sys-empty text-muted">No subscriber yet. Publish or connect to {app.path}/&lt;channel&gt;.</div>
+        <div class="sys-row sys-empty text-muted">No subscriber yet. Publish or connect to {app.path}/&#60;channel&#62;.</div>
       {/each}
     </div>
   </section>
