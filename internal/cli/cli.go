@@ -117,11 +117,12 @@ func (c CLI) start(args []string) error {
 	set := flag.NewFlagSet("start", flag.ContinueOnError)
 	set.SetOutput(c.Err)
 	configPath := configFlag(set)
+	login := set.Bool("login", false, "print a one-time console sign-in link")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: dboss start [-c path]")
+		return errors.New("usage: dboss start [-c path] [--login]")
 	}
 	cfg, err := loadHostConfig(*configPath)
 	if err != nil {
@@ -136,6 +137,14 @@ func (c CLI) start(args []string) error {
 		return err
 	}
 	defer session.Close()
+	if *login {
+		// stdout only: the token must never reach the daemon log
+		local, _, err := session.LoginURL()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(c.Out, "login: %s (one-time, 3 minutes)\n", local)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return session.Run(ctx)

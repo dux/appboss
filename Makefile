@@ -35,7 +35,7 @@ demo: build ## Run the local demo daemon
 		'Apps:' \
 		'  http://sinatra.lvh.me' \
 		'  http://bun.lvh.me'
-	sudo $(BINARY) start -c ./demo/dboss.yaml
+	sudo $(BINARY) start -c ./demo/dboss.yaml --login
 
 demo-watch: build ## Rebuild and restart the demo on changes
 	$(WATCH) --restart --clear \

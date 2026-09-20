@@ -169,6 +169,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return nil
 }
 
+// LoginURL mints a one-time console sign-in link; it fails when the console is off.
+func (d *Daemon) LoginURL() (local, public string, err error) {
+	if d.management == nil {
+		return "", "", errors.New("management console is not configured")
+	}
+	return d.management.LoginURL()
+}
+
 // Close drains the listeners, modules and supervisor. It is safe to call more than once and on
 // a half-built daemon.
 func (d *Daemon) Close() error {

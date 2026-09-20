@@ -65,3 +65,9 @@ func TestStartHTTPServerServesAndRefusesADoubleBind(t *testing.T) {
 		t.Fatal("binding an address already in use should fail")
 	}
 }
+
+func TestLoginURLNeedsTheConsole(t *testing.T) {
+	if _, _, err := (&Daemon{}).LoginURL(); err == nil {
+		t.Fatal("LoginURL succeeded without a management console")
+	}
+}
