@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -103,8 +104,27 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 			return nil, err
 		}
 		d.management = management
+		var certs *proxy.ACME
+		if cfg.Proxy.TLS.Enabled() {
+			certs, err = proxy.NewACME(cfg, manager)
+			if err != nil {
+				d.Close()
+				return nil, err
+			}
+			server, err := startHTTPSServer("proxy-tls", cfg.Proxy.TLS.Listen, edge, certs.TLSConfig())
+			if err != nil {
+				d.Close()
+				return nil, err
+			}
+			d.servers = append(d.servers, server)
+			logx.Infof("proxy tls: %s (acme on demand)", cfg.Proxy.TLS.Listen)
+		}
 		for _, address := range cfg.Proxy.Listen {
-			server, err := startHTTPServer("proxy", address, edge)
+			handler := http.Handler(edge)
+			if certs != nil && cfg.Proxy.TLS.Redirect {
+				handler = certs.HTTPHandler(nil)
+			}
+			server, err := startHTTPServer("proxy", address, handler)
 			if err != nil {
 				d.Close()
 				return nil, err
@@ -214,6 +234,25 @@ func startHTTPServer(name, address string, handler http.Handler) (*http.Server, 
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logx.Errorf("%s: %v", name, err)
+		}
+	}()
+	return server, nil
+}
+
+// startHTTPSServer is startHTTPServer with TLS. The certificate comes from the config's
+// GetCertificate, so autocert can issue and renew it without a file or a reload.
+func startHTTPSServer(name, address string, handler http.Handler, tlsConfig *tls.Config) (*http.Server, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		if errors.Is(err, syscall.EACCES) {
+			return nil, fmt.Errorf("%s listen %s: %w (port needs CAP_NET_BIND_SERVICE: run the systemd unit, or set proxy.tls.listen to a high port for a hand-run session)", name, address, err)
+		}
+		return nil, fmt.Errorf("%s listen: %w", name, err)
+	}
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsConfig}
+	go func() {
+		if err := server.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logx.Errorf("%s: %v", name, err)
 		}
 	}()

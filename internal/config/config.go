@@ -234,9 +234,23 @@ type Proxy struct {
 	// CloudflareOnly refuses a request that does not carry Cloudflare's edge headers; it is a
 	// convenience alternative to listing trusted_cidrs, not a replacement.
 	CloudflareOnly bool     `yaml:"cloudflare_only" json:"cloudflare_only"`
+	TLS            ProxyTLS `yaml:"tls" json:"tls"`
 	Wake           Wake     `yaml:"wake" json:"wake"`
 	Upstream       Upstream `yaml:"upstream" json:"upstream"`
 }
+
+// ProxyTLS terminates HTTPS on the box with ACME certificates, for a host that is reached
+// directly instead of through Cloudflare. An empty listen disables it. Certificates are issued
+// on demand for the hostnames of the current apps and the console, and cached under state_dir.
+type ProxyTLS struct {
+	Listen    string `yaml:"listen" json:"listen"`
+	Email     string `yaml:"email" json:"email"`
+	Directory string `yaml:"directory" json:"directory"`
+	CacheDir  string `yaml:"cache_dir" json:"cache_dir"`
+	Redirect  bool   `yaml:"redirect" json:"redirect"`
+}
+
+func (t ProxyTLS) Enabled() bool { return t.Listen != "" }
 
 // Management is served by the proxy listener; any of the Host names selects the console.
 type Management struct {
@@ -380,7 +394,7 @@ func Default() Config {
 	return Config{
 		Apps:     "./apps",
 		StateDir: ".dboss/state", LogDir: ".dboss/log", Socket: ".dboss/dboss.sock",
-		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
+		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, TLS: ProxyTLS{Redirect: true}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
 		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},

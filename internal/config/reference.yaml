@@ -104,6 +104,26 @@ proxy:
   # a firewall that only lets Cloudflare connect. Both guards apply when both are set.
   cloudflare_only: false
 
+  # Optional built-in TLS, for a box that is reached directly instead of through Cloudflare.
+  # dboss terminates HTTPS itself and obtains certificates from Let's Encrypt on demand for the
+  # hosts of the current apps and the console; nothing else may get a certificate, so a stranger
+  # cannot exhaust the authority's rate limit. Certificates are cached under state_dir/acme and
+  # renewed automatically. Leave listen empty to keep TLS at the edge (Cloudflare) as before.
+  tls:
+    # Address of the HTTPS listener. Empty disables built-in TLS.
+    listen: ""              # e.g. ":443"
+    # Contact address registered with the certificate authority. Optional but recommended.
+    email: ""
+    # Certificate authority: empty for Let's Encrypt production, "staging" for its test endpoint,
+    # or any other value is used verbatim as an ACME directory URL.
+    directory: ""
+    # Directory for issued certificates. Relative paths resolve against the config directory.
+    # Empty uses <state_dir>/acme.
+    cache_dir: ""
+    # Send plain-HTTP requests to HTTPS. ACME HTTP-01 challenges are answered here either way,
+    # so the redirect can stay on.
+    redirect: true
+
   # Header that carries the real client IP, checked in order. First non-empty wins.
   # Falls back to the TCP remote address. The default needs no configuration.
   client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]
