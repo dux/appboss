@@ -3,8 +3,7 @@ procfile:
     command: ./start.sh
     domains:
       - bun.lvh.me
-
-health: http:/up
+    health: /up
 
 cron:
   heartbeat:

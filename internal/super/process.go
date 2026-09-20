@@ -171,9 +171,10 @@ func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 }
 
 // healthCheck talks to the process the way the proxy does: loopback address, app hostname in Host.
+// An empty or "tcp" check only dials the port; anything else is a path GET expecting 2xx.
 func healthCheck(check string, port int, host string, timeout time.Duration) (bool, error) {
 	address := fmt.Sprintf("127.0.0.1:%d", port)
-	if check == "tcp" {
+	if check == "" || check == "tcp" {
 		connection, err := net.DialTimeout("tcp", address, timeout)
 		if err == nil {
 			_ = connection.Close()
@@ -181,7 +182,7 @@ func healthCheck(check string, port int, host string, timeout time.Duration) (bo
 		}
 		return false, fmt.Errorf("healthcheck on tcp failed: %w", err)
 	}
-	path := strings.TrimPrefix(check, "http:")
+	path := check
 	client := &http.Client{Timeout: timeout}
 	request, err := http.NewRequest(http.MethodGet, "http://"+address+path, nil)
 	if err != nil {

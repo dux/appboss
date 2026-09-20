@@ -54,14 +54,15 @@
       web:
         command: ./start.sh
         domains: [shop.example.com]
-    health: http:/up
+        health: /up
     `,
     supervision: `
     procfile:
-      web: bundle exec puma -p $PORT
+      web:
+        command: bundle exec puma -p $PORT
+        health: /up
       worker: bundle exec sidekiq
     autostart: false
-    health: http:/up
     health_interval: 500ms
     processes:
       worker:
@@ -313,14 +314,14 @@
           <li>Capping one app's memory and CPU on a shared box (cgroup v2; process groups elsewhere ignore the limits).</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,shell,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
+        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,shell,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
         <p>All process types run at once; the one process that declares <code>domains</code> is the web process and gets proxied traffic. It starts first, then the rest by name. A process with no <code>domains</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
-          <li><code>health</code> is the readiness check: <code>tcp</code>, or <code>http:&#60;path&#62;</code> expecting a 2xx. A process that never passes it within <code>health_timeout</code> is restarted.</li>
+          <li><code>health</code> on the web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
           <li>After the web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
           <li>Restarts follow <code>restart</code>, <code>restart_backoff</code> and <code>max_restarts</code>; after that many consecutive failures the app is <code>crashed</code>. <code>restart_reset</code> of uptime clears the counter.</li>
         </ul>
@@ -601,7 +602,7 @@
           <li><code>GET /metrics</code> - Prometheus text: per-app state, memory, CPU, restart and request rates, latency quantiles and the last cron and hook runs. Set <code>management.metrics.token</code> to require a bearer token.</li>
         </ul>
         <p>Each app also answers on its own hosts at <code>health_endpoint</code> (default <code>/.well-known/dboss/health</code>): <code>200</code> while running and not draining, <code>503</code> otherwise. It runs before auth and never wakes a stopped app. <code>dboss doctor</code> preflights a box: tools, writable directories, a valid config and a clear port range.</p>
-        <p>The process-level <code>health</code> check that gates readiness and restarts is under Supervision.</p>
+        <p>The web process's <code>health</code> path that gates readiness and restarts is under Supervision.</p>
       </section>
     {/if}
 

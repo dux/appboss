@@ -458,6 +458,30 @@ func TestUnhealthyThreshold(t *testing.T) {
 	}
 }
 
+func TestWebHealthPath(t *testing.T) {
+	defaults := Default().Defaults
+	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    health: /up\n  worker: ./worker.sh\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Process("web").Health; got != "/up" {
+		t.Fatalf("web health = %q, want /up", got)
+	}
+	if got := app.Process("worker").Health; got != "tcp" {
+		t.Fatalf("worker health = %q, want tcp", got)
+	}
+	for name, data := range map[string]string{
+		"worker":    "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./worker.sh\n    health: /up\n",
+		"scheme":    "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    health: http:/up\n",
+		"app level": "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nhealth: /up\n",
+		"process":   "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nprocesses:\n  web:\n    health: /up\n",
+	} {
+		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
+			t.Errorf("%s health should be rejected", name)
+		}
+	}
+}
+
 func TestAppRejectsInvalidWebKeys(t *testing.T) {
 	defaults := Default().Defaults
 	for _, test := range []struct{ name, data, want string }{
@@ -769,5 +793,14 @@ func TestSingleAppModeBindsDevDomain(t *testing.T) {
 	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    pubsub: true\n")
 	if _, err := Load(path); err != nil {
 		t.Fatalf("single-mode pubsub without domains: %v", err)
+	}
+	// health with no domains binds the dev domain first, then resolves onto the web process.
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    health: /up\n")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("single-mode health without domains: %v", err)
+	}
+	if got := cfg.App.Process("web").Health; got != "/up" {
+		t.Fatalf("single-mode health = %q, want /up", got)
 	}
 }

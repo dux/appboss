@@ -201,11 +201,8 @@ defaults:
   idle_stop: 6h
 
   # Readiness check after spawn, flips starting -> running.
-  #   tcp          connect to PORT succeeds
-  #   http:<path>  GET http://127.0.0.1:PORT<path> returns 2xx
-  health: tcp
-  # Poll interval of the readiness and liveness checks, and give-up time for readiness.
-  # On readiness give-up the process is killed and counts as one failed restart.
+  # The check itself is `health` on the web process in the procfile: a path such as /up that must
+  # answer 2xx, or omitted for a plain TCP connect to PORT. Only the web process is checked.
   health_interval: 500ms
   health_timeout: 60s
   # After the web process is ready it keeps being polled at health_interval. This many
@@ -463,6 +460,10 @@ s3:
 # and "*.myapp.com". Longest match wins.
 # In single mode (no domains declared) the first process is bound to .lvh.me for local dev.
 #
+# The web process may also set `health`, the readiness path dboss polls until the start flips to
+# running, e.g. /up (GET http://127.0.0.1:PORT/up must answer 2xx). Omitted means a plain TCP
+# connect. The same check keeps the process alive after readiness; see unhealthy_threshold.
+#
 # The web process may also set `pubsub`, a realtime hub dboss serves on its domains. It accepts
 # true (the /socketio default), a path, or a mapping:
 #   pubsub: true                    -> path /socketio
@@ -492,6 +493,7 @@ procfile:
     domains:
       - ".myapp.com"
     pubsub: true
+    health: /up
   worker: bundle exec lux jobs:work
   cron: bundle exec lux jobs:cron
 
@@ -514,7 +516,6 @@ canonical_host: myapp.com
 
 # Per-app overrides of defaults.* (all optional, same semantics as above).
 idle_stop: 0                # this app never sleeps
-health: http:/up
 health_timeout: 90s
 stop_timeout: 30s
 stop_signal: TERM
@@ -539,9 +540,9 @@ headers:
 # An app that ignores PORT and binds its own port will not be reachable
 # through the proxy. Read the allocation with `dboss ports`.
 
-# Per-proctype overrides. Process keys only (health, stop, restart, logs, shell, env,
-# resources); a web key here is an error. Useful for a worker that needs a longer
-# stop_timeout than the web process.
+# Per-proctype overrides. Process keys only (stop, restart, logs, shell, env,
+# resources); a web key here is an error, and `health` lives on the web procfile entry.
+# Useful for a worker that needs a longer stop_timeout than the web process.
 processes:
   worker:
     stop_timeout: 120s

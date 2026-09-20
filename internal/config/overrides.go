@@ -16,7 +16,7 @@ type Overrides struct {
 // key there is rejected as unknown.
 type ProcessOverrides struct {
 	IdleStop           *Duration         `yaml:"idle_stop,omitempty" json:"idle_stop,omitempty"`
-	Health             *string           `yaml:"health,omitempty" json:"health,omitempty"`
+	Health             *string           `yaml:"-" json:"-"`
 	HealthInterval     *Duration         `yaml:"health_interval,omitempty" json:"health_interval,omitempty"`
 	HealthTimeout      *Duration         `yaml:"health_timeout,omitempty" json:"health_timeout,omitempty"`
 	UnhealthyThreshold *int              `yaml:"unhealthy_threshold,omitempty" json:"unhealthy_threshold,omitempty"`

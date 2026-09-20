@@ -82,8 +82,7 @@ procfile:
   web:
     command: ./start.sh
     domains: [bun.lvh.me]
-
-health: http:/up
+    health: /up
 ```
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
@@ -100,7 +99,6 @@ Every app-level key can be set once under `defaults:` in the host file and repea
 ```
 $ dboss config --keys health
 Runtime  (defaults: in the root file, top level in an app file; per-process ones also under processes.<name>)
-  health               readiness check: tcp, or http:<path> expecting 2xx                                                  tcp    per process
   health_interval      poll interval of the readiness and liveness checks                                                  500ms  per process
   health_timeout       give-up time of the readiness check; counts as a failed restart                                     1m     per process
   unhealthy_threshold  consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks  3      per process
@@ -304,7 +302,7 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while a visitor would be served, `503` otherwise. An app stopped by `idle_stop` (or `dboss stop`) still answers `200` with `"state":"stopped"`, because the next request wakes it, so a Cloudflare Health Check or Load Balancer never flags a sleeping app. Draining, maintenance, starting, crashed and a stopped `autostart: button` app answer `503`. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
-The supervisor also watches the web process for its whole lifetime: `health` (`tcp` or `http:<path>`) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
+The supervisor also watches the web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
 `dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
 

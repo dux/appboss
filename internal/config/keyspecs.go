@@ -94,7 +94,7 @@ var keySpecs = map[string]KeySpec{
 	"s3.sse":        {Block: "s3", Name: "Server-side encryption", Description: "server-side encryption algorithm for uploads; empty uses the bucket default", Example: "AES256"},
 
 	// --- App ---
-	"procfile":       {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; the one mapping that adds domains is the web process", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"]}, worker: bundle exec lux jobs:work}", Required: true},
+	"procfile":       {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; the one mapping that adds domains is the web process. The web mapping also takes health, a readiness path", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"], health: /up}, worker: bundle exec lux jobs:work}", Required: true},
 	"canonical_host": {Block: "app", Name: "Canonical host", Description: "301 every other host of this app to this one; must be one of the web process domains", Example: "myapp.com"},
 	"autostart":      {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
 	"deletable":      {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
@@ -108,7 +108,6 @@ var keySpecs = map[string]KeySpec{
 
 	// --- Runtime ---
 	"idle_stop":           {Block: "runtime", Name: "Idle stop", Description: "stop the app after this long without proxied requests; 0 never", Example: "30m"},
-	"health":              {Block: "runtime", Name: "Readiness check", Description: "readiness check: tcp, or http:<path> expecting 2xx", Example: "http:/up"},
 	"health_interval":     {Block: "runtime", Name: "Check interval", Description: "poll interval of the readiness and liveness checks", Example: "1s"},
 	"health_timeout":      {Block: "runtime", Name: "Readiness timeout", Description: "give-up time of the readiness check; counts as a failed restart", Example: "90s"},
 	"unhealthy_threshold": {Block: "runtime", Name: "Liveness failures", Description: "consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks"},

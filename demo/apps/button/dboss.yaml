@@ -7,6 +7,5 @@ procfile:
     pubsub:
       path: /socketio
       test: true
-
-health: http:/up
+    health: /up
 autostart: button

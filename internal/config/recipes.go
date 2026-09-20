@@ -113,7 +113,6 @@ var recipeSpecs = []recipeSpec{
 		scope:       RecipeApp,
 		fields: []recipeField{
 			{path: "idle_stop", section: "Health"},
-			{path: "health", section: "Health"},
 			{path: "health_interval", section: "Health"},
 			{path: "health_timeout", section: "Health"},
 			{path: "unhealthy_threshold", section: "Health"},

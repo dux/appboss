@@ -3,10 +3,10 @@ procfile:
     command: ./start.sh
     domains:
       - .sinatra.lvh.me
+    health: /up
   job: ./job.sh
 
 canonical_host: sinatra.lvh.me
 static: ./public
 
-health: http:/up
 autostart: false

@@ -71,11 +71,11 @@ func TestHealthcheckSendsAppHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, checkErr := healthCheck("http:/up", port, "", time.Second)
+	ok, checkErr := healthCheck("/up", port, "", time.Second)
 	if ok || checkErr == nil || checkErr.Error() != "healthcheck on /up returned 403" {
 		t.Fatalf("healthcheck without host = %v, %v", ok, checkErr)
 	}
-	if ok, checkErr := healthCheck("http:/up", port, "demo.test", time.Second); !ok || checkErr != nil {
+	if ok, checkErr := healthCheck("/up", port, "demo.test", time.Second); !ok || checkErr != nil {
 		t.Fatalf("healthcheck with host = %v, %v", ok, checkErr)
 	}
 }

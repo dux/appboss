@@ -314,7 +314,8 @@ type Defaults struct {
 
 type Process struct {
 	IdleStop           Duration          `yaml:"idle_stop" json:"idle_stop"`
-	Health             string            `yaml:"health" json:"health"`
+	// Health is resolved from the web process's procfile health path; it is not a settable key.
+	Health             string            `yaml:"-" json:"-"`
 	HealthInterval     Duration          `yaml:"health_interval" json:"health_interval"`
 	HealthTimeout      Duration          `yaml:"health_timeout" json:"health_timeout"`
 	UnhealthyThreshold int               `yaml:"unhealthy_threshold" json:"unhealthy_threshold"`
@@ -597,7 +598,6 @@ func Parse(data []byte, path string) (Config, error) {
 		if err != nil {
 			return Config{}, located(err, path, root)
 		}
-		app.UseDevDomains()
 		cfg.App = &app
 	}
 	return cfg, nil
@@ -904,9 +904,6 @@ func validateDefaults(d Defaults) error {
 }
 
 func validateProcess(d Process) error {
-	if d.Health != "tcp" && !strings.HasPrefix(d.Health, "http:/") {
-		return &Error{Key: "health", Message: fmt.Sprintf("must be tcp or http:/path, not %q", d.Health), Hint: "e.g. health: http:/up"}
-	}
 	if d.Restart != "on-failure" && d.Restart != "always" && d.Restart != "never" {
 		return keyErr("restart", "must be on-failure, always or never, not %q", d.Restart)
 	}
@@ -1174,16 +1171,18 @@ const DefaultPubsubPath = "/socketio"
 const DevDomain = ".lvh.me"
 
 // ProcessSpec is one entry of a procfile: the command to run, the domains the single web process
-// answers, and its optional realtime hub. A scalar value is the command alone, so a background
-// process stays a one-liner; a mapping adds the rest.
+// answers, its optional realtime hub and its readiness check. A scalar value is the command alone,
+// so a background process stays a one-liner; a mapping adds the rest.
 type ProcessSpec struct {
 	Command string      `yaml:"command" json:"command"`
 	Domains List        `yaml:"domains,omitempty" json:"domains,omitempty"`
 	Pubsub  *PubsubSpec `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
+	// Health is the web process's readiness path, e.g. /up; empty means a TCP connect.
+	Health string `yaml:"health,omitempty" json:"health,omitempty"`
 }
 
-// UnmarshalYAML accepts a bare command string or a {command, domains, pubsub} mapping. The keys
-// are checked here because a custom decoder is a leaf as far as the schema walk is concerned.
+// UnmarshalYAML accepts a bare command string or a {command, domains, pubsub, health} mapping. The
+// keys are checked here because a custom decoder is a leaf as far as the schema walk is concerned.
 func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
 	case yaml.ScalarNode:
@@ -1192,15 +1191,16 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
-			case "command", "domains", "pubsub":
+			case "command", "domains", "pubsub", "health":
 			default:
-				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, domains, pubsub"}
+				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, domains, pubsub, health"}
 			}
 		}
 		var raw struct {
 			Command string      `yaml:"command"`
 			Domains List        `yaml:"domains"`
 			Pubsub  *PubsubSpec `yaml:"pubsub"`
+			Health  string      `yaml:"health"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return err
@@ -1208,34 +1208,37 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 		p.Command = raw.Command
 		p.Domains = raw.Domains
 		p.Pubsub = raw.Pubsub
+		p.Health = raw.Health
 		return nil
 	}
-	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, domains, pubsub} mapping"}
+	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, domains, pubsub, health} mapping"}
 }
 
 // MarshalYAML writes a scalar command when the process only runs a command, else the full mapping,
 // so a resolved config reads like the file it came from.
 func (p ProcessSpec) MarshalYAML() (any, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil {
+	if len(p.Domains) == 0 && p.Pubsub == nil && p.Health == "" {
 		return p.Command, nil
 	}
 	return struct {
 		Command string      `yaml:"command"`
 		Domains List        `yaml:"domains,omitempty"`
 		Pubsub  *PubsubSpec `yaml:"pubsub,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub}, nil
+		Health  string      `yaml:"health,omitempty"`
+	}{p.Command, p.Domains, p.Pubsub, p.Health}, nil
 }
 
 // MarshalJSON mirrors MarshalYAML for `dboss config -d --json`.
 func (p ProcessSpec) MarshalJSON() ([]byte, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil {
+	if len(p.Domains) == 0 && p.Pubsub == nil && p.Health == "" {
 		return json.Marshal(p.Command)
 	}
 	return json.Marshal(struct {
 		Command string      `json:"command"`
 		Domains List        `json:"domains,omitempty"`
 		Pubsub  *PubsubSpec `json:"pubsub,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub})
+		Health  string      `json:"health,omitempty"`
+	}{p.Command, p.Domains, p.Pubsub, p.Health})
 }
 
 // PubsubSpec is the web process's realtime option: `true` for the default path, a bare path, or a
@@ -1343,6 +1346,28 @@ func (a *App) deriveWeb() error {
 		}
 		a.WebProcess = name
 		a.Hosts = spec.Domains
+	}
+	return nil
+}
+
+// resolveHealth moves the web process's health path onto its process keys. Only the web process
+// may set it, and the value is a path because dboss always talks HTTP to a process port.
+func (a *App) resolveHealth() error {
+	for _, name := range processNames(a.Procfile) {
+		spec := a.Procfile[name]
+		if spec.Health == "" {
+			continue
+		}
+		if name != a.WebProcess {
+			return &Error{Key: "procfile." + name + ".health", Message: "health is only valid on the web process", Hint: "declare domains on this process, or set health on the process that declares them"}
+		}
+		if !strings.HasPrefix(spec.Health, "/") {
+			return &Error{Key: "procfile." + name + ".health", Message: fmt.Sprintf("must be a path starting with /, not %q", spec.Health), Hint: "e.g. health: /up"}
+		}
+		override := a.Processes[name]
+		path := spec.Health
+		override.Health = &path
+		a.Processes[name] = override
 	}
 	return nil
 }
@@ -1468,6 +1493,12 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 		app.Processes = map[string]ProcessOverrides{}
 	}
 	apply(&app.Defaults, raw.Overrides)
+	if single {
+		app.UseDevDomains()
+	}
+	if err := app.resolveHealth(); err != nil {
+		return App{}, err
+	}
 	if err := app.resolvePubsub(); err != nil {
 		return App{}, err
 	}
