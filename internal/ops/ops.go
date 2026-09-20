@@ -48,6 +48,7 @@ const (
 	ActionPGBackup      = "pg-backup"
 	ActionPGBackups     = "pg-backups"
 	ActionPGRestore     = "pg-restore"
+	ActionPGDrop        = "pg-drop"
 	ActionPubsub        = "pubsub"
 	ActionPubsubSecret  = "pubsub-secret"
 	ActionPubsubRotate  = "pubsub-rotate"
@@ -58,7 +59,7 @@ const (
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
-	ActionPGBackup: true, ActionPGRestore: true,
+	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
 
@@ -123,9 +124,10 @@ type PG interface {
 	Snapshot() pg.Snapshot
 	Refresh(ctx context.Context) pg.Snapshot
 	BackupAll(ctx context.Context) error
-	BackupDatabase(ctx context.Context, database string) (pg.Backup, error)
+	BackupDatabase(ctx context.Context, database string, manual bool) (pg.Backup, error)
 	Backups() []pg.Backup
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
+	DropDatabase(ctx context.Context, database, confirm string) error
 	BackupConfig() config.PostgresBackup
 	Apply(cfg config.Config)
 }
@@ -291,6 +293,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.Backups(), nil
 	case ActionPGRestore:
 		return s.Restore(pg.RestoreRequest{ID: request.BackupID, Target: request.Target, Replace: request.Replace, Confirm: request.Confirm})
+	case ActionPGDrop:
+		return request.Database, s.DropDatabase(request.Database, request.Confirm)
 	case ActionPubsub:
 		return s.PubsubApps(), nil
 	case ActionPubsubSecret:
@@ -361,6 +365,8 @@ func auditDetail(request Request) string {
 		return request.Database
 	case ActionPGRestore:
 		return request.BackupID
+	case ActionPGDrop:
+		return request.Database
 	case ActionPubsubPublish:
 		return request.Channel
 	default:
@@ -490,7 +496,8 @@ func (s *Service) Backups() []pg.Backup {
 	return s.pg.Backups()
 }
 
-// RunBackup dumps one database, or every selected database when name is empty.
+// RunBackup dumps one database, or every selected database when name is empty. An explicit run is
+// a manual backup, so it is never rotated away.
 func (s *Service) RunBackup(database string) ([]pg.Backup, error) {
 	if s.pg == nil || !s.pg.Enabled() {
 		return nil, errors.New("postgres is not enabled")
@@ -498,7 +505,7 @@ func (s *Service) RunBackup(database string) ([]pg.Backup, error) {
 	if database == "" {
 		return nil, s.pg.BackupAll(context.Background())
 	}
-	entry, err := s.pg.BackupDatabase(context.Background(), database)
+	entry, err := s.pg.BackupDatabase(context.Background(), database, true)
 	return []pg.Backup{entry}, err
 }
 
@@ -508,6 +515,14 @@ func (s *Service) Restore(request pg.RestoreRequest) (pg.RestoreResult, error) {
 		return pg.RestoreResult{}, errors.New("postgres is not enabled")
 	}
 	return s.pg.Restore(context.Background(), request)
+}
+
+// DropDatabase removes a database. The operator must repeat the name as confirmation.
+func (s *Service) DropDatabase(database, confirm string) error {
+	if s.pg == nil || !s.pg.Enabled() {
+		return errors.New("postgres is not enabled")
+	}
+	return s.pg.DropDatabase(context.Background(), database, confirm)
 }
 
 // ApplyPGConfig pushes a freshly saved config into the PostgreSQL service, so PG settings and

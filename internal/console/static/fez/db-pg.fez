@@ -3,13 +3,11 @@
     init() {
       this.state.snapshot = null
       this.state.backups = []
-      this.state.backup = {}
-      this.state.selection = {}
-      this.state.policy = {}
+      this.state.rotations = {}
+      this.state.selected = null
       this.state.loading = false
       this.state.busy = false
       this.state.error = ''
-      this.state.dirty = false
       this.state.message = ''
       this.state.messageError = false
       this.state.filter = ''
@@ -17,15 +15,6 @@
 
     onMount() {
       this.load()
-    }
-
-    // Policy inputs are fez:this refs, so they only exist after the settings card renders.
-    // Fill them once per load, after that render, never on every pass.
-    afterRender() {
-      if (this.state.needsSync) {
-        this.state.needsSync = false
-        this.syncInputs()
-      }
     }
 
     async load(refresh = false) {
@@ -54,56 +43,19 @@
       }
       this.state.snapshot = snapshot
       this.state.backups = data.backups || []
-      const backup = data.backup || {}
-      this.state.backup = backup
-      // A database's keep override is preserved as-is; the form edits the host policy, not the
-      // per-database retention.
-      const databaseOpts = backup.databases || {}
-      const selection = {}
-      for (const database of (data.snapshot && data.snapshot.databases) || []) {
-        selection[database.name] = {
-          selected: Boolean(database.backup_selected),
-          keep: databaseOpts[database.name]?.keep || null,
+      const configured = (data.backup && data.backup.databases) || {}
+      const rotations = {}
+      for (const row of (snapshot && snapshot.databases) || []) {
+        if (Object.prototype.hasOwnProperty.call(configured, row.name)) {
+          rotations[row.name] = configured[row.name] && configured[row.name].rotation === 'month' ? 'month' : 'week'
+        } else {
+          rotations[row.name] = 'off'
         }
       }
-      this.state.selection = selection
-      this.state.policy = {
-        dir: backup.dir || '',
-        at: backup.at || '',
-        days: backup.days || 0,
-        timeout: backup.timeout || '',
-        globals: backup.globals !== false,
+      this.state.rotations = rotations
+      if (this.state.selected) {
+        this.state.selected = ((snapshot && snapshot.databases) || []).find((row) => row.name === this.state.selected.name) || null
       }
-      this.state.dirty = false
-      this.state.needsSync = true
-    }
-
-    // The config stores the daily run time in UTC; the time input shows and edits local time.
-    utcToLocalTime(value) {
-      if (!value) return ''
-      const [hours, minutes] = value.split(':').map(Number)
-      if (Number.isNaN(hours) || Number.isNaN(minutes)) return ''
-      const date = new Date()
-      date.setUTCHours(hours, minutes, 0, 0)
-      return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-    }
-
-    localToUTCTime(value) {
-      if (!value) return ''
-      const [hours, minutes] = value.split(':').map(Number)
-      if (Number.isNaN(hours) || Number.isNaN(minutes)) return ''
-      const date = new Date()
-      date.setHours(hours, minutes, 0, 0)
-      return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
-    }
-
-    syncInputs() {
-      const policy = this.state.policy
-      if (this.state.dirInput) this.state.dirInput.value = policy.dir
-      if (this.state.atInput) this.state.atInput.value = this.utcToLocalTime(policy.at)
-      if (this.state.daysInput) this.state.daysInput.value = policy.days
-      if (this.state.timeoutInput) this.state.timeoutInput.value = policy.timeout
-      if (this.state.globalsInput) this.state.globalsInput.checked = policy.globals
     }
 
     setFilter(value) {
@@ -117,42 +69,49 @@
       return rows.filter((row) => row.name.toLowerCase().includes(filter))
     }
 
-    selected(name) {
-      return Boolean(this.state.selection[name] && this.state.selection[name].selected)
+    openDatabase(name) {
+      this.state.selected = ((this.state.snapshot && this.state.snapshot.databases) || []).find((row) => row.name === name) || null
+      this.state.message = ''
+      this.state.messageError = false
     }
 
-    toggleDatabase(name, checked) {
-      const entry = this.state.selection[name] || { keep: null }
-      this.state.selection[name] = { ...entry, selected: checked }
-      this.state.dirty = true
+    closeDatabase() {
+      this.state.selected = null
     }
 
-    markDirty() {
-      this.state.dirty = true
+    rotationLabel(name) {
+      const rotation = this.state.rotations[name]
+      if (rotation === 'month') return 'Month'
+      if (rotation === 'off') return 'Off'
+      return 'Week'
+    }
+
+    lastBackup(name) {
+      return this.state.backups.find((entry) => entry.database === name && entry.status === 'ok') || null
+    }
+
+    backupsFor(name) {
+      return this.state.backups.filter((entry) => entry.database === name)
+    }
+
+    async setRotation(name, value) {
+      this.state.rotations = { ...this.state.rotations, [name]: value }
+      await this.save()
     }
 
     async save() {
       if (this.state.busy) return
-      const selection = this.state.selection
       const databases = {}
-      for (const [name, entry] of Object.entries(selection)) {
-        if (!entry.selected) continue
-        databases[name] = entry.keep ? { keep: entry.keep } : {}
-      }
-      const backup = {
-        dir: this.state.dirInput.value.trim(),
-        at: this.localToUTCTime(this.state.atInput.value),
-        days: Number(this.state.daysInput.value) || 0,
-        timeout: this.state.timeoutInput.value.trim(),
-        globals: this.state.globalsInput.checked,
-        databases,
+      for (const [name, rotation] of Object.entries(this.state.rotations)) {
+        if (rotation === 'off') continue
+        databases[name] = { rotation }
       }
       try {
         this.state.busy = true
-        const data = await Dboss.api('/api/pg/config', { method: 'POST', body: JSON.stringify({ backup }) })
+        const data = await Dboss.api('/api/pg/config', { method: 'POST', body: JSON.stringify({ backup: { databases } }) })
         this.apply(data)
-        this.message('Backup settings saved.')
-        Toast.show('PostgreSQL backup settings saved')
+        this.message('Backup rotation saved.')
+        Toast.show('PostgreSQL backup rotation saved')
       } catch (error) {
         this.message(error.message, true)
         Toast.show(error.message, true)
@@ -163,10 +122,6 @@
 
     async backupNow(name = '') {
       if (this.state.busy) return
-      if (name && !this.selected(name)) {
-        this.message(`Select ${name} before backing it up.`, true)
-        return
-      }
       try {
         this.state.busy = true
         const data = await Dboss.api('/api/pg/backup', { method: 'POST', body: JSON.stringify({ database: name }) })
@@ -200,6 +155,30 @@
       }
     }
 
+    async dropDatabase(name) {
+      if (this.state.busy) return
+      const typed = window.prompt(`This permanently drops ${name}. Type the database name to confirm.`)
+      if (typed === null) return
+      if (typed !== name) {
+        this.message('Database name did not match; nothing was dropped.', true)
+        Toast.show('Database name did not match', true)
+        return
+      }
+      try {
+        this.state.busy = true
+        await Dboss.api('/api/pg/drop', { method: 'POST', body: JSON.stringify({ database: name, confirm: name }) })
+        this.state.selected = null
+        Toast.show(`${name} dropped`)
+        await this.load(true)
+        this.message(`${name} dropped.`)
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
     message(text, error = false) {
       this.state.message = text
       this.state.messageError = error
@@ -210,6 +189,23 @@
       const date = new Date(value)
       if (isNaN(date.getTime())) return value
       return date.toLocaleString()
+    }
+
+    ago(value) {
+      if (!value) return ''
+      const then = new Date(value).getTime()
+      if (isNaN(then)) return ''
+      const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+      if (seconds < 60) return `${seconds}s ago`
+      const minutes = Math.floor(seconds / 60)
+      if (minutes < 60) return `${minutes}m ago`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 24) return `${hours}h ago`
+      const days = Math.floor(hours / 24)
+      if (days < 30) return `${days}d ago`
+      const months = Math.floor(days / 30)
+      if (months < 12) return `${months}mo ago`
+      return `${Math.floor(months / 12)}y ago`
     }
 
     bytes(value) {
@@ -247,14 +243,6 @@
     seconds(value) {
       return (Number(value || 0)).toFixed(1)
     }
-
-    statusClass(status) {
-      return status === 'ok' ? 'badge-success' : 'badge-danger'
-    }
-
-    location(entry) {
-      return entry.local_path ? 'local' : '-'
-    }
   }
 </script>
 
@@ -273,7 +261,7 @@
     </button>
     <button class="btn btn-primary" type="button" onclick="fez.backupNow()" disabled={state.busy}>
       <svg class="icon"><use href="#i-save"></use></svg>
-      Back up now
+      Back up all
     </button>
   </div>
 </div>
@@ -374,11 +362,11 @@
 
   <div class="section-head">
     <h2>Databases</h2>
-    <span class="text-muted">Select what to back up</span>
+    <span class="text-muted">Select a database for options and backups</span>
   </div>
   <section class="card">
     <div class="card-header">
-      <h3 class="section-title">Backup selection</h3>
+      <h3 class="section-title">All databases</h3>
       <div class="card-actions">
         <input type="text" placeholder="Filter" value={state.filter} oninput="fez.setFilter(this.value)" />
       </div>
@@ -389,17 +377,23 @@
         <span class="subheader">Size</span>
         <span class="subheader">Owner</span>
         <span class="subheader">Conns</span>
-        <span class="subheader">Back up</span>
-        <span class="subheader"></span>
+        <span class="subheader">Last backup</span>
+        <span class="subheader">Rotation</span>
       </div>
       {#each databases() as database}
-        <div class="sys-row pg-row">
+        <div class="sys-row pg-row pg-row-click" class:pg-row-active={state.selected && state.selected.name === database.name} onclick="fez.openDatabase('{database.name}')">
           <span class="service-name">{database.name}</span>
           <span class="service-value">{bytes(database.size_bytes)}</span>
           <span class="sys-version">{database.owner}</span>
           <span class="service-value">{database.connections}</span>
-          <span><input type="checkbox" checked={state.selection[database.name].selected} onchange="fez.toggleDatabase('{database.name}', this.checked)" /></span>
-          <span><button class="btn btn-sm" type="button" onclick="fez.backupNow('{database.name}')" disabled={state.busy}>Back up</button></span>
+          <span class="sys-version">
+            {#if lastBackup(database.name)}
+              {stamp(lastBackup(database.name).time)} · {ago(lastBackup(database.name).time)}
+            {:else}
+              <span class="text-muted">never</span>
+            {/if}
+          </span>
+          <span class="sys-version">{rotationLabel(database.name)}</span>
         </div>
       {:else}
         <div class="sys-row sys-empty text-muted">No database matches the filter.</div>
@@ -407,60 +401,69 @@
     </div>
   </section>
 
-  <div class="section-head">
-    <h2>Backup policy</h2>
-    <button class="btn btn-sm btn-primary" type="button" onclick="fez.save()" disabled={state.busy}>
-      <svg class="icon"><use href="#i-save"></use></svg>
-      Save changes
-    </button>
-  </div>
-  <section class="card">
-    <div class="datagrid pg-settings">
-      <div class="datagrid-item"><span class="subheader">Local directory</span><input type="text" fez:this="dirInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Daily at (local)</span><input type="time" fez:this="atInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Retention (days)</span><input type="number" min="0" fez:this="daysInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Timeout</span><input type="text" fez:this="timeoutInput" oninput="fez.markDirty()" placeholder="1h" /></div>
-      <div class="datagrid-item"><span class="subheader">Globals</span><label class="pg-check"><input type="checkbox" fez:this="globalsInput" onchange="fez.markDirty()" /> roles &amp; tablespaces</label></div>
+  {#if state.selected}
+    <div class="section-head">
+      <h2>{state.selected.name}</h2>
+      <button class="btn btn-sm" type="button" onclick="fez.closeDatabase()">Close</button>
     </div>
-    {#if state.message}
-      <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
-    {/if}
-  </section>
-
-  <div class="section-head">
-    <h2>Backups</h2>
-    <span class="text-muted">{state.backups.length} recorded</span>
-  </div>
-  <section class="card">
-    <div class="sys-tools">
-      <div class="sys-row sys-head pg-backup-row">
-        <span class="subheader">Database</span>
-        <span class="subheader">Time</span>
-        <span class="subheader">Size</span>
-        <span class="subheader">Where</span>
-        <span class="subheader">Status</span>
-        <span class="subheader">Duration</span>
-        <span class="subheader"></span>
+    <section class="card">
+      <div class="datagrid pg-detail-stats">
+        <div class="datagrid-item"><span class="subheader">Owner</span><span class="datagrid-content">{state.selected.owner || '-'}</span></div>
+        <div class="datagrid-item"><span class="subheader">Size</span><span class="datagrid-content">{bytes(state.selected.size_bytes)}</span></div>
+        <div class="datagrid-item"><span class="subheader">Encoding</span><span class="datagrid-content">{state.selected.encoding || '-'}</span></div>
+        <div class="datagrid-item"><span class="subheader">Collate</span><span class="datagrid-content">{state.selected.collate || '-'}</span></div>
+        <div class="datagrid-item"><span class="subheader">Connections</span><span class="datagrid-content">{state.selected.connections}</span></div>
+        <div class="datagrid-item"><span class="subheader">Commits</span><span class="datagrid-content">{number(state.selected.xact_commit)}</span></div>
+        <div class="datagrid-item"><span class="subheader">Rollbacks</span><span class="datagrid-content">{number(state.selected.xact_rollback)}</span></div>
+        <div class="datagrid-item"><span class="subheader">Deadlocks</span><span class="datagrid-content">{number(state.selected.deadlocks)}</span></div>
+        <div class="datagrid-item"><span class="subheader">Temp bytes</span><span class="datagrid-content">{bytes(state.selected.temp_bytes)}</span></div>
       </div>
-      {#each state.backups as entry}
-        <div class="sys-row pg-backup-row">
-          <span class="service-name">{entry.globals ? 'globals' : entry.database}</span>
-          <span class="sys-version">{stamp(entry.time)}</span>
-          <span class="service-value">{bytes(entry.bytes)}</span>
-          <span class="sys-version">{location(entry)}</span>
-          <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
-          <span class="service-value">{entry.duration_ms}ms</span>
-          <span>
-            {#if entry.status === 'ok'}
-              <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
-            {:else}
-              <span class="text-muted">{entry.error || '-'}</span>
-            {/if}
-          </span>
+      <div class="pg-detail-actions">
+        <label class="pg-check">
+          Rotation
+          <select onchange="fez.setRotation('{state.selected.name}', this.value)" disabled={state.busy}>
+            <option value="week" selected={state.rotations[state.selected.name] === 'week'}>Week</option>
+            <option value="month" selected={state.rotations[state.selected.name] === 'month'}>Month</option>
+            <option value="off" selected={state.rotations[state.selected.name] === 'off'}>Off</option>
+          </select>
+        </label>
+        <button class="btn btn-sm btn-primary" type="button" onclick="fez.backupNow('{state.selected.name}')" disabled={state.busy}>
+          <svg class="icon"><use href="#i-save"></use></svg>
+          Back up now
+        </button>
+        <button class="btn btn-sm btn-danger" type="button" onclick="fez.dropDatabase('{state.selected.name}')" disabled={state.busy}>Drop database</button>
+      </div>
+      <div class="sys-tools">
+        <div class="sys-row sys-head pg-backup-row">
+          <span class="subheader">Time</span>
+          <span class="subheader">Ago</span>
+          <span class="subheader">Size</span>
+          <span class="subheader">Manual</span>
+          <span class="subheader">Status</span>
+          <span class="subheader"></span>
         </div>
-      {:else}
-        <div class="sys-row sys-empty text-muted">No backups recorded yet.</div>
-      {/each}
-    </div>
-  </section>
+        {#each backupsFor(state.selected.name) as entry}
+          <div class="sys-row pg-backup-row">
+            <span class="sys-version">{stamp(entry.time)}</span>
+            <span class="sys-version">{ago(entry.time) || '-'}</span>
+            <span class="service-value">{bytes(entry.bytes)}</span>
+            <span class="sys-version">{entry.manual ? 'yes' : 'no'}</span>
+            <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
+            <span>
+              {#if entry.status === 'ok'}
+                <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
+              {:else}
+                <span class="text-muted">{entry.error || '-'}</span>
+              {/if}
+            </span>
+          </div>
+        {:else}
+          <div class="sys-row sys-empty text-muted">No backups for this database yet.</div>
+        {/each}
+      </div>
+      {#if state.message}
+        <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+      {/if}
+    </section>
+  {/if}
 {/if}

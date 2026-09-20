@@ -186,22 +186,17 @@ type Postgres struct {
 	Backup  PostgresBackup `yaml:"backup" json:"backup"`
 }
 
-// PostgresBackup is the host-wide backup policy. One daily run at At (UTC) dumps the databases in
-// Databases and, when Globals is set, the cluster globals. Databases maps a database name to its
-// per-database overrides; a key being present selects the database.
+// PostgresBackup lists the databases that are dumped on the daily run, each with its rotation
+// window. A key being present selects the database; manual backups from the console are kept
+// outside the window.
 type PostgresBackup struct {
-	Dir       string                    `yaml:"dir" json:"dir"`
-	At        string                    `yaml:"at" json:"at"`
-	Days      int                       `yaml:"days" json:"days"`
-	Timeout   Duration                  `yaml:"timeout" json:"timeout"`
-	Globals   bool                      `yaml:"globals" json:"globals"`
 	Databases map[string]DatabaseBackup `yaml:"databases" json:"databases"`
 }
 
-// DatabaseBackup overrides the host backup policy for one database. A nil field follows the host
-// policy.
+// DatabaseBackup overrides the backup policy for one database. Rotation is week or month; empty
+// means week.
 type DatabaseBackup struct {
-	Days *int `yaml:"days,omitempty" json:"days,omitempty"`
+	Rotation string `yaml:"rotation,omitempty" json:"rotation,omitempty"`
 }
 
 // Proxy has one listener per Listen address; every listener serves the same routing.
@@ -445,7 +440,7 @@ func Default() Config {
 		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}, AuthCog: AuthCog{Realm: "auth", Path: "/authcog"}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
 		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed", "error-rate", "slow"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
-		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: "./pg_backups", At: "04:00", Days: 30, Timeout: Duration(time.Hour), Globals: true}},
+		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{}},
 	}
 }
 
@@ -580,7 +575,6 @@ func Parse(data []byte, path string) (Config, error) {
 	cfg.StateDir = resolvePath(cfg.Dir, cfg.StateDir)
 	cfg.LogDir = resolvePath(cfg.Dir, cfg.LogDir)
 	cfg.Socket = resolvePath(cfg.Dir, cfg.Socket)
-	cfg.Postgres.Backup.Dir = resolvePath(cfg.Dir, cfg.Postgres.Backup.Dir)
 	if err := cfg.validate(hasApp); err != nil {
 		return Config{}, located(err, path, root)
 	}
@@ -705,13 +699,10 @@ func (b PostgresBackup) Selected() []string {
 	return names
 }
 
-// RetentionDays returns the number of days of dumps kept for one database: its own days override
-// when set, else the host policy. 0 keeps them forever.
-func (b PostgresBackup) RetentionDays(name string) int {
-	if target, ok := b.Databases[name]; ok && target.Days != nil {
-		return *target.Days
-	}
-	return b.Days
+// Rotation returns the dump rotation window for one database: week, month, or empty when the
+// database is not selected.
+func (b PostgresBackup) Rotation(name string) string {
+	return b.Databases[name].Rotation
 }
 
 var databaseName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,62}$`)
@@ -720,27 +711,12 @@ func validatePostgres(p Postgres) error {
 	if !p.Enabled {
 		return nil
 	}
-	if p.Backup.At != "" {
-		if _, err := time.Parse("15:04", p.Backup.At); err != nil {
-			return keyErr("backup.at", "must be a UTC time HH:MM, not %q", p.Backup.At)
-		}
-	}
-	if p.Backup.Days < 0 {
-		return keyErr("backup.days", "cannot be negative")
-	}
-	if p.Backup.Timeout < 0 {
-		return keyErr("backup.timeout", "cannot be negative")
-	}
-	selected := p.Backup.Selected()
-	if (len(selected) > 0 || p.Backup.Globals) && p.Backup.Dir == "" {
-		return &Error{Key: "backup.dir", Message: "a directory is required when databases or globals are backed up"}
-	}
-	for _, name := range selected {
+	for _, name := range p.Backup.Selected() {
 		if !databaseName.MatchString(name) {
 			return &Error{Key: "backup.databases", Message: fmt.Sprintf("invalid database name %q", name), Hint: "names match [A-Za-z_][A-Za-z0-9_$]*, e.g. myapp_production"}
 		}
-		if target := p.Backup.Databases[name]; target.Days != nil && *target.Days < 0 {
-			return keyErr("backup.databases."+name+".days", "cannot be negative")
+		if rotation := p.Backup.Databases[name].Rotation; rotation != "" && rotation != "week" && rotation != "month" {
+			return keyErr("backup.databases."+name+".rotation", "must be week or month, not %q", rotation)
 		}
 	}
 	return nil

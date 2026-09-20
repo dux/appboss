@@ -27,7 +27,7 @@
         { id: 'health', title: 'Health & metrics', summary: 'Health endpoints, Prometheus metrics and the doctor preflight.' },
         { id: 'notify', title: 'Notifications', summary: 'One operator webhook for crashes and failures.' },
         { id: 'alerts', title: 'Alerts', summary: 'Posts to the webhook when an app answers with too many errors or too slowly.' },
-        { id: 'postgres', title: 'PostgreSQL backups', summary: 'Scheduled dumps of the host databases, kept in a local directory.' },
+        { id: 'postgres', title: 'PostgreSQL backups', summary: 'Daily dumps of the host databases, kept for a week or a month.' },
       ],
     },
   ]
@@ -199,13 +199,11 @@
     postgres: `
     postgres:
       backup:
-        dir: /var/backups/db
-        at: "04:00"          # one daily run, UTC; the tab shows local time
-        days: 30
         databases:
-          myapp_production: {}
+          myapp_production:
+            rotation: week    # keep 7 days; month keeps 30
           reports:
-            days: 90         # per-database retention
+            rotation: month
     `,
   }
 
@@ -657,25 +655,24 @@
     {#if state.topic === 'postgres'}
       <section>
         <h2>PostgreSQL backups</h2>
-        <p>dboss inspects the host's PostgreSQL server read-only and dumps the databases you select on a schedule, into a local directory. The PostgreSQL tab appears only when a server is reachable.</p>
+        <p>dboss inspects the host's PostgreSQL server read-only and dumps the databases you select on a daily run, as zips of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/</code> next to the apps. The PostgreSQL tab appears only when a server is reachable.</p>
         <h3>What it helps with</h3>
         <ul>
-          <li>Backups without a cron script: pick databases in the console, set the daily time and retention, done.</li>
-          <li>Bounded storage: one run a day, dumps kept for a configurable number of days.</li>
-          <li>Restoring a dump from the console, and seeing database sizes and connections at a glance.</li>
+          <li>Backups without a cron script: pick databases in the console, set their rotation, done.</li>
+          <li>Bounded storage: one daily run, scheduled dumps kept for a week or a month, a manual backup kept until you remove it.</li>
+          <li>Restoring or dropping a database from the console, and seeing sizes and connections at a glance.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.dir,postgres.backup.at,postgres.backup.days,postgres.backup.timeout,postgres.backup.globals,postgres.backup.databases" /></div>
+        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.postgres" />
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
-          <li>Each selected database is dumped in custom format; <code>globals: true</code> adds roles and tablespaces as one <code>_globals</code> entry. The inspector itself writes nothing.</li>
-          <li>One run a day at <code>at</code> (UTC, shown local in the tab). <code>days</code> is how long dumps are kept; <code>0</code> keeps them forever.</li>
-          <li><code>databases</code> maps each selected database to its options; an entry may override the host <code>days</code> with its own retention.</li>
+          <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
+          <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><code>postgres</code> is a host key but applies without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>
-          <li>The box needs <code>pg_dump</code>, <code>pg_dumpall</code> and <code>pg_restore</code> on the service user's <code>PATH</code>, and a role that can read every selected database.</li>
+          <li>The box needs <code>pg_dump</code> and <code>psql</code> on the service user's <code>PATH</code>, and a role that can read every selected database.</li>
         </ul>
       </section>
     {/if}

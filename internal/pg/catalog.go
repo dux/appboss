@@ -9,7 +9,7 @@ import (
 )
 
 // Backup is one dump recorded in the catalog. A failed entry has no files but keeps the error so
-// the console can show why a run did not land.
+// the console can show why a run did not land. Manual entries are never pruned.
 type Backup struct {
 	ID         string `json:"id"`
 	Database   string `json:"database"`
@@ -20,8 +20,7 @@ type Backup struct {
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
-	Globals    bool   `json:"globals,omitempty"`
-	Verified   bool   `json:"verified,omitempty"`
+	Manual     bool   `json:"manual,omitempty"`
 }
 
 // catalogKeep bounds the catalog file. Retention prunes far less than this; the cap only stops a

@@ -1063,11 +1063,39 @@ input[type="radio"] {
 }
 
 .pg-databases .pg-row {
-  grid-template-columns: minmax(0, 1.4fr) 80px minmax(0, 1fr) 60px 80px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.4fr) 80px minmax(0, 1fr) 60px minmax(0, 1.3fr) 90px;
+}
+
+.pg-row-click {
+  cursor: pointer;
+}
+
+.pg-row-click:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.pg-row-active {
+  background: rgba(32, 107, 196, 0.08);
+}
+
+.pg-detail-stats {
+  padding: 12px 20px 4px;
+}
+
+.pg-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px 16px;
+}
+
+.pg-detail-actions select {
+  width: auto;
 }
 
 .pg-backup-row {
-  grid-template-columns: minmax(0, 1.2fr) 170px 90px 100px 90px 90px minmax(0, 1fr);
+  grid-template-columns: 170px 90px 90px 70px 90px minmax(0, 1fr);
 }
 
 .pg-replica-row {
@@ -1078,17 +1106,7 @@ input[type="radio"] {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.8fr) 120px;
 }
 
-.pg-settings {
-  padding: 16px 20px 4px;
-}
-
-.pg-settings input[type='text'],
-.pg-settings input[type='number'],
-.pg-settings input[type='time'] {
-  width: 100%;
-}
-
-.pg-settings .pg-check {
+.pg-check {
   display: inline-flex;
   align-items: center;
   gap: 6px;

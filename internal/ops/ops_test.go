@@ -204,13 +204,14 @@ func (f *fakePG) Snapshot() pg.Snapshot {
 }
 func (f *fakePG) Refresh(context.Context) pg.Snapshot { return pg.Snapshot{Available: f.available} }
 func (f *fakePG) BackupAll(context.Context) error     { return nil }
-func (f *fakePG) BackupDatabase(context.Context, string) (pg.Backup, error) {
+func (f *fakePG) BackupDatabase(context.Context, string, bool) (pg.Backup, error) {
 	return pg.Backup{Database: "app", Status: "ok"}, nil
 }
 func (f *fakePG) Backups() []pg.Backup { return f.backups }
 func (f *fakePG) Restore(context.Context, pg.RestoreRequest) (pg.RestoreResult, error) {
 	return pg.RestoreResult{Target: "app_restore"}, nil
 }
+func (f *fakePG) DropDatabase(context.Context, string, string) error { return nil }
 func (f *fakePG) BackupConfig() config.PostgresBackup { return config.PostgresBackup{} }
 func (f *fakePG) Apply(config.Config)                 { f.applied++ }
 

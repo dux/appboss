@@ -97,6 +97,27 @@ func (h *Handler) pgRestore(w http.ResponseWriter, r *http.Request, session auth
 	writeJSON(w, http.StatusOK, result)
 }
 
+// pgDrop removes a database. The operator types its name as confirmation, which travels as the
+// confirm field and is checked by the service.
+func (h *Handler) pgDrop(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		Database string `json:"database"`
+		Confirm  string `json:"confirm"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.service.Do(ops.Request{Method: ops.ActionPGDrop, Database: strings.TrimSpace(request.Database), Confirm: strings.TrimSpace(request.Confirm), Actor: session.Email}); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dropped": strings.TrimSpace(request.Database), "updated_at": time.Now().UTC()})
+}
+
 // pgConfig writes the backup policy and database selection into the server-only host override
 // and hot-reloads the PostgreSQL service, so the checkboxes apply without a daemon restart.
 func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authSession) {

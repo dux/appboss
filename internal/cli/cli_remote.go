@@ -175,8 +175,20 @@ func (c CLI) remote(command string, args []string) error {
 			if *force {
 				request.Confirm = *target
 			}
+		case pgArgs[0] == "drop":
+			set := flag.NewFlagSet("pg drop", flag.ContinueOnError)
+			set.SetOutput(c.Err)
+			confirm := set.String("confirm", "", "repeat the database name to confirm")
+			if err := set.Parse(pgArgs[1:]); err != nil {
+				return err
+			}
+			if set.NArg() != 1 || *confirm == "" {
+				return errors.New("usage: dboss pg drop <database> --confirm <database>")
+			}
+			request.Method = ops.ActionPGDrop
+			request.Database, request.Confirm = set.Arg(0), *confirm
 		default:
-			return errors.New("usage: dboss pg [backups | backup [database] | restore <backup-id>]")
+			return errors.New("usage: dboss pg [backups | backup [database] | restore <backup-id> | drop <database>]")
 		}
 	case "pubsub":
 		pub := opts.rest

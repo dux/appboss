@@ -39,21 +39,22 @@ func TestCatalogRoundTrip(t *testing.T) {
 }
 
 func TestSelectedDatabases(t *testing.T) {
-	days := 90
 	backup := config.PostgresBackup{
-		Days: 30,
 		Databases: map[string]config.DatabaseBackup{
-			"reports": {},
-			"app":     {Days: &days},
+			"reports": {Rotation: "month"},
+			"app":     {Rotation: "week"},
 		},
 	}
 	if got := backup.Selected(); len(got) != 2 || got[0] != "app" || got[1] != "reports" {
 		t.Fatalf("Selected() = %v", got)
 	}
-	if got := backup.RetentionDays("app"); got != 90 {
-		t.Fatalf("RetentionDays(app) = %d, want its override", got)
+	if got := backup.Rotation("reports"); got != "month" {
+		t.Fatalf("Rotation(reports) = %q", got)
 	}
-	if got := backup.RetentionDays("reports"); got != 30 {
-		t.Fatalf("RetentionDays(reports) = %d, want the host policy", got)
+	if got := backup.Rotation("app"); got != "week" {
+		t.Fatalf("Rotation(app) = %q", got)
+	}
+	if got := backup.Rotation("missing"); got != "" {
+		t.Fatalf("Rotation(missing) = %q, want empty", got)
 	}
 }

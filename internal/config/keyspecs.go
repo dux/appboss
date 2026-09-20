@@ -72,12 +72,7 @@ var keySpecs = map[string]KeySpec{
 	// --- PostgreSQL ---
 	"postgres.enabled":          {Block: "postgres", Name: "Enable PostgreSQL", Description: "inspect the host PostgreSQL and run scheduled backups; false hides the console tab"},
 	"postgres.dsn":              {Block: "postgres", Name: "Connection string", Description: "libpq connection string or URL; empty auto-detects the local socket then 127.0.0.1 using the PG* environment", Example: "$DATABASE_URL", Secret: true},
-	"postgres.backup.dir":       {Block: "postgres", Name: "Backup directory", Description: "directory that receives dumps, one subfolder per database; required when anything is selected"},
-	"postgres.backup.at":        {Block: "postgres", Name: "Daily run time", Description: "UTC time of the one daily backup run, HH:MM; empty disables scheduled backups"},
-	"postgres.backup.days":      {Block: "postgres", Name: "Retention days", Description: "days of dumps kept; 0 keeps them forever", Example: "30"},
-	"postgres.backup.timeout":   {Block: "postgres", Name: "Backup timeout", Description: "kill a dump that runs longer than this; 0 means no limit"},
-	"postgres.backup.globals":   {Block: "postgres", Name: "Dump globals", Description: "also dump roles and tablespaces with pg_dumpall --globals-only"},
-	"postgres.backup.databases": {Block: "postgres", Name: "Databases", Description: "databases to dump into backup.dir, keyed by name; an entry may override the host retention with its own days", Example: "{myapp_production: {}, reports: {days: 90}}"},
+	"postgres.backup.databases": {Block: "postgres", Name: "Databases", Description: "databases dumped by the daily run, keyed by name; rotation is week or month (empty means week)", Example: "{myapp_production: {rotation: week}, reports: {rotation: month}}"},
 
 	// --- App ---
 	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds domains is a web process (an app may have several, each with its own domains, static, pubsub, health and canonical_host)", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"], static: ./public, health: /up, canonical_host: myapp.com}, worker: bundle exec lux jobs:work}", Required: true},

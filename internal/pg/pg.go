@@ -79,7 +79,7 @@ func connect(ctx context.Context, connConfig *pgx.ConnConfig) (*pgx.Conn, error)
 }
 
 // processEnv is the libpq environment for a child process: the resolved host, port, user and
-// password so pg_dump and pg_dumpall connect exactly as the inspector does. The password is
+// password so pg_dump and psql connect exactly as the inspector does. The password is
 // passed through the environment, never argv, so it stays out of the process list.
 func processEnv(connConfig *pgx.ConnConfig) []string {
 	env := os.Environ()
@@ -228,10 +228,12 @@ func describe(connConfig *pgx.ConnConfig) string {
 // options is the config the service is rebuilt from on every reload.
 type options struct {
 	postgres config.Postgres
+	// dir is the host config directory; backups live under dir/pg_backup.
+	dir      string
 	stateDir string
 	logDir   string
 }
 
 func optionsFrom(cfg config.Config) options {
-	return options{postgres: cfg.Postgres, stateDir: cfg.StateDir, logDir: cfg.LogDir}
+	return options{postgres: cfg.Postgres, dir: cfg.Dir, stateDir: cfg.StateDir, logDir: cfg.LogDir}
 }

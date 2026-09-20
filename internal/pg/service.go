@@ -29,7 +29,6 @@ type Service struct {
 	opts       options
 	connConfig *pgx.ConnConfig
 	snapshot   Snapshot
-	at         string
 	next       time.Time
 
 	refreshMu sync.Mutex
@@ -83,11 +82,8 @@ func (s *Service) Close() error {
 // background, so a slow or missing server never blocks the caller.
 func (s *Service) ApplyConfig() {
 	s.mu.Lock()
-	at := s.opts.postgres.Backup.At
-	if at != s.at || (at != "" && s.next.IsZero()) {
-		// A new time recomputes the next run, so a change takes effect from now.
-		s.at = at
-		s.next = nextRun(at, time.Now())
+	if s.next.IsZero() {
+		s.next = nextRun(backupAt, time.Now())
 	}
 	ctx := s.baseCtx
 	s.mu.Unlock()
@@ -242,12 +238,12 @@ func (s *Service) backupLoop(ctx context.Context) {
 // maybeBackup fires the daily run when one is due. The actual work runs off the loop.
 func (s *Service) maybeBackup(ctx context.Context, now time.Time) {
 	s.mu.Lock()
-	at, next := s.at, s.next
-	if at == "" || next.IsZero() || now.Before(next) {
+	next := s.next
+	if next.IsZero() || now.Before(next) {
 		s.mu.Unlock()
 		return
 	}
-	s.next = nextRun(at, now)
+	s.next = nextRun(backupAt, now)
 	s.mu.Unlock()
 	go func() {
 		if err := s.BackupAll(ctx); err != nil {

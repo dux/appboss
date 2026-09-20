@@ -324,39 +324,36 @@ notify:
 
 ## PostgreSQL inspection and backups
 
-When a PostgreSQL server is reachable, the console gains a **PostgreSQL** tab and the daemon can back up selected databases on a schedule.
+When a PostgreSQL server is reachable, the console gains a **PostgreSQL** tab and the daemon can back up selected databases on a daily run.
 
-Configuration is one host-level block:
+Configuration is one host-level block. The only backup setting is the per-database rotation window:
 
 ```yaml
 postgres:
   enabled: true
   dsn: $DATABASE_URL            # empty auto-detects the local socket, then 127.0.0.1:5432
   backup:
-    dir: ./pg_backups           # destination, one subfolder per database
-    at: "04:00"                 # one daily run, UTC; the tab shows local time
-    days: 30                    # keep 30 days of dumps; 0 keeps them forever
-    timeout: 1h
-    globals: true               # also pg_dumpall --globals-only (roles and tablespaces)
     databases:
-      myapp_production: {}       # uses the host retention
+      myapp_production:
+        rotation: week          # keep 7 days; month keeps 30
       reports:
-        days: 90                 # per-database retention override
+        rotation: month
 ```
 
-The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, every database with its size and owner, and the backup history.
+The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, and every database with its size, owner and last backup.
 
-Backups are per-database logical dumps (`pg_dump -Fc`), optional cluster globals (`pg_dumpall --globals-only`), written to the local directory. One run happens each day at `at` (UTC), and dumps older than `days` are pruned from disk and the catalog; `days: 0` keeps them forever. The catalog lives at `state_dir/pg-backups.json`.
+Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 UTC; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `state_dir/pg-backups.json`.
 
-The console's checkboxes write the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reload the daemon, so no restart is needed. A plain edit on disk applies on the next config save or `dboss rescan`. Restore verifies the checksum and dump listing, then loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation.
+The console writes the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reloads the daemon, so no restart is needed. A plain edit on disk applies on the next config save or `dboss rescan`. Restore verifies the archive and loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation. The per-database panel also has **Drop database**, which needs the database name typed as confirmation.
 
-On the box this feature needs `pg_dump`, `pg_dumpall` and `pg_restore` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:
+On the box this feature needs `pg_dump` and `psql` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:
 
 ```bash
 dboss pg                      # server summary and databases
 dboss pg backups              # recorded dumps
 dboss pg backup [database]    # dump one or every selected database
 dboss pg restore <id> [--target name] [--force]
+dboss pg drop <database> --confirm <database>
 ```
 
 The metrics endpoint exports `dboss_pg_up`, `dboss_pg_database_size_bytes`, `dboss_pg_backup_last_success_timestamp_seconds` and `dboss_pg_backup_count`.

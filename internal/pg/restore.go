@@ -1,9 +1,11 @@
 package pg
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +34,13 @@ type RestoreResult struct {
 // ErrRestoreConfirm is returned when an in-place restore is missing its confirmation.
 var ErrRestoreConfirm = errors.New("restoring over an existing database requires the target name as confirmation")
 
-// Restore verifies a dump and loads it into the target database. It never touches the source
+// ErrDropConfirm is returned when a drop is missing the database name as confirmation.
+var ErrDropConfirm = errors.New("dropping a database requires its name as confirmation")
+
+// reservedDatabases can never be dropped through dboss.
+var reservedDatabases = map[string]bool{"postgres": true, "template0": true, "template1": true}
+
+// Restore unpacks a dump and loads it into the target database. It never touches the source
 // database unless Replace is set, and then only with an explicit confirmation.
 func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
 	s.mu.RLock()
@@ -57,6 +65,11 @@ func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreR
 			return RestoreResult{}, fmt.Errorf("backup %q failed its checksum", request.ID)
 		}
 	}
+	sqlPath, cleanup, err := unzip(path)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer cleanup()
 
 	target := request.Target
 	if target == "" {
@@ -66,16 +79,38 @@ func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreR
 		if request.Confirm != target {
 			return RestoreResult{}, ErrRestoreConfirm
 		}
-	} else if err := s.createDatabase(ctx, connConfig, target); err != nil {
+		if err := s.dropDatabase(ctx, connConfig, target); err != nil {
+			return RestoreResult{}, err
+		}
+	}
+	if err := s.createDatabase(ctx, connConfig, target); err != nil {
 		return RestoreResult{}, err
 	}
-	if err := verifyDump(ctx, path, entry.Globals); err != nil {
-		return RestoreResult{}, err
-	}
-	if err := runRestore(ctx, connConfig, entry, path, target, request.Replace); err != nil {
+	if err := runRestore(ctx, connConfig, sqlPath, target); err != nil {
 		return RestoreResult{}, err
 	}
 	return RestoreResult{Target: target, Created: !request.Replace, Bytes: entry.Bytes}, nil
+}
+
+// DropDatabase removes one database through the maintenance connection. It refuses the reserved
+// databases and requires the caller to repeat the name as confirmation.
+func (s *Service) DropDatabase(ctx context.Context, database, confirm string) error {
+	if database == "" {
+		return errors.New("database name is required")
+	}
+	if database != confirm {
+		return ErrDropConfirm
+	}
+	if reservedDatabases[database] {
+		return fmt.Errorf("%s is a reserved database and cannot be dropped", database)
+	}
+	s.mu.RLock()
+	connConfig := s.connConfig
+	s.mu.RUnlock()
+	if connConfig == nil {
+		return errors.New("no reachable PostgreSQL server")
+	}
+	return s.dropDatabase(ctx, connConfig, database)
 }
 
 // fetch returns the dump's path on disk, or an error when the file is gone.
@@ -87,6 +122,59 @@ func fetch(entry Backup) (string, error) {
 		return "", fmt.Errorf("backup %q is missing from %s", entry.ID, entry.LocalPath)
 	}
 	return entry.LocalPath, nil
+}
+
+// unzip extracts the single SQL entry of a dump archive to a temp file. It is also the cheap
+// integrity check: a truncated archive fails to open or to read before any target is touched.
+func unzip(path string) (string, func(), error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("backup is not a readable archive: %w", err)
+	}
+	defer reader.Close()
+	if len(reader.File) == 0 {
+		return "", nil, errors.New("backup archive is empty")
+	}
+	temp, err := os.CreateTemp("", "dboss-restore-*.sql")
+	if err != nil {
+		return "", nil, err
+	}
+	sqlPath := temp.Name()
+	cleanup := func() { _ = os.Remove(sqlPath) }
+	source, err := reader.File[0].Open()
+	if err != nil {
+		_ = temp.Close()
+		cleanup()
+		return "", nil, err
+	}
+	_, copyErr := io.Copy(temp, source)
+	_ = source.Close()
+	if closeErr := temp.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		cleanup()
+		return "", nil, copyErr
+	}
+	return sqlPath, cleanup, nil
+}
+
+func (s *Service) dropDatabase(ctx context.Context, connConfig *pgx.ConnConfig, target string) error {
+	var lastErr error
+	for _, maintenance := range []string{"postgres", "template1"} {
+		conn, err := pgx.ConnectConfig(ctx, mustConfig(connConfig, maintenance))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, err = conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{target}.Sanitize()+" WITH (FORCE)")
+		_ = conn.Close(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("drop database %s: %w", target, lastErr)
 }
 
 // createDatabase connects to the maintenance database and creates the target. It uses the first
@@ -115,31 +203,8 @@ func mustConfig(connConfig *pgx.ConnConfig, database string) *pgx.ConnConfig {
 	return clone
 }
 
-// verifyDump runs a cheap structural check so a truncated file fails before the target is
-// touched. Plain-SQL globals dumps are not checked here.
-func verifyDump(ctx context.Context, path string, globals bool) error {
-	if globals {
-		return nil
-	}
-	output, err := exec.CommandContext(ctx, "pg_restore", "--list", path).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("backup is not readable: %s", firstLine(string(output)))
-	}
-	return nil
-}
-
-func runRestore(ctx context.Context, connConfig *pgx.ConnConfig, entry Backup, path, target string, replace bool) error {
-	var command *exec.Cmd
-	if entry.Globals {
-		command = exec.CommandContext(ctx, "psql", "--dbname="+databaseConnString(connConfig, target), "--file="+path)
-	} else {
-		args := []string{"--no-owner", "--no-privileges", "--dbname=" + databaseConnString(connConfig, target)}
-		if replace {
-			args = append(args, "--clean", "--if-exists")
-		}
-		args = append(args, path)
-		command = exec.CommandContext(ctx, "pg_restore", args...)
-	}
+func runRestore(ctx context.Context, connConfig *pgx.ConnConfig, path, target string) error {
+	command := exec.CommandContext(ctx, "psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--dbname="+databaseConnString(connConfig, target), "--file="+path)
 	command.Env = processEnv(connConfig)
 	output, err := command.CombinedOutput()
 	if err != nil {

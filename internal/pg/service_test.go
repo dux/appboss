@@ -17,13 +17,10 @@ func connConfig(t *testing.T, dsn string) *pgx.ConnConfig {
 	return connConfig
 }
 
-func TestDumpNameUsesFormatPerKind(t *testing.T) {
+func TestDumpNameIsBackupZip(t *testing.T) {
 	at := time.Date(2026, 9, 19, 14, 30, 5, 0, time.UTC)
-	if got := dumpName("app", false, at); got != "app-2026-09-19T14-30-05Z.dump" {
+	if got := dumpName("app", at); got != "BACKUP_2026-09-19T14-30-05Z.zip" {
 		t.Fatalf("dumpName = %q", got)
-	}
-	if got := dumpName("app", true, at); got != "app-2026-09-19T14-30-05Z.sql" {
-		t.Fatalf("globals dumpName = %q", got)
 	}
 }
 

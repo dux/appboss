@@ -61,6 +61,7 @@ type Database struct {
 	Deadlocks      int64  `json:"deadlocks"`
 	TempBytes      int64  `json:"temp_bytes"`
 	BackupSelected bool   `json:"backup_selected"`
+	BackupRotation string `json:"backup_rotation,omitempty"`
 }
 
 // Activity summarizes what the server is doing right now.
@@ -199,6 +200,7 @@ func collectDatabases(ctx context.Context, conn *pgx.Conn, backupConfig config.P
 			continue
 		}
 		_, database.BackupSelected = backupConfig.Databases[database.Name]
+		database.BackupRotation = backupConfig.Rotation(database.Name)
 		databases = append(databases, database)
 	}
 	return databases

@@ -235,9 +235,9 @@ func (c CLI) printHuman(method string, data any) error {
 		}
 		fmt.Fprintln(c.Out)
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "DATABASE\tSIZE\tOWNER\tCONNS\tBACKUP")
+		fmt.Fprintln(writer, "DATABASE\tSIZE\tOWNER\tCONNS\tBACKUP\tROTATION")
 		for _, database := range snapshot.Databases {
-			fmt.Fprintf(writer, "%s\t%d\t%s\t%d\t%t\n", database.Name, database.SizeBytes, database.Owner, database.Connections, database.BackupSelected)
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%d\t%t\t%s\n", database.Name, database.SizeBytes, database.Owner, database.Connections, database.BackupSelected, database.BackupRotation)
 		}
 		return writer.Flush()
 	case ops.ActionPGBackups:
@@ -247,17 +247,9 @@ func (c CLI) printHuman(method string, data any) error {
 			return nil
 		}
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "DATABASE\tTIME\tSIZE\tWHERE\tSTATUS\tID")
+		fmt.Fprintln(writer, "DATABASE\tTIME\tSIZE\tMANUAL\tSTATUS\tID")
 		for _, entry := range backups {
-			places := "-"
-			if entry.LocalPath != "" {
-				places = "local"
-			}
-			name := entry.Database
-			if entry.Globals {
-				name = "globals"
-			}
-			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\t%s\n", name, entry.Time, entry.Bytes, places, entry.Status, entry.ID)
+			fmt.Fprintf(writer, "%s\t%s\t%d\t%t\t%s\t%s\n", entry.Database, entry.Time, entry.Bytes, entry.Manual, entry.Status, entry.ID)
 		}
 		return writer.Flush()
 	case ops.ActionPGBackup:
@@ -272,6 +264,8 @@ func (c CLI) printHuman(method string, data any) error {
 	case ops.ActionPGRestore:
 		result := data.(pg.RestoreResult)
 		fmt.Fprintf(c.Out, "restored %d bytes into %s\n", result.Bytes, result.Target)
+	case ops.ActionPGDrop:
+		fmt.Fprintf(c.Out, "dropped %s\n", data.(string))
 	case ops.ActionPubsub:
 		apps := data.([]pubsub.App)
 		if len(apps) == 0 {

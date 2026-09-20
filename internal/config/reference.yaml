@@ -383,8 +383,9 @@ notify:
 # Optional. When a server is reachable the management console gains a PostgreSQL tab with server
 # facts, database sizes, activity and the backup history. With backup.databases empty nothing is
 # scheduled, so the block is read-only until you select databases (the console writes the
-# selection to dboss.local.yaml). This feature needs pg_dump, pg_dumpall and pg_restore on the
-# service user's PATH.
+# selection to dboss.local.yaml). Dumps are zips of a plain-SQL pg_dump and always land under
+# pg_backup/<database>/ next to the apps. This feature needs pg_dump and psql on the service
+# user's PATH.
 
 postgres:
   # false hides the tab and stops all inspection and backups.
@@ -393,24 +394,14 @@ postgres:
   # Empty means: try /var/run/postgresql, then 127.0.0.1:5432, with the PG* environment merged in.
   dsn: ""
   backup:
-    # Directory that receives dumps, one subfolder per database. Required when a database or the
-    # globals are selected.
-    dir: ./pg_backups
-    # UTC time of the one daily backup run, HH:MM. Empty disables scheduled backups, so dumps are
-    # manual only. The console shows and edits this in local time.
-    at: "04:00"
-    # Days of dumps kept. 0 keeps them forever.
-    days: 30
-    # Kill a dump that is still running after this long. 0 means no limit.
-    timeout: 1h
-    # Also dump roles and tablespaces with pg_dumpall --globals-only, as one _globals entry.
-    globals: true
-    # Databases to dump into dir on the daily run, one subfolder each. A key selects the database;
-    # its block may override the host retention with its own days.
+    # Databases dumped by the daily run at 04:00 UTC, keyed by name. A key selects the database.
+    # rotation is the retention window: week keeps 7 days, month keeps 30 days. A manual backup
+    # from the console is never rotated away.
     databases:
-      myapp_production: {}
+      myapp_production:
+        rotation: week
       reports:
-        days: 90
+        rotation: month
 
 # =============================================================================
 # PART 2: <app>/dboss.yaml   (required, per app)
