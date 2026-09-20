@@ -27,7 +27,7 @@
         { id: 'health', title: 'Health & metrics', summary: 'Health endpoints, Prometheus metrics and the doctor preflight.' },
         { id: 'notify', title: 'Notifications', summary: 'One operator webhook for crashes and failures.' },
         { id: 'alerts', title: 'Alerts', summary: 'Posts to the webhook when an app answers with too many errors or too slowly.' },
-        { id: 'postgres', title: 'PostgreSQL backups', summary: 'Scheduled dumps of the host databases, kept locally and in S3.' },
+        { id: 'postgres', title: 'PostgreSQL backups', summary: 'Scheduled dumps of the host databases, kept in a local directory.' },
       ],
     },
   ]
@@ -83,7 +83,7 @@
         domains:
           - shop.example.com
           - www.shop.example.com
-    canonical_host: shop.example.com
+        canonical_host: shop.example.com
     max_body: 50m
     headers:
       X-Frame-Options: DENY
@@ -105,7 +105,11 @@
         - 173.245.48.0/20
     `,
     static: `
-    static: ./public
+    procfile:
+      web:
+        command: ./start.sh
+        domains: [shop.example.com]
+        static: ./public
     static_immutable: [/assets/, /packs/]
     error_page_path: public/error_500.html
     maintenance_page: ./public/503.html
@@ -195,15 +199,13 @@
     postgres: `
     postgres:
       backup:
-        every: 6h
+        dir: /var/backups/db
+        at: "04:00"          # one daily run, UTC; the tab shows local time
+        days: 30
         databases:
-          myapp_production: {}            # local + s3
-          reports: {local: false}         # s3 only
-    s3:
-      endpoint: https://<account>.r2.cloudflarestorage.com
-      bucket: dboss-backups
-      access_key: $S3_ACCESS_KEY
-      secret_key: $S3_SECRET_KEY
+          myapp_production: {}
+          reports:
+            days: 90         # per-database retention
     `,
   }
 
@@ -304,7 +306,7 @@
     {#if state.topic === 'supervision'}
       <section>
         <h2>Supervision</h2>
-        <p>Each key under <code>procfile</code> is a process type, and dboss runs all of them as one group per app. It gives every process a fixed <code>PORT</code>, waits for the web process to pass its health check, keeps checking it, and restarts what exits or stops answering.</p>
+        <p>Each key under <code>procfile</code> is a process type, and dboss runs all of them as one group per app. It gives every process a fixed <code>PORT</code>, waits for each web process to pass its health check, keeps checking it, and restarts what exits or stops answering.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Running a web process next to its workers without a separate process manager or a systemd unit per app.</li>
@@ -318,11 +320,11 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
-        <p>All process types run at once; the one process that declares <code>domains</code> is the web process and gets proxied traffic. It starts first, then the rest by name. A process with no <code>domains</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
+        <p>All process types run at once; every process that declares <code>domains</code> is a web process and gets proxied traffic on those domains. An app may run several web processes, each with its own domains, health check, canonical host and realtime hub. They start first, then the rest by name. A process with no <code>domains</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
-          <li><code>health</code> on the web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
-          <li>After the web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
+          <li><code>health</code> on a web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
+          <li>After a web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
           <li>Restarts follow <code>restart</code>, <code>restart_backoff</code> and <code>max_restarts</code>; after that many consecutive failures the app is <code>crashed</code>. <code>restart_reset</code> of uptime clears the counter.</li>
         </ul>
       </section>
@@ -355,7 +357,7 @@
     {#if state.topic === 'routing'}
       <section>
         <h2>Routing</h2>
-        <p>The web process lists the hostnames it answers in <code>domains</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to that process. Background processes never get traffic.</p>
+        <p>Each web process lists the hostnames it answers in <code>domains</code>. The proxy reads the request <code>Host</code>, picks the app, then forwards to the web process that owns that host. Background processes never get traffic.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Hosting many sites on one port 80 without writing an nginx vhost per app.</li>
@@ -365,7 +367,7 @@
           <li>Adding or removing response headers and limiting the request body for every response, without touching the app.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-routing"><db-config-keys paths="canonical_host,headers,max_body,proxy.listen,proxy.wake.unknown_page,proxy.upstream.dial_timeout,proxy.upstream.response_header_timeout,proxy.upstream.idle_conn_timeout,proxy.upstream.max_idle_conns_per_app" /></div>
+        <div fez:keep="keys-routing"><db-config-keys paths="headers,max_body,proxy.listen,proxy.wake.unknown_page,proxy.upstream.dial_timeout,proxy.upstream.response_header_timeout,proxy.upstream.idle_conn_timeout,proxy.upstream.max_idle_conns_per_app" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.routing" />
         <h3>Details</h3>
@@ -416,7 +418,7 @@
     {#if state.topic === 'static'}
       <section>
         <h2>Static &amp; error pages</h2>
-        <p>The proxy serves asset files straight from the app's <code>static</code> directory, and answers errors and maintenance mode with static HTML files the app ships.</p>
+        <p>Each web process can serve asset files straight from its own <code>static</code> directory, and dboss answers errors and maintenance mode with static HTML files the app ships.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Serving CSS, JS, images and fonts without spending app workers, and without waking a stopped app.</li>
@@ -425,11 +427,11 @@
           <li>A custom maintenance page per app.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-static"><db-config-keys paths="static,static_extensions,static_immutable,error_page_path,maintenance_page" /></div>
+        <div fez:keep="keys-static"><db-config-keys paths="static_extensions,static_immutable,error_page_path,maintenance_page" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.static" />
         <h3>Details</h3>
-        <p>Files under <code>static</code> (default <code>./public</code>) are served straight from disk for GET and HEAD without waking the app, but only the asset types in <code>static_extensions</code>. A missing file, or any other extension such as <code>.html</code>, is a normal request to the app. An empty list serves any file.</p>
+        <p>Files under a web process's <code>static</code> (default <code>./public</code>; <code>static: false</code> disables it) are served straight from disk for GET and HEAD without waking the app, but only the asset types in <code>static_extensions</code>. A missing file, or any other extension such as <code>.html</code>, is a normal request to the app. An empty list serves any file.</p>
         <p><code>error_page_path</code> names one static HTML file, relative to the app folder. It is sent as it is on disk, and only to a GET that accepts <code>text/html</code>, so API answers are never rewritten.</p>
         <ul>
           <li>dboss's own errors (<code>502</code> when the app is unreachable, timed out or has no port) answer with this file, or with the built-in error page when the key is empty or the file is missing.</li>
@@ -534,7 +536,7 @@
     {#if state.topic === 'pubsub'}
       <section>
         <h2>PubSub</h2>
-        <p>The web process's <code>pubsub</code> option turns a URL prefix on the app's own hosts into a pub/sub hub. Use <code>pubsub: true</code> for <code>/socketio</code>, <code>pubsub: /path</code> for a custom prefix, or a mapping for the full settings. It is served by dboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
+        <p>A web process's <code>pubsub</code> option turns a URL prefix on its own hosts into a pub/sub hub. Use <code>pubsub: true</code> for <code>/socketio</code>, <code>pubsub: /path</code> for a custom prefix, or a mapping for the full settings. Each web process may run its own hub. It is served by dboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Live updates, notifications and chat without running a WebSocket server or Redis next to the app: the app publishes with one HTTP POST.</li>
@@ -544,7 +546,7 @@
         </ul>
         <h3>Config keys</h3>
         <ul>
-          <li><code>pubsub</code> - <code>true</code>, a path, or a mapping with <code>path</code>, <code>secret</code>, <code>replay</code>, <code>max_clients</code>, <code>max_message_size</code>, <code>client_events</code> and <code>test</code>. Only the web process may set it.</li>
+          <li><code>pubsub</code> - <code>true</code>, a path, or a mapping with <code>path</code>, <code>secret</code>, <code>replay</code>, <code>max_clients</code>, <code>max_message_size</code>, <code>client_events</code> and <code>test</code>. Only a web process may set it, and each web process runs its own hub.</li>
         </ul>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.pubsub" />
@@ -554,7 +556,7 @@
         <p><strong>Publish.</strong> A POST to the same URL publishes with the app's secret. A body shaped like <code>&#123;"event","data"&#125;</code> is sent as written; any other body becomes the data of a <code>message</code> event.</p>
         <db-preview-yaml :text="state.examples.pubsubPublish" lang="text" />
         <p>Each message is <code>&#123;"event","data","ts"&#125;</code>; the last <code>replay</code> messages are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher. <code>client_events: true</code> lets a WebSocket client publish to its own channel with the same envelope.</p>
-        <p>With no <code>secret</code> in the config, dboss generates one per app under <code>state_dir</code>; the PubSub tab and <code>dboss pubsub</code> print it and <code>dboss pubsub rotate</code> replaces it. The self-test at <code>&#60;path&#62;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
+        <p>With no <code>secret</code> in the config, dboss generates one per web process under <code>state_dir</code>; the PubSub tab and <code>dboss pubsub</code> print it and <code>dboss pubsub rotate</code> replaces it. The self-test at <code>&#60;path&#62;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
       </section>
     {/if}
 
@@ -602,7 +604,7 @@
           <li><code>GET /metrics</code> - Prometheus text: per-app state, memory, CPU, restart and request rates, latency quantiles and the last cron and hook runs. Set <code>management.metrics.token</code> to require a bearer token.</li>
         </ul>
         <p>Each app also answers on its own hosts at <code>health_endpoint</code> (default <code>/.well-known/dboss/health</code>): <code>200</code> while running and not draining, <code>503</code> otherwise. It runs before auth and never wakes a stopped app. <code>dboss doctor</code> preflights a box: tools, writable directories, a valid config and a clear port range.</p>
-        <p>The web process's <code>health</code> path that gates readiness and restarts is under Supervision.</p>
+        <p>A web process's <code>health</code> path that gates readiness and restarts is under Supervision.</p>
       </section>
     {/if}
 
@@ -655,26 +657,25 @@
     {#if state.topic === 'postgres'}
       <section>
         <h2>PostgreSQL backups</h2>
-        <p>dboss inspects the host's PostgreSQL server read-only and dumps the databases you select on a schedule, to a local directory and to an S3-compatible bucket. The PostgreSQL tab appears only when a server is reachable.</p>
+        <p>dboss inspects the host's PostgreSQL server read-only and dumps the databases you select on a schedule, into a local directory. The PostgreSQL tab appears only when a server is reachable.</p>
         <h3>What it helps with</h3>
         <ul>
-          <li>Backups without a cron script: pick databases in the console, set an interval, done.</li>
-          <li>Off-host copies on Cloudflare R2, AWS S3 or MinIO, so a lost box does not take the backups with it.</li>
-          <li>Bounded storage with grandfather-father-son retention: hourly, daily, weekly and monthly buckets.</li>
+          <li>Backups without a cron script: pick databases in the console, set the daily time and retention, done.</li>
+          <li>Bounded storage: one run a day, dumps kept for a configurable number of days.</li>
           <li>Restoring a dump from the console, and seeing database sizes and connections at a glance.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.dir,postgres.backup.s3,postgres.backup.every,postgres.backup.timeout,postgres.backup.globals,postgres.backup.keep.hourly,postgres.backup.keep.daily,postgres.backup.keep.weekly,postgres.backup.keep.monthly,postgres.backup.databases,s3.endpoint,s3.region,s3.bucket,s3.prefix,s3.access_key,s3.secret_key,s3.path_style,s3.sse" /></div>
+        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.dir,postgres.backup.at,postgres.backup.days,postgres.backup.timeout,postgres.backup.globals,postgres.backup.databases" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.postgres" />
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
           <li>Each selected database is dumped in custom format; <code>globals: true</code> adds roles and tablespaces as one <code>_globals</code> entry. The inspector itself writes nothing.</li>
-          <li>Each <code>keep</code> bucket keeps the newest N dumps for its period (hour, day, ISO week, month); the rest are removed from disk and S3. <code>0</code> disables a bucket.</li>
-          <li>A key under <code>databases</code> selects it; <code>local: false</code> or <code>s3: false</code> overrides the default destinations. An empty <code>s3.endpoint</code> or <code>s3.bucket</code> disables object storage.</li>
-          <li><code>postgres</code> and <code>s3</code> are host keys but apply without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>
-          <li>The box needs <code>pg_dump</code>, <code>pg_dumpall</code> and <code>pg_restore</code> on the service user's <code>PATH</code>, and a role that can read every selected database. Keep the S3 keys out of the committed file with <code>$VARS</code>.</li>
+          <li>One run a day at <code>at</code> (UTC, shown local in the tab). <code>days</code> is how long dumps are kept; <code>0</code> keeps them forever.</li>
+          <li><code>databases</code> maps each selected database to its options; an entry may override the host <code>days</code> with its own retention.</li>
+          <li><code>postgres</code> is a host key but applies without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>
+          <li>The box needs <code>pg_dump</code>, <code>pg_dumpall</code> and <code>pg_restore</code> on the service user's <code>PATH</code>, and a role that can read every selected database.</li>
         </ul>
       </section>
     {/if}

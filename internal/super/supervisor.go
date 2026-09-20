@@ -54,6 +54,16 @@ type RequestRates struct {
 	LastDay    int64 `json:"last_day"`
 }
 
+// WebProcessSnapshot is one web process of an app: the domains it answers and the canonical host
+// its other domains redirect to, plus its realtime hub.
+type WebProcessSnapshot struct {
+	Name          string        `json:"name"`
+	Hosts         []string      `json:"hosts"`
+	CanonicalHost string        `json:"canonical_host,omitempty"`
+	Static        string        `json:"static"`
+	Pubsub        config.Pubsub `json:"pubsub"`
+}
+
 // ExecResult is the combined output and exit code of a one-off command.
 type ExecResult struct {
 	Output   string `json:"output"`
@@ -61,30 +71,29 @@ type ExecResult struct {
 }
 
 type Snapshot struct {
-	Name            string            `json:"name"`
-	State           State             `json:"state"`
-	Maintenance     bool              `json:"maintenance"`
-	Draining        bool              `json:"draining,omitempty"`
-	Dir             string            `json:"dir"`
-	Hosts           []string          `json:"hosts"`
-	CanonicalHost   string            `json:"canonical_host,omitempty"`
-	WebProcess      string            `json:"web_process"`
-	Autostart       bool              `json:"autostart"`
-	Deletable       bool              `json:"deletable"`
-	WakeButton      bool              `json:"wake_button,omitempty"`
-	Web             config.Web        `json:"web"`
-	Processes       []ProcessSnapshot `json:"processes"`
-	Cron            []CronSnapshot    `json:"cron,omitempty"`
-	Hooks           []HookSnapshot    `json:"hooks,omitempty"`
-	LastActivity    time.Time         `json:"last_activity,omitempty"`
-	Uptime          string            `json:"uptime,omitempty"`
-	Resources       res.Stats         `json:"resources"`
-	RequestRates    RequestRates      `json:"request_rates"`
-	Error           string            `json:"error,omitempty"`
-	ErrorLog        []string          `json:"error_log,omitempty"`
-	LogRetention    time.Duration     `json:"-"`
-	StdoutRetention time.Duration     `json:"-"`
-	LogFlush        time.Duration     `json:"-"`
+	Name            string               `json:"name"`
+	State           State                `json:"state"`
+	Maintenance     bool                 `json:"maintenance"`
+	Draining        bool                 `json:"draining,omitempty"`
+	Dir             string               `json:"dir"`
+	Hosts           []string             `json:"hosts"`
+	WebProcesses    []WebProcessSnapshot `json:"web_processes"`
+	Autostart       bool                 `json:"autostart"`
+	Deletable       bool                 `json:"deletable"`
+	WakeButton      bool                 `json:"wake_button,omitempty"`
+	Web             config.Web           `json:"web"`
+	Processes       []ProcessSnapshot    `json:"processes"`
+	Cron            []CronSnapshot       `json:"cron,omitempty"`
+	Hooks           []HookSnapshot       `json:"hooks,omitempty"`
+	LastActivity    time.Time            `json:"last_activity,omitempty"`
+	Uptime          string               `json:"uptime,omitempty"`
+	Resources       res.Stats            `json:"resources"`
+	RequestRates    RequestRates         `json:"request_rates"`
+	Error           string               `json:"error,omitempty"`
+	ErrorLog        []string             `json:"error_log,omitempty"`
+	LogRetention    time.Duration        `json:"-"`
+	StdoutRetention time.Duration        `json:"-"`
+	LogFlush        time.Duration        `json:"-"`
 }
 
 // Serving reports whether a request for the app would be answered by the app itself: it runs, or
@@ -96,10 +105,37 @@ func (s Snapshot) Serving() bool {
 	return s.State == Running || (s.State == Stopped && !s.WakeButton)
 }
 
+// WebForHost returns the web process whose domains best match host. A request that resolved to an
+// app is always served by exactly one of its web processes, and the longest pattern wins.
+func (s Snapshot) WebForHost(host string) (WebProcessSnapshot, bool) {
+	host = config.NormalizeHost(host)
+	bestScore := -1
+	var best WebProcessSnapshot
+	for _, web := range s.WebProcesses {
+		for _, pattern := range web.Hosts {
+			score, match := config.MatchHost(host, strings.ToLower(pattern))
+			if match && score > bestScore {
+				best, bestScore = web, score
+			}
+		}
+	}
+	return best, bestScore >= 0
+}
+
+// WebProcessSnapshots converts the derived config web processes into the snapshot shape.
+func WebProcessSnapshots(webs []config.WebProcess) []WebProcessSnapshot {
+	result := make([]WebProcessSnapshot, 0, len(webs))
+	for _, web := range webs {
+		result = append(result, WebProcessSnapshot{Name: web.Name, Hosts: web.Hosts, CanonicalHost: web.CanonicalHost, Static: web.Static, Pubsub: web.Pubsub})
+	}
+	return result
+}
+
 const failureLogLines = 1000
 
 type Manager struct {
 	cfg             config.Config
+	hostConfig      config.Config
 	ports           *ports.Allocator
 	backend         res.Backend
 	cgroup          res.Backend
@@ -161,7 +197,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -630,7 +666,7 @@ func (m *Manager) Touch(name string) {
 }
 
 func (m *Manager) ResolveHost(host string) (Snapshot, bool) {
-	host = strings.ToLower(strings.TrimSuffix(strings.Split(host, ":")[0], "."))
+	host = config.NormalizeHost(host)
 	bestScore := -1
 	var best Snapshot
 	for _, snapshot := range m.Snapshots() {
@@ -646,6 +682,14 @@ func (m *Manager) ResolveHost(host string) (Snapshot, bool) {
 
 func (m *Manager) Ports() map[string]int { return m.ports.Entries() }
 
+// HostConfig returns the host keys as last reloaded, so a module can re-apply settings that are
+// hot but not part of an app snapshot.
+func (m *Manager) HostConfig() config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.hostConfig
+}
+
 // Rescan re-reads the root file and every app folder. App-level keys, including host defaults,
 // apply live; host keys are left as started and reported through RestartRequired.
 func (m *Manager) Rescan() ([]error, error) {
@@ -653,11 +697,14 @@ func (m *Manager) Rescan() ([]error, error) {
 	defer m.rescanMu.Unlock()
 	scanConfig := m.cfg
 	var restartRequired []string
+	var loaded config.Config
+	reloaded := false
 	if m.cfg.SourcePath != "" {
-		loaded, err := config.Load(m.cfg.SourcePath)
+		current, err := config.Load(m.cfg.SourcePath)
 		if err != nil {
 			return nil, err
 		}
+		loaded, reloaded = current, true
 		scanConfig.App, scanConfig.Defaults = loaded.App, loaded.Defaults
 		restartRequired = config.RestartRequired(m.cfg, loaded)
 	}
@@ -675,6 +722,9 @@ func (m *Manager) Rescan() ([]error, error) {
 	var updates []update
 	var removed []*appRuntime
 	m.mu.Lock()
+	if reloaded {
+		m.hostConfig = loaded
+	}
 	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults
 	if len(restartRequired) > 0 && strings.Join(restartRequired, ",") != strings.Join(m.restartRequired, ",") {
 		logx.Infof("rescan: %s changed in %s, restart dboss to apply", strings.Join(restartRequired, ", "), m.cfg.SourcePath)
@@ -845,6 +895,7 @@ type appRuntime struct {
 	sink             notify.Sink
 	restart          func(string) error
 	failures         map[string]int
+	ready            map[string]bool
 	lastActivity     time.Time
 	lastError        string
 	lastErrorProcess string
@@ -992,6 +1043,7 @@ func (a *appRuntime) start() error {
 		return nil
 	}
 	a.failures = map[string]int{}
+	a.ready = map[string]bool{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
 	for _, name := range a.startOrder() {
 		command := a.spec.Commands[name]
@@ -1005,38 +1057,61 @@ func (a *appRuntime) start() error {
 			return a.failStart(err)
 		}
 	}
-	if web := a.processes[a.spec.Config.WebProcess]; web == nil {
+	if len(a.spec.Config.WebProcesses) == 0 {
 		a.state = Running
 		a.lastActivity = time.Now()
-	} else {
-		go a.monitor(web, a.spec.Config.Process(web.name), a.webHost())
+		return nil
+	}
+	for _, web := range a.spec.Config.WebProcesses {
+		if process := a.processes[web.Name]; process != nil {
+			go a.monitor(process, a.spec.Config.Process(web.Name), a.webHost(web.Name))
+		}
 	}
 	return nil
 }
 
-// startOrder lists the processes in the order start spawns them: the web process first, then the
+// startOrder lists the processes in the order start spawns them: every web process first, then the
 // rest by name, so a web process that expects earlier setup still gets it. Port assignment is
 // unaffected because assignPorts keeps its own name order.
 func (a *appRuntime) startOrder() []string {
 	names := slices.Sorted(maps.Keys(a.spec.Commands))
-	web := a.spec.Config.WebProcess
-	for index, name := range names {
-		if name != web || index == 0 {
-			continue
-		}
-		copy(names[1:index+1], names[0:index])
-		names[0] = name
-		break
+	isWeb := make(map[string]bool, len(a.spec.Config.WebProcesses))
+	for _, web := range a.spec.Config.WebProcesses {
+		isWeb[web.Name] = true
 	}
-	return names
+	ordered := make([]string, 0, len(names))
+	for _, name := range names {
+		if isWeb[name] {
+			ordered = append(ordered, name)
+		}
+	}
+	for _, name := range names {
+		if !isWeb[name] {
+			ordered = append(ordered, name)
+		}
+	}
+	return ordered
 }
 
-// webHost is the Host header the readiness probe and proxy use for the web process.
-func (a *appRuntime) webHost() string {
-	if len(a.spec.Config.Hosts) == 0 {
-		return ""
+// allWebReady reports whether every web process has passed its readiness check, so the app flips
+// to running only once all of them can serve.
+func (a *appRuntime) allWebReady() bool {
+	for _, web := range a.spec.Config.WebProcesses {
+		if !a.ready[web.Name] {
+			return false
+		}
 	}
-	return config.BaseHost(a.spec.Config.Hosts[0])
+	return true
+}
+
+// webHost is the Host header the readiness probe and proxy use for one web process.
+func (a *appRuntime) webHost(name string) string {
+	for _, web := range a.spec.Config.WebProcesses {
+		if web.Name == name && len(web.Hosts) > 0 {
+			return config.BaseHost(web.Hosts[0])
+		}
+	}
+	return ""
 }
 
 func (a *appRuntime) failStart(err error) error {

@@ -5,6 +5,7 @@
       this.state.guide = ''
       this.state.credential = null
       this.state.publishApp = ''
+      this.state.publishProcess = ''
       this.state.loading = false
       this.state.busy = false
       this.state.error = ''
@@ -23,8 +24,12 @@
     afterRender() {
       if (this.state.needsSelectSync) {
         this.state.needsSelectSync = false
-        if (this.state.appSelect) this.state.appSelect.value = this.state.publishApp
+        if (this.state.appSelect) this.state.appSelect.value = this.hubValue(this.state.publishApp, this.state.publishProcess)
       }
+    }
+
+    hubValue(name, process) {
+      return `${name}|${process}`
     }
 
     async load() {
@@ -33,8 +38,10 @@
         const data = await Dboss.api('/api/pubsub')
         this.state.apps = data.apps || []
         this.state.guide = data.guide || ''
-        if (!this.state.apps.some((app) => app.name === this.state.publishApp)) {
-          this.state.publishApp = this.state.apps.length ? this.state.apps[0].name : ''
+        if (!this.state.apps.some((hub) => hub.name === this.state.publishApp && hub.process === this.state.publishProcess)) {
+          const first = this.state.apps.length ? this.state.apps[0] : null
+          this.state.publishApp = first ? first.name : ''
+          this.state.publishProcess = first ? first.process : ''
         }
         this.state.needsSelectSync = true
         this.state.error = ''
@@ -45,15 +52,17 @@
       }
     }
 
-    setApp(name) {
+    setHub(value) {
+      const [name, process] = value.split('|')
       this.state.publishApp = name
+      this.state.publishProcess = process
     }
 
-    async reveal(name) {
+    async reveal(name, process) {
       if (this.state.busy) return
       try {
         this.state.busy = true
-        this.state.credential = await Dboss.api(`/api/pubsub/secret?app=${encodeURIComponent(name)}`)
+        this.state.credential = await Dboss.api(`/api/pubsub/secret?app=${encodeURIComponent(name)}&process=${encodeURIComponent(process)}`)
       } catch (error) {
         this.message(error.message, true)
       } finally {
@@ -61,14 +70,15 @@
       }
     }
 
-    async rotate(name) {
+    async rotate(name, process) {
       if (this.state.busy) return
-      if (!window.confirm(`Rotate the publish secret for ${name}? The old secret stops working.`)) return
+      const label = process ? `${name}/${process}` : name
+      if (!window.confirm(`Rotate the publish secret for ${label}? The old secret stops working.`)) return
       try {
         this.state.busy = true
-        this.state.credential = await Dboss.api('/api/pubsub/rotate', { method: 'POST', body: JSON.stringify({ app: name }) })
-        this.message(`Rotated the secret for ${name}.`)
-        Toast.show(`${name}: publish secret rotated`)
+        this.state.credential = await Dboss.api('/api/pubsub/rotate', { method: 'POST', body: JSON.stringify({ app: name, process }) })
+        this.message(`Rotated the secret for ${label}.`)
+        Toast.show(`${label}: publish secret rotated`)
       } catch (error) {
         this.message(error.message, true)
         Toast.show(error.message, true)
@@ -80,6 +90,7 @@
     async publish() {
       if (this.state.busy) return
       const app = this.state.publishApp
+      const process = this.state.publishProcess
       if (!app) {
         this.message('Choose an app first.', true)
         return
@@ -102,7 +113,7 @@
       }
       try {
         this.state.busy = true
-        const result = await Dboss.api('/api/pubsub/publish', { method: 'POST', body: JSON.stringify({ app, channel, event, data }) })
+        const result = await Dboss.api('/api/pubsub/publish', { method: 'POST', body: JSON.stringify({ app, process, channel, event, data }) })
         this.message(`Published ${event} to ${app}/${result.channel} (${result.subscribers} subscribers).`)
         Toast.show(`${app}/${result.channel}: message sent`)
       } catch (error) {
@@ -140,14 +151,14 @@
 {#each state.apps as app}
   <div class="section-head">
     <h2>{app.name}</h2>
-    <span class="text-muted">{app.path} · {app.clients} subscribers</span>
+    <span class="text-muted">{app.process} · {app.path} · {app.clients} subscribers</span>
   </div>
   <section class="card">
     <div class="card-header">
       <h3 class="section-title">Channels</h3>
       <div class="card-actions">
-        <button class="btn btn-sm" type="button" onclick="fez.reveal('{app.name}')" disabled={state.busy}>Show secret</button>
-        <button class="btn btn-sm" type="button" onclick="fez.rotate('{app.name}')" disabled={state.busy}>Rotate secret</button>
+        <button class="btn btn-sm" type="button" onclick="fez.reveal('{app.name}','{app.process}')" disabled={state.busy}>Show secret</button>
+        <button class="btn btn-sm" type="button" onclick="fez.rotate('{app.name}','{app.process}')" disabled={state.busy}>Rotate secret</button>
       </div>
     </div>
     <div class="sys-tools">
@@ -185,9 +196,9 @@
     <div class="datagrid pubsub-form">
       <div class="datagrid-item">
         <span class="subheader">App</span>
-        <select fez:this="appSelect" onchange="fez.setApp(this.value)">
+        <select fez:this="appSelect" onchange="fez.setHub(this.value)">
           {#each state.apps as app}
-            <option value="{app.name}">{app.name}</option>
+            <option value="{app.name}|{app.process}">{app.name} / {app.process}</option>
           {/each}
         </select>
       </div>

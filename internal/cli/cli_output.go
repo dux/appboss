@@ -235,9 +235,9 @@ func (c CLI) printHuman(method string, data any) error {
 		}
 		fmt.Fprintln(c.Out)
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "DATABASE\tSIZE\tOWNER\tCONNS\tBACKUP\tLOCAL\tS3")
+		fmt.Fprintln(writer, "DATABASE\tSIZE\tOWNER\tCONNS\tBACKUP")
 		for _, database := range snapshot.Databases {
-			fmt.Fprintf(writer, "%s\t%d\t%s\t%d\t%t\t%t\t%t\n", database.Name, database.SizeBytes, database.Owner, database.Connections, database.BackupSelected, database.BackupLocal, database.BackupS3)
+			fmt.Fprintf(writer, "%s\t%d\t%s\t%d\t%t\n", database.Name, database.SizeBytes, database.Owner, database.Connections, database.BackupSelected)
 		}
 		return writer.Flush()
 	case ops.ActionPGBackups:
@@ -249,15 +249,9 @@ func (c CLI) printHuman(method string, data any) error {
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(writer, "DATABASE\tTIME\tSIZE\tWHERE\tSTATUS\tID")
 		for _, entry := range backups {
-			places := ""
+			places := "-"
 			if entry.LocalPath != "" {
 				places = "local"
-			}
-			if entry.S3Key != "" {
-				if places != "" {
-					places += "+"
-				}
-				places += "s3"
 			}
 			name := entry.Database
 			if entry.Globals {
@@ -285,7 +279,7 @@ func (c CLI) printHuman(method string, data any) error {
 			return nil
 		}
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "APP\tPATH\tCLIENTS\tCHANNELS")
+		fmt.Fprintln(writer, "APP\tPROCESS\tPATH\tCLIENTS\tCHANNELS")
 		for _, app := range apps {
 			channels := "-"
 			if len(app.Channels) > 0 {
@@ -295,7 +289,7 @@ func (c CLI) printHuman(method string, data any) error {
 				}
 				channels = strings.Join(parts, ",")
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", app.Name, app.Path, app.Clients, channels)
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\n", app.Name, app.Process, app.Path, app.Clients, channels)
 		}
 		return writer.Flush()
 	case ops.ActionPubsubSecret, ops.ActionPubsubRotate:
@@ -304,6 +298,7 @@ func (c CLI) printHuman(method string, data any) error {
 			fmt.Fprintln(c.Out, "rotated; new publish secret:")
 		}
 		fmt.Fprintf(c.Out, "app:       %s\n", info.App)
+		fmt.Fprintf(c.Out, "process:   %s\n", info.Process)
 		fmt.Fprintf(c.Out, "path:      %s\n", info.Path)
 		fmt.Fprintf(c.Out, "secret:    %s\n", info.Secret)
 		fmt.Fprintf(c.Out, "subscribe: %s\n", info.Subscribe)

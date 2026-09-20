@@ -15,15 +15,26 @@ func TestStaticAndErrorPageKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.Web.Static != "./public" || !slices.Contains(app.Web.StaticExtensions, "css") || slices.Contains(app.Web.StaticExtensions, "html") || app.Web.ErrorPagePath != "" {
-		t.Fatalf("unexpected web defaults: %+v", app.Web)
+	if app.WebProcesses[0].Static != DefaultStatic || !slices.Contains(app.Web.StaticExtensions, "css") || slices.Contains(app.Web.StaticExtensions, "html") || app.Web.ErrorPagePath != "" {
+		t.Fatalf("unexpected web defaults: %+v", app.WebProcesses[0])
 	}
-	custom, err := ParseApp([]byte(base+"static: \"\"\nstatic_extensions: []\nerror_page_path: public/error_500.html\n"), filepath.Join(dir, FileName), defaults)
+	custom, err := ParseApp([]byte(base+"    static: /srv/assets\nstatic_extensions: []\nerror_page_path: public/error_500.html\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.Web.Static != "" || len(custom.Web.StaticExtensions) != 0 || custom.Web.ErrorPagePath != "public/error_500.html" {
-		t.Fatalf("app keys did not override the defaults: %+v", custom.Web)
+	if custom.WebProcesses[0].Static != "/srv/assets" || len(custom.Web.StaticExtensions) != 0 || custom.Web.ErrorPagePath != "public/error_500.html" {
+		t.Fatalf("app keys did not override the defaults: %+v", custom.WebProcesses[0])
+	}
+	disabled, err := ParseApp([]byte(base+"    static: false\n"), filepath.Join(dir, FileName), defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.WebProcesses[0].Static != "" {
+		t.Fatalf("static: false should disable serving: %q", disabled.WebProcesses[0].Static)
+	}
+	truthy, err := ParseApp([]byte(base+"    static: true\n"), filepath.Join(dir, FileName), defaults)
+	if err != nil || truthy.WebProcesses[0].Static != DefaultStatic {
+		t.Fatalf("static: true = %q, %v", truthy.WebProcesses[0].Static, err)
 	}
 	for _, bad := range []string{".css", "CSS", "tar.gz", "a/b", ""} {
 		if _, err := ParseApp([]byte(base+"static_extensions: [\""+bad+"\"]\n"), filepath.Join(dir, FileName), defaults); err == nil || !strings.Contains(err.Error(), "static_extensions") {

@@ -31,7 +31,6 @@ var blocks = []Block{
 	{ID: "daemon", Title: "Daemon", Summary: "Background cadence, log level and audit retention.", Scope: ScopeService},
 	{ID: "notify", Title: "Notifications", Summary: "One operator webhook for runtime events.", Scope: ScopeService},
 	{ID: "postgres", Title: "PostgreSQL", Summary: "The server the console inspects and backs up.", Scope: ScopeService},
-	{ID: "s3", Title: "S3 object storage", Summary: "Off-host backup copies.", Scope: ScopeService},
 	{ID: "app", Title: "App", Summary: "Processes, hostnames and start policy.", Scope: ScopeApp},
 	{ID: "cron", Title: "Cron", Summary: "Scheduled one-shot commands.", Scope: ScopeApp},
 	{ID: "hooks", Title: "Hooks", Summary: "Signed one-shot commands triggered over HTTP.", Scope: ScopeApp},

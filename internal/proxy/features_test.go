@@ -28,7 +28,7 @@ func featureSnapshot(t *testing.T, data string) super.Snapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, CanonicalHost: app.CanonicalHost, WebProcess: app.WebProcess, Web: app.Web}
+	return super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: super.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
 }
 
 func serveFeature(t *testing.T, handler *Handler, snapshot super.Snapshot, request *http.Request) *httptest.ResponseRecorder {
@@ -96,7 +96,7 @@ func TestHealthEndpointReportsState(t *testing.T) {
 }
 
 func TestCanonicalHostRedirect(t *testing.T) {
-	snapshot := featureSnapshot(t, "canonical_host: demo.test\n")
+	snapshot := featureSnapshot(t, "    canonical_host: demo.test\n")
 	request := httptest.NewRequest(http.MethodGet, "http://www.demo.test:8080/path?x=1", nil)
 	request.Host = "WWW.demo.test:8080"
 	response := serveFeature(t, featureHandler(), snapshot, request)
@@ -110,6 +110,23 @@ func TestCanonicalHostRedirect(t *testing.T) {
 	request.Host = "demo.test"
 	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code == http.StatusMovedPermanently {
 		t.Fatal("canonical host must not redirect")
+	}
+}
+
+func TestCanonicalHostPerWebProcess(t *testing.T) {
+	dir := t.TempDir()
+	app, err := config.ParseApp([]byte("procfile:\n  shop:\n    command: ./shop\n    domains: [shop.test, www.shop.test]\n    canonical_host: shop.test\n  admin:\n    command: ./admin\n    domains: [admin.test, www.admin.test]\n    canonical_host: admin.test\n"), filepath.Join(dir, config.FileName), config.Default().Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: super.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
+	for host, want := range map[string]string{"www.shop.test": "https://shop.test/", "www.admin.test": "https://admin.test/"} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
+		request.Host = host
+		response := serveFeature(t, featureHandler(), snapshot, request)
+		if response.Code != http.StatusMovedPermanently || response.Header().Get("Location") != want {
+			t.Errorf("%s: got %d %s, want %s", host, response.Code, response.Header().Get("Location"), want)
+		}
 	}
 }
 
@@ -138,7 +155,7 @@ func TestBasicAuthProtectsStaticToo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := featureSnapshot(t, "static: ./public\nbasic_auth:\n  alice: \""+string(hash)+"\"\n")
+	snapshot := featureSnapshot(t, "    static: ./public\nbasic_auth:\n  alice: \""+string(hash)+"\"\n")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "robots.txt"), "User-agent: *\n")
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/robots.txt", nil)
 	response := serveFeature(t, featureHandler(), snapshot, request)
@@ -181,7 +198,7 @@ func TestUnauthorizedRequestNeverWakesAStoppedApp(t *testing.T) {
 }
 
 func TestMaintenancePageLookup(t *testing.T) {
-	snapshot := featureSnapshot(t, "static: ./public\n")
+	snapshot := featureSnapshot(t, "    static: ./public\n")
 	snapshot.Maintenance = true
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 	request.Header.Set("Accept", "text/html")
@@ -205,7 +222,7 @@ func TestMaintenancePageLookup(t *testing.T) {
 }
 
 func TestStaticFilesStayInsideRoot(t *testing.T) {
-	snapshot := featureSnapshot(t, "static: ./public\nheaders:\n  X-Robots-Tag: none\n")
+	snapshot := featureSnapshot(t, "    static: ./public\nheaders:\n  X-Robots-Tag: none\n")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "secret.txt"), "secret")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "assets", "app.css"), "body{}")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "index.html"), "<p>index</p>")
@@ -237,8 +254,8 @@ func TestStaticFilesStayInsideRoot(t *testing.T) {
 // public/ is served without any config, and only for the common asset extensions.
 func TestStaticDefaultsToPublicDirectory(t *testing.T) {
 	snapshot := featureSnapshot(t, "")
-	if snapshot.Web.Static != "./public" {
-		t.Fatalf("default static = %q", snapshot.Web.Static)
+	if web, ok := snapshot.WebForHost("demo.test"); !ok || web.Static != "./public" {
+		t.Fatalf("default static = %+v", web)
 	}
 	get := func(target string) *httptest.ResponseRecorder {
 		return serveFeature(t, featureHandler(), snapshot, httptest.NewRequest(http.MethodGet, "http://demo.test"+target, nil))

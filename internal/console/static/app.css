@@ -1063,7 +1063,7 @@ input[type="radio"] {
 }
 
 .pg-databases .pg-row {
-  grid-template-columns: minmax(0, 1.4fr) 80px minmax(0, 1fr) 60px 80px 60px 60px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.4fr) 80px minmax(0, 1fr) 60px 80px minmax(0, 1fr);
 }
 
 .pg-backup-row {
@@ -1083,7 +1083,8 @@ input[type="radio"] {
 }
 
 .pg-settings input[type='text'],
-.pg-settings input[type='number'] {
+.pg-settings input[type='number'],
+.pg-settings input[type='time'] {
   width: 100%;
 }
 
@@ -1092,14 +1093,6 @@ input[type="radio"] {
   align-items: center;
   gap: 6px;
   color: var(--text);
-}
-
-.pg-keep {
-  padding-top: 4px;
-}
-
-.pg-note {
-  padding: 0 20px 16px;
 }
 
 .pubsub-row {

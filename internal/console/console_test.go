@@ -132,6 +132,7 @@ func (m *fakeManager) Rescan() ([]error, error) {
 }
 
 func (m *fakeManager) RestartRequired() []string { return nil }
+func (m *fakeManager) HostConfig() config.Config { return config.Default() }
 
 // fakeStore keeps the files in memory but follows the real store's contract: revisions are
 // hashes of the contents and a stale revision is a conflict.
@@ -630,7 +631,7 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyBody := `{"id":"app:sinatra","revision":"` + file.Revision + `","recipe":"web","values":{"static":"./dist"},"reset":["deletable"]}`
+	applyBody := `{"id":"app:sinatra","revision":"` + file.Revision + `","recipe":"web","values":{"max_body":"20m"},"reset":["deletable"]}`
 	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", applyBody)
 	if applied.Code != http.StatusOK {
 		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
@@ -639,7 +640,7 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 		t.Error("apply did not create the server override")
 	}
 	contents := store.files["app:sinatra"].Contents
-	if !strings.Contains(contents, "./dist") {
+	if !strings.Contains(contents, "20m") {
 		t.Errorf("apply did not write the recipe values:\n%s", contents)
 	}
 	if manager.actions[len(manager.actions)-1] != "rescan" {
@@ -651,11 +652,11 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"web","values":{"s3.endpoint":"https://evil"},"reset":[]}`
+	foreign := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"web","values":{"log_retention":"999h"},"reset":[]}`
 	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", foreign); got.Code != http.StatusOK {
 		t.Fatalf("foreign apply: %d %s", got.Code, got.Body.String())
 	}
-	if strings.Contains(store.files["app:sinatra"].Contents, "evil") {
+	if strings.Contains(store.files["app:sinatra"].Contents, "999h") {
 		t.Error("a key outside the recipe was written")
 	}
 
@@ -716,7 +717,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 		}
 	}
 
-	apply := `{"id":"app:sinatra","revision":"` + payload.File.Revision + `","recipe":"web","values":{"static":"./dist"},"reset":[]}`
+	apply := `{"id":"app:sinatra","revision":"` + payload.File.Revision + `","recipe":"web","values":{"max_body":"20m"},"reset":[]}`
 	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", apply)
 	if applied.Code != http.StatusOK {
 		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
@@ -725,14 +726,14 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("override was not written: %v", err)
 	}
-	if !strings.Contains(string(override), "./dist") {
+	if !strings.Contains(string(override), "20m") {
 		t.Fatalf("override is missing the values:\n%s", override)
 	}
 	base, err := os.ReadFile(appPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(base), "./dist") {
+	if strings.Contains(string(base), "20m") {
 		t.Fatal("the base dboss.yaml was modified")
 	}
 	if manager.actions[len(manager.actions)-1] != "rescan" {
@@ -747,19 +748,19 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	if err := json.Unmarshal(hostForm.Body.Bytes(), &hostPayload); err != nil {
 		t.Fatal(err)
 	}
-	sawS3 := false
+	sawNotifications := false
 	for _, recipe := range hostPayload.Recipes {
 		if recipe.Scope != config.RecipeHost {
 			t.Errorf("app recipe %q in a host form", recipe.ID)
 		}
-		if recipe.ID == "s3" {
-			sawS3 = true
+		if recipe.ID == "notifications" {
+			sawNotifications = true
 		}
 	}
-	if !sawS3 {
-		t.Fatal("the host form has no s3 recipe")
+	if !sawNotifications {
+		t.Fatal("the host form has no notifications recipe")
 	}
-	hostApply := `{"id":"host","revision":"` + hostPayload.File.Revision + `","recipe":"s3","values":{"s3.endpoint":"https://r2.example.com","s3.region":"auto","s3.bucket":"backups","s3.access_key":"key","s3.secret_key":"secret"},"reset":[]}`
+	hostApply := `{"id":"host","revision":"` + hostPayload.File.Revision + `","recipe":"notifications","values":{"notify.url":"https://hooks.example.com"},"reset":[]}`
 	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", hostApply); got.Code != http.StatusOK {
 		t.Fatalf("host apply: %d %s", got.Code, got.Body.String())
 	}
@@ -767,8 +768,8 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("host override was not written: %v", err)
 	}
-	if !strings.Contains(string(hostOverride), "r2.example.com") {
-		t.Fatalf("host override is missing the endpoint:\n%s", hostOverride)
+	if !strings.Contains(string(hostOverride), "hooks.example.com") {
+		t.Fatalf("host override is missing the webhook URL:\n%s", hostOverride)
 	}
 }
 

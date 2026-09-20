@@ -44,7 +44,7 @@ var keySpecs = map[string]KeySpec{
 	// --- Management console ---
 	"management.host":              {Block: "management", Name: "Console hosts", Description: "one or more hostnames of the management console; omit to disable it", Example: "dboss.example.com"},
 	"management.url":               {Block: "management", Name: "Console URL", Description: "public URL of the console as operators open it; defaults to https://<first management.host>", Example: "https://dboss.example.com"},
-	"management.auth.realm":        {Block: "management", Name: "Auth realm", Description: "AuthCog realm used for sign-in"},
+	"management.auth.realm":        {Block: "management", Name: "Auth realm", Description: "full AuthCog hostname the console signs in against (not the app authcog.realm label)", Example: "auth.authcog.com"},
 	"management.auth.admin_emails": {Block: "management", Name: "Admin emails", Description: "email addresses allowed into the console", Example: "[admin@example.com]"},
 	"management.auth.session_ttl":  {Block: "management", Name: "Session lifetime", Description: "signed console session lifetime", Example: "48h"},
 	"management.metrics.enabled":   {Block: "management", Name: "Metrics endpoints", Description: "serve /healthz, /readyz and /metrics on the management host"},
@@ -70,35 +70,20 @@ var keySpecs = map[string]KeySpec{
 	"notify.headers":      {Block: "notify", Name: "Extra headers", Description: "extra headers sent with every webhook request", Example: "{Authorization: \"Bearer $TOKEN\"}"},
 
 	// --- PostgreSQL ---
-	"postgres.enabled":             {Block: "postgres", Name: "Enable PostgreSQL", Description: "inspect the host PostgreSQL and run scheduled backups; false hides the console tab"},
-	"postgres.dsn":                 {Block: "postgres", Name: "Connection string", Description: "libpq connection string or URL; empty auto-detects the local socket then 127.0.0.1 using the PG* environment", Example: "$DATABASE_URL", Secret: true},
-	"postgres.backup.dir":          {Block: "postgres", Name: "Backup directory", Description: "local directory for database dumps; empty disables local copies"},
-	"postgres.backup.s3":           {Block: "postgres", Name: "Copy to S3", Description: "default destination: copy every dump to the global s3 bucket"},
-	"postgres.backup.every":        {Block: "postgres", Name: "Backup interval", Description: "interval between scheduled backups; 0 makes them manual only", Example: "12h"},
-	"postgres.backup.timeout":      {Block: "postgres", Name: "Backup timeout", Description: "kill a dump that runs longer than this; 0 means no limit"},
-	"postgres.backup.globals":      {Block: "postgres", Name: "Dump globals", Description: "also dump roles and tablespaces with pg_dumpall --globals-only"},
-	"postgres.backup.keep.hourly":  {Block: "postgres", Name: "Keep hourly", Description: "most recent dumps kept, one per hour; 0 disables the bucket", Example: "48"},
-	"postgres.backup.keep.daily":   {Block: "postgres", Name: "Keep daily", Description: "most recent dumps kept, one per day; 0 disables the bucket"},
-	"postgres.backup.keep.weekly":  {Block: "postgres", Name: "Keep weekly", Description: "most recent dumps kept, one per week; 0 disables the bucket"},
-	"postgres.backup.keep.monthly": {Block: "postgres", Name: "Keep monthly", Description: "most recent dumps kept, one per month; 0 disables the bucket"},
-	"postgres.backup.databases":    {Block: "postgres", Name: "Databases", Description: "databases to back up, keyed by name; the presence of a key selects it, and local/s3 override the default destinations", Example: "{myapp_production: {}, reports: {local: false}}"},
-
-	// --- S3 object storage ---
-	"s3.endpoint":   {Block: "s3", Name: "Endpoint", Description: "S3-compatible endpoint; empty disables object storage", Example: "https://<account>.r2.cloudflarestorage.com"},
-	"s3.region":     {Block: "s3", Name: "Region", Description: "bucket region; auto is the R2 default", Example: "us-east-1"},
-	"s3.bucket":     {Block: "s3", Name: "Bucket", Description: "bucket that receives backup objects", Example: "dboss-backups"},
-	"s3.prefix":     {Block: "s3", Name: "Key prefix", Description: "key prefix prepended to every object", Example: "pg/"},
-	"s3.access_key": {Block: "s3", Name: "Access key ID", Description: "S3 access key id", Example: "$S3_ACCESS_KEY", Secret: true},
-	"s3.secret_key": {Block: "s3", Name: "Secret access key", Description: "S3 secret access key", Example: "$S3_SECRET_KEY", Secret: true},
-	"s3.path_style": {Block: "s3", Name: "Path-style addressing", Description: "use path-style addressing, required by MinIO and some other S3 servers"},
-	"s3.sse":        {Block: "s3", Name: "Server-side encryption", Description: "server-side encryption algorithm for uploads; empty uses the bucket default", Example: "AES256"},
+	"postgres.enabled":          {Block: "postgres", Name: "Enable PostgreSQL", Description: "inspect the host PostgreSQL and run scheduled backups; false hides the console tab"},
+	"postgres.dsn":              {Block: "postgres", Name: "Connection string", Description: "libpq connection string or URL; empty auto-detects the local socket then 127.0.0.1 using the PG* environment", Example: "$DATABASE_URL", Secret: true},
+	"postgres.backup.dir":       {Block: "postgres", Name: "Backup directory", Description: "directory that receives dumps, one subfolder per database; required when anything is selected"},
+	"postgres.backup.at":        {Block: "postgres", Name: "Daily run time", Description: "UTC time of the one daily backup run, HH:MM; empty disables scheduled backups"},
+	"postgres.backup.days":      {Block: "postgres", Name: "Retention days", Description: "days of dumps kept; 0 keeps them forever", Example: "30"},
+	"postgres.backup.timeout":   {Block: "postgres", Name: "Backup timeout", Description: "kill a dump that runs longer than this; 0 means no limit"},
+	"postgres.backup.globals":   {Block: "postgres", Name: "Dump globals", Description: "also dump roles and tablespaces with pg_dumpall --globals-only"},
+	"postgres.backup.databases": {Block: "postgres", Name: "Databases", Description: "databases to dump into backup.dir, keyed by name; an entry may override the host retention with its own days", Example: "{myapp_production: {}, reports: {days: 90}}"},
 
 	// --- App ---
-	"procfile":       {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; the one mapping that adds domains is the web process. The web mapping also takes health, a readiness path", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"], health: /up}, worker: bundle exec lux jobs:work}", Required: true},
-	"canonical_host": {Block: "app", Name: "Canonical host", Description: "301 every other host of this app to this one; must be one of the web process domains", Example: "myapp.com"},
-	"autostart":      {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
-	"deletable":      {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
-	"processes":      {Block: "app", Name: "Per-process overrides", Description: "per-process overrides of the process keys, by process name", Example: "{worker: {stop_timeout: 120s}}"},
+	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds domains is a web process (an app may have several, each with its own domains, static, pubsub, health and canonical_host)", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"], static: ./public, health: /up, canonical_host: myapp.com}, worker: bundle exec lux jobs:work}", Required: true},
+	"autostart": {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
+	"deletable": {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
+	"processes": {Block: "app", Name: "Per-process overrides", Description: "per-process overrides of the process keys, by process name", Example: "{worker: {stop_timeout: 120s}}"},
 
 	// --- Cron ---
 	"cron": {Block: "cron", Name: "Scheduled commands", Description: "scheduled one-shot commands by name, run on an every interval or a cron expression", Example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
@@ -110,7 +95,7 @@ var keySpecs = map[string]KeySpec{
 	"idle_stop":           {Block: "runtime", Name: "Idle stop", Description: "stop the app after this long without proxied requests; 0 never", Example: "30m"},
 	"health_interval":     {Block: "runtime", Name: "Check interval", Description: "poll interval of the readiness and liveness checks", Example: "1s"},
 	"health_timeout":      {Block: "runtime", Name: "Readiness timeout", Description: "give-up time of the readiness check; counts as a failed restart", Example: "90s"},
-	"unhealthy_threshold": {Block: "runtime", Name: "Liveness failures", Description: "consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks"},
+	"unhealthy_threshold": {Block: "runtime", Name: "Liveness failures", Description: "consecutive liveness failures of a web process before it is restarted; 0 disables the ongoing checks"},
 	"stop_timeout":        {Block: "runtime", Name: "Stop timeout", Description: "grace period between stop_signal and SIGKILL", Example: "30s"},
 	"stop_signal":         {Block: "runtime", Name: "Stop signal", Description: "signal sent to the process group on stop", Enum: []string{"TERM", "INT", "QUIT", "USR1", "USR2"}},
 	"restart":             {Block: "runtime", Name: "Restart policy", Description: "restart policy on exit", Enum: []string{"on-failure", "always", "never"}},
@@ -120,7 +105,7 @@ var keySpecs = map[string]KeySpec{
 	"log_max_size":        {Block: "runtime", Name: "Max log size", Description: "rotate a process log file above this size", Example: "50m"},
 	"log_keep":            {Block: "runtime", Name: "Kept log files", Description: "rotated log files kept per process; 0 truncates the file in place"},
 	"log_tail_lines":      {Block: "runtime", Name: "Tail lines", Description: "lines kept in memory for dboss logs"},
-	"log_retention":       {Block: "runtime", Name: "Log retention", Description: "how long request rows and app log files are kept; 0 disables both", Example: "72h"},
+	"log_retention":       {Block: "runtime", Name: "Log retention", Description: "how long request rows and app log files are kept; 0 disables the whole log store for the app", Example: "72h"},
 	"stdout_retention":    {Block: "runtime", Name: "Stdout retention", Description: "how long process stdout and the dboss daemon log are kept; 0 disables both"},
 	"log_flush":           {Block: "runtime", Name: "Log flush", Description: "request log batch insert interval", Example: "5s"},
 	"shell":               {Block: "runtime", Name: "Run through shell", Description: "run commands through sh -c instead of exec"},
@@ -131,17 +116,14 @@ var keySpecs = map[string]KeySpec{
 
 	// --- Web ---
 	"health_endpoint":   {Block: "web", Name: "Health endpoint", Description: "public status path on the app's own hosts: 200 when running or asleep and wakeable, 503 otherwise; empty disables", Example: "/healthz"},
-	"static":            {Block: "web", Name: "Static directory", Description: "directory served straight from disk for GET and HEAD, relative to the app", Example: "./dist"},
-	"static_immutable":  {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under static cached as immutable for a year", Example: "[/assets/, /packs/]"},
-	"static_extensions": {Block: "web", Name: "Static extensions", Description: "file extensions served from static, without the dot; empty serves any file", Example: "[css, js, png]"},
+	"static_immutable":  {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under the static directory cached as immutable for a year", Example: "[/assets/, /packs/]"},
+	"static_extensions": {Block: "web", Name: "Static extensions", Description: "file extensions served from the static directory, without the dot; empty serves any file", Example: "[css, js, png]"},
 	"max_body":          {Block: "web", Name: "Max body size", Description: "request body limit; 0 none"},
 	"basic_auth":        {Block: "web", Name: "Basic auth users", Description: "HTTP basic auth users to bcrypt hashes from dboss password", Example: "{alice: \"$2a$10$...\"}", Secret: true},
 	"allow_ips":         {Block: "web", Name: "Allowed IPs", Description: "CIDRs allowed to reach the app; empty allows everyone", Example: "[10.0.0.0/8]"},
 	"headers":           {Block: "web", Name: "Response headers", Description: "response headers added to every response; an empty value removes one", Example: "{X-Frame-Options: DENY}"},
 	"maintenance_page":  {Block: "web", Name: "Maintenance page", Description: "file served in maintenance mode, relative to the app", Example: "./public/503.html"},
 	"error_page_path":   {Block: "web", Name: "Error page", Description: "static HTML served for proxy errors and app 5xx answers, relative to the app", Example: "public/error_500.html"},
-
-	// --- PubSub ---
 
 	// --- Sign-in ---
 	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},

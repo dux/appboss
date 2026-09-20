@@ -17,7 +17,6 @@ type Backup struct {
 	Bytes      int64  `json:"bytes"`
 	SHA256     string `json:"sha256,omitempty"`
 	LocalPath  string `json:"local_path,omitempty"`
-	S3Key      string `json:"s3_key,omitempty"`
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms"`

@@ -218,7 +218,8 @@ func (a *appRuntime) handleEvent(event processEvent) {
 	}
 	switch event.kind {
 	case "ready":
-		if a.state == Starting {
+		a.ready[name] = true
+		if a.state == Starting && a.allWebReady() {
 			a.state = Running
 			a.lastActivity = time.Now()
 		}
@@ -235,8 +236,8 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		port, err := a.allocator.Allocate(a.spec.Name, name)
 		if err == nil {
 			err = a.spawn(name, command, port)
-			if err == nil && name == a.spec.Config.WebProcess {
-				go a.monitor(a.processes[name], a.spec.Config.Process(name), a.webHost())
+			if err == nil && a.spec.Config.IsWeb(name) {
+				go a.monitor(a.processes[name], a.spec.Config.Process(name), a.webHost(name))
 			}
 		}
 		if err != nil {
@@ -253,6 +254,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 func (a *appRuntime) processExited(event processEvent) {
 	name := event.proc.name
 	a.cleanupProcess(name)
+	delete(a.ready, name)
 	if a.state == Stopping || a.state == Stopped {
 		return
 	}
@@ -261,11 +263,11 @@ func (a *appRuntime) processExited(event processEvent) {
 		a.failures[name] = 0
 	}
 	shouldRestart := defaults.Restart == "always" || (defaults.Restart == "on-failure" && event.exitCode != 0)
-	if name == a.spec.Config.WebProcess && shouldRestart {
+	if a.spec.Config.IsWeb(name) && shouldRestart {
 		a.state = Starting
 	}
 	if !shouldRestart {
-		if name == a.spec.Config.WebProcess {
+		if a.spec.Config.IsWeb(name) {
 			a.state = Crashed
 			a.lastError = fmt.Sprintf("%s exited with code %d", name, event.exitCode)
 			a.lastErrorProcess = name
@@ -320,11 +322,11 @@ func backoff(values []any, attempt int) time.Duration {
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, CanonicalHost: a.spec.Config.CanonicalHost, WebProcess: a.spec.Config.WebProcess, Autostart: a.spec.Config.Autostart.Starts(), Deletable: a.spec.Config.Deletable && a.cfg.App == nil, WakeButton: a.spec.Config.Autostart == config.AutostartButton, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, WebProcesses: WebProcessSnapshots(a.spec.Config.WebProcesses), Autostart: a.spec.Config.Autostart.Starts(), Deletable: a.spec.Config.Deletable && a.cfg.App == nil, WakeButton: a.spec.Config.Autostart == config.AutostartButton, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), LogFlush: a.spec.Config.LogFlush.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
-		if processName == "" {
-			processName = a.spec.Config.WebProcess
+		if processName == "" && len(a.spec.Config.WebProcesses) > 0 {
+			processName = a.spec.Config.WebProcesses[0].Name
 		}
 		result.ErrorLog, _ = tail(filepath.Join(a.cfg.LogDir, a.spec.Name, processName+".log"), failureLogLines)
 	}

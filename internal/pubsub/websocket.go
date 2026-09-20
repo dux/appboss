@@ -8,7 +8,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"dboss/internal/config"
 	"dboss/internal/super"
 )
 
@@ -17,13 +16,14 @@ const (
 	writeTimeout = 10 * time.Second
 )
 
-func (s *Service) serveWebSocket(w http.ResponseWriter, r *http.Request, app super.Snapshot, cfg config.Pubsub, channel string) {
-	sub, backlog, err := s.subscribe(app.Name, channel, cfg)
+func (s *Service) serveWebSocket(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+	cfg := web.Pubsub
+	sub, backlog, err := s.subscribe(hubID{app, web.Name}, channel, cfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	defer s.unsubscribe(app.Name, channel, sub)
+	defer s.unsubscribe(hubID{app, web.Name}, channel, sub)
 
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
@@ -57,7 +57,7 @@ func (s *Service) serveWebSocket(w http.ResponseWriter, r *http.Request, app sup
 			continue
 		}
 		if msg, ok := parseClientMessage(data); ok {
-			s.publish(app.Name, channel, msg, cfg.Replay)
+			s.publish(hubID{app, web.Name}, channel, msg, cfg.Replay)
 		}
 	}
 	cancel()

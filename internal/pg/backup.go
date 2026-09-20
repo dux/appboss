@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"dboss/internal/logx"
@@ -62,7 +61,7 @@ func (s *Service) BackupAll(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	s.prune(ctx)
+	s.prune()
 	return firstErr
 }
 
@@ -88,8 +87,7 @@ func (s *Service) BackupDatabase(ctx context.Context, database string) (Backup, 
 	if connConfig == nil {
 		return Backup{}, errors.New("no reachable PostgreSQL server")
 	}
-	local, wants3 := opts.postgres.Backup.Destinations(database)
-	return s.runDump(ctx, connConfig, opts, database, false, local, wants3)
+	return s.runDump(ctx, connConfig, opts, database, false)
 }
 
 func (s *Service) backupGlobals(ctx context.Context) (Backup, error) {
@@ -108,22 +106,21 @@ func (s *Service) backupGlobals(ctx context.Context) (Backup, error) {
 
 	s.mu.RLock()
 	opts, connConfig := s.opts, s.connConfig
-	local, wants3 := opts.postgres.Backup.Destinations(globalsDatabase)
 	s.mu.RUnlock()
 	if connConfig == nil {
 		return Backup{}, errors.New("no reachable PostgreSQL server")
 	}
-	return s.runDump(ctx, connConfig, opts, globalsDatabase, true, local, wants3)
+	return s.runDump(ctx, connConfig, opts, globalsDatabase, true)
 }
 
 // runDump is the shared path for a database or the globals set: create a temp file, run pg_dump,
-// checksum it, move it into place, upload it and record the result.
-func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts options, database string, globals, local, wants3 bool) (Backup, error) {
+// checksum it, move it into place and record the result.
+func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts options, database string, globals bool) (Backup, error) {
 	started := time.Now()
 	name := dumpName(database, globals, started)
 	entry := Backup{ID: name, Database: database, Time: started.UTC().Format(time.RFC3339), Status: "ok", Globals: globals}
 
-	tmpDir, err := s.dumpDir(opts, database, local)
+	tmpDir, err := s.dumpDir(opts, database)
 	if err != nil {
 		return s.failed(entry, started, err)
 	}
@@ -148,31 +145,11 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	}
 	entry.Bytes, entry.SHA256 = size, sum
 
-	finalPath := tempPath
-	if local {
-		finalPath = filepath.Join(filepath.Dir(tempPath), name)
-		if err := os.Rename(tempPath, finalPath); err != nil {
-			return s.failed(entry, started, err)
-		}
-		entry.LocalPath = finalPath
+	finalPath := filepath.Join(filepath.Dir(tempPath), name)
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		return s.failed(entry, started, err)
 	}
-	if wants3 {
-		uploader, err := newS3(opts.s3)
-		if err != nil {
-			return s.failed(entry, started, err)
-		}
-		if uploader == nil {
-			return s.failed(entry, started, errors.New("s3 is not configured"))
-		}
-		key := objectKey(opts.s3.Prefix, database, globals, name)
-		if err := uploader.Put(ctx, key, finalPath, size); err != nil {
-			return s.failed(entry, started, err)
-		}
-		entry.S3Key = key
-	}
-	if !local {
-		_ = os.Remove(finalPath)
-	}
+	entry.LocalPath = finalPath
 	entry.DurationMS = time.Since(started).Milliseconds()
 	if err := s.catalog.record(entry); err != nil {
 		return entry, err
@@ -181,17 +158,13 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	return entry, nil
 }
 
-// dumpDir is where the temp file lives: next to the final local copy when one is requested, else
-// the system temp directory for an upload-only backup.
-func (s *Service) dumpDir(opts options, database string, local bool) (string, error) {
-	if local {
-		dir := filepath.Join(opts.postgres.Backup.Dir, database)
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return "", err
-		}
-		return dir, nil
+// dumpDir is the per-database directory the temp file and the final dump live in.
+func (s *Service) dumpDir(opts options, database string) (string, error) {
+	dir := filepath.Join(opts.postgres.Backup.Dir, database)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
 	}
-	return os.TempDir(), nil
+	return dir, nil
 }
 
 func (s *Service) execDump(ctx context.Context, connConfig *pgx.ConnConfig, opts options, database string, globals bool, path string) error {
@@ -228,21 +201,24 @@ func (s *Service) failed(entry Backup, started time.Time, err error) (Backup, er
 	return entry, err
 }
 
-// prune removes dumps beyond the retention policy from disk, S3 and the catalog. Failed entries
-// are kept for visibility until the catalog cap drops them.
-func (s *Service) prune(ctx context.Context) {
+// prune removes dumps beyond the retention policy from disk and the catalog. Failed entries are
+// kept for visibility until the catalog cap drops them.
+func (s *Service) prune() {
 	s.mu.RLock()
 	opts := s.opts
 	s.mu.RUnlock()
-	policy := Policy{
-		Hourly:  opts.postgres.Backup.Keep.Hourly,
-		Daily:   opts.postgres.Backup.Keep.Daily,
-		Weekly:  opts.postgres.Backup.Keep.Weekly,
-		Monthly: opts.postgres.Backup.Keep.Monthly,
-	}
+	now := time.Now()
 	entries := s.catalog.list()
-	keep := keepSet(entries, policy)
-	uploader, _ := newS3(opts.s3)
+	byDatabase := map[string][]Backup{}
+	for _, entry := range entries {
+		byDatabase[entry.Database] = append(byDatabase[entry.Database], entry)
+	}
+	keep := map[string]bool{}
+	for database, group := range byDatabase {
+		for id := range keepSet(group, opts.postgres.Backup.RetentionDays(database), now) {
+			keep[id] = true
+		}
+	}
 	removed := map[string]bool{}
 	for _, entry := range entries {
 		if entry.Status != "ok" || keep[entry.ID] {
@@ -250,11 +226,6 @@ func (s *Service) prune(ctx context.Context) {
 		}
 		if entry.LocalPath != "" {
 			_ = os.Remove(entry.LocalPath)
-		}
-		if entry.S3Key != "" && uploader != nil {
-			if err := uploader.Remove(ctx, entry.S3Key); err != nil {
-				logx.Warnf("postgres prune: remove %s: %v", entry.S3Key, err)
-			}
 		}
 		removed[entry.ID] = true
 	}
@@ -272,17 +243,6 @@ func dumpName(database string, globals bool, at time.Time) string {
 		ext = ".sql"
 	}
 	return database + "-" + at.UTC().Format("2006-01-02T15-04-05Z") + ext
-}
-
-func objectKey(prefix, database string, globals bool, name string) string {
-	prefix = strings.Trim(prefix, "/")
-	if prefix != "" {
-		prefix += "/"
-	}
-	if globals {
-		return prefix + globalsDatabase + "/" + name
-	}
-	return prefix + database + "/" + name
 }
 
 func fileSize(path string) (int64, error) {

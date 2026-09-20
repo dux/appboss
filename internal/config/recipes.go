@@ -88,13 +88,11 @@ var recipeSpecs = []recipeSpec{
 	{
 		id:          "web",
 		title:       "Web",
-		description: "Canonical host, static files and the proxy behaviour in front of the app. Domains are declared on the web process in the YAML editor.",
+		description: "Static policy and the proxy behaviour in front of the app. Domains, the static directory and the canonical host are declared on the web process in the YAML editor.",
 		scope:       RecipeApp,
 		fields: []recipeField{
-			{path: "canonical_host"},
 			{path: "autostart"},
 			{path: "deletable"},
-			{path: "static"},
 			{path: "static_immutable"},
 			{path: "static_extensions"},
 			{path: "health_endpoint"},
@@ -133,22 +131,6 @@ var recipeSpecs = []recipeSpec{
 			{path: "log_retention", section: "Logs"},
 			{path: "stdout_retention", section: "Logs"},
 			{path: "log_flush", section: "Logs"},
-		},
-	},
-	{
-		id:          "s3",
-		title:       "S3 object storage",
-		description: "Off-host backup copies. Empty endpoint and bucket disable object storage.",
-		scope:       RecipeHost,
-		fields: []recipeField{
-			{path: "s3.endpoint", section: "Connection"},
-			{path: "s3.region", section: "Connection"},
-			{path: "s3.bucket", section: "Connection"},
-			{path: "s3.prefix", section: "Connection"},
-			{path: "s3.access_key", section: "Credentials"},
-			{path: "s3.secret_key", section: "Credentials"},
-			{path: "s3.path_style", section: "Options"},
-			{path: "s3.sse", section: "Options"},
 		},
 	},
 	{

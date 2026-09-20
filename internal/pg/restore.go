@@ -36,7 +36,7 @@ var ErrRestoreConfirm = errors.New("restoring over an existing database requires
 // database unless Replace is set, and then only with an explicit confirmation.
 func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
 	s.mu.RLock()
-	opts, connConfig := s.opts, s.connConfig
+	connConfig := s.connConfig
 	s.mu.RUnlock()
 	if connConfig == nil {
 		return RestoreResult{}, errors.New("no reachable PostgreSQL server")
@@ -48,11 +48,10 @@ func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreR
 	if entry.Status != "ok" {
 		return RestoreResult{}, fmt.Errorf("backup %q did not complete", request.ID)
 	}
-	path, cleanup, err := s.fetch(ctx, opts, entry)
+	path, err := fetch(entry)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	defer cleanup()
 	if entry.SHA256 != "" {
 		if sum, err := fileSHA256(path); err != nil || sum != entry.SHA256 {
 			return RestoreResult{}, fmt.Errorf("backup %q failed its checksum", request.ID)
@@ -79,31 +78,15 @@ func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreR
 	return RestoreResult{Target: target, Created: !request.Replace, Bytes: entry.Bytes}, nil
 }
 
-// fetch returns a local path to the dump, downloading from S3 when it is not on disk.
-func (s *Service) fetch(ctx context.Context, opts options, entry Backup) (string, func(), error) {
-	if entry.LocalPath != "" {
-		if _, err := os.Stat(entry.LocalPath); err == nil {
-			return entry.LocalPath, func() {}, nil
-		}
+// fetch returns the dump's path on disk, or an error when the file is gone.
+func fetch(entry Backup) (string, error) {
+	if entry.LocalPath == "" {
+		return "", fmt.Errorf("backup %q has no local file", entry.ID)
 	}
-	if entry.S3Key == "" {
-		return "", nil, fmt.Errorf("backup %q is not available locally or in s3", entry.ID)
+	if _, err := os.Stat(entry.LocalPath); err != nil {
+		return "", fmt.Errorf("backup %q is missing from %s", entry.ID, entry.LocalPath)
 	}
-	uploader, err := newS3(opts.s3)
-	if err != nil || uploader == nil {
-		return "", nil, errors.New("s3 is not configured")
-	}
-	temp, err := os.CreateTemp("", "dboss-restore-*.dump")
-	if err != nil {
-		return "", nil, err
-	}
-	path := temp.Name()
-	_ = temp.Close()
-	if err := uploader.Get(ctx, entry.S3Key, path); err != nil {
-		_ = os.Remove(path)
-		return "", nil, err
-	}
-	return path, func() { _ = os.Remove(path) }, nil
+	return entry.LocalPath, nil
 }
 
 // createDatabase connects to the maintenance database and creates the target. It uses the first

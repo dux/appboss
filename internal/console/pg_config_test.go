@@ -3,7 +3,6 @@ package console
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"dboss/internal/config"
 
@@ -11,13 +10,12 @@ import (
 )
 
 func TestPatchPostgresBackupKeepsOtherKeys(t *testing.T) {
-	no := false
-	contents := "apps: ./apps\nproxy:\n  listen: \":80\"\npostgres:\n  enabled: true\n  dsn: $DATABASE_URL\n  backup:\n    every: 6h\n"
+	contents := "apps: ./apps\nproxy:\n  listen: \":80\"\npostgres:\n  enabled: true\n  dsn: $DATABASE_URL\n  backup:\n    at: \"04:00\"\n"
 	patched, err := patchPostgresBackup(contents, config.PostgresBackup{
 		Dir:       "/var/backups/pg",
-		S3:        true,
-		Every:     config.Duration(6 * time.Hour),
-		Databases: map[string]config.Target{"app_production": {S3: &no}},
+		At:        "05:30",
+		Days:      30,
+		Databases: map[string]config.DatabaseBackup{"app_production": {}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,12 +30,11 @@ func TestPatchPostgresBackupKeepsOtherKeys(t *testing.T) {
 	if !parsed.Postgres.Enabled || parsed.Postgres.DSN != "$DATABASE_URL" {
 		t.Fatalf("postgres keys outside backup were lost:\n%s", patched)
 	}
-	if parsed.Postgres.Backup.Dir != "/var/backups/pg" || len(parsed.Postgres.Backup.Databases) != 1 {
+	if parsed.Postgres.Backup.Dir != "/var/backups/pg" || parsed.Postgres.Backup.At != "05:30" || parsed.Postgres.Backup.Days != 30 || len(parsed.Postgres.Backup.Databases) != 1 {
 		t.Fatalf("backup block was not replaced:\n%s", patched)
 	}
-	local, s3 := parsed.Postgres.Backup.Destinations("app_production")
-	if !local || s3 {
-		t.Fatalf("destination override lost: local=%t s3=%t", local, s3)
+	if selected := parsed.Postgres.Backup.Selected(); len(selected) != 1 || selected[0] != "app_production" {
+		t.Fatalf("database selection lost:\n%s", patched)
 	}
 }
 

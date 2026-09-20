@@ -509,9 +509,9 @@ func (h *Handler) writePubsub(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.PubsubApps(), "guide": pubsub.Help, "updated_at": time.Now().UTC()})
 }
 
-// pubsubSecret returns one app's effective publish secret and example URLs.
+// pubsubSecret returns one web process's effective publish secret and example URLs.
 func (h *Handler) pubsubSecret(w http.ResponseWriter, r *http.Request) {
-	info, err := h.service.PubsubSecret(strings.TrimSpace(r.URL.Query().Get("app")))
+	info, err := h.service.PubsubSecret(strings.TrimSpace(r.URL.Query().Get("app")), strings.TrimSpace(r.URL.Query().Get("process")))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -519,19 +519,20 @@ func (h *Handler) pubsubSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-// pubsubRotate mints a new generated secret for an app.
+// pubsubRotate mints a new generated secret for a web process.
 func (h *Handler) pubsubRotate(w http.ResponseWriter, r *http.Request, session authSession) {
 	if !h.requireCSRF(w, r, session) {
 		return
 	}
 	var request struct {
-		App string `json:"app"`
+		App     string `json:"app"`
+		Process string `json:"process"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	info, err := h.service.PubsubRotate(strings.TrimSpace(request.App))
+	info, err := h.service.PubsubRotate(strings.TrimSpace(request.App), strings.TrimSpace(request.Process))
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -546,6 +547,7 @@ func (h *Handler) pubsubPublish(w http.ResponseWriter, r *http.Request, session 
 	}
 	var request struct {
 		App     string          `json:"app"`
+		Process string          `json:"process"`
 		Channel string          `json:"channel"`
 		Event   string          `json:"event"`
 		Data    json.RawMessage `json:"data"`
@@ -554,7 +556,7 @@ func (h *Handler) pubsubPublish(w http.ResponseWriter, r *http.Request, session 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := h.service.Do(ops.Request{Method: ops.ActionPubsubPublish, App: strings.TrimSpace(request.App), Channel: strings.TrimSpace(request.Channel), Event: strings.TrimSpace(request.Event), Data: request.Data, Actor: session.Email})
+	result, err := h.service.Do(ops.Request{Method: ops.ActionPubsubPublish, App: strings.TrimSpace(request.App), Process: strings.TrimSpace(request.Process), Channel: strings.TrimSpace(request.Channel), Event: strings.TrimSpace(request.Event), Data: request.Data, Actor: session.Email})
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return

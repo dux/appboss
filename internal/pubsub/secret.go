@@ -12,8 +12,8 @@ import (
 
 const secretFile = "pubsub-secrets.json"
 
-// secretStore is the state_dir/pubsub-secrets.json map of app -> publish secret. It is the
-// fallback when the app config sets no secret, so publishing works without any committed value.
+// secretStore is the state_dir/pubsub-secrets.json map of "app/process" -> publish secret. It is
+// the fallback when a hub's config sets no secret, so publishing works without any committed value.
 type secretStore struct {
 	mu   sync.Mutex
 	path string

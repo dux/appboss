@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/ops"
 	"dboss/internal/super"
@@ -45,6 +46,7 @@ func (f *fakeRuntime) Rescan() ([]error, error) { return nil, nil }
 func (f *fakeRuntime) RestartRequired() []string {
 	return nil
 }
+func (f *fakeRuntime) HostConfig() config.Config                             { return config.Default() }
 func (f *fakeRuntime) Logs(string, string, int) (map[string][]string, error) { return nil, nil }
 func (f *fakeRuntime) Ports() map[string]int                                 { return nil }
 

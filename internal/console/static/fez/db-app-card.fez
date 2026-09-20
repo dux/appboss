@@ -25,7 +25,9 @@
 
     beforeRender() {
       const app = this.props.app
-      const host = (app.canonical_host || (app.hosts || [])[0] || '').replace(/^\*?\./, '')
+      const webs = app.web_processes || []
+      const primary = webs.find((web) => web.canonical_host) || webs[0]
+      const host = ((primary && (primary.canonical_host || (primary.hosts || [])[0])) || (app.hosts || [])[0] || '').replace(/^\*?\./, '')
       this.state.serviceUrl = host ? `${location.protocol}//${host}${location.port ? `:${location.port}` : ''}` : ''
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.processes = app.processes || []

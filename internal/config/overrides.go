@@ -41,7 +41,6 @@ type ProcessOverrides struct {
 
 type WebOverrides struct {
 	HealthEndpoint   *string           `yaml:"health_endpoint,omitempty" json:"health_endpoint,omitempty"`
-	Static           *string           `yaml:"static,omitempty" json:"static,omitempty"`
 	StaticImmutable  List              `yaml:"static_immutable,omitempty" json:"static_immutable,omitempty"`
 	StaticExtensions List              `yaml:"static_extensions,omitempty" json:"static_extensions,omitempty"`
 	MaxBody          *Size             `yaml:"max_body,omitempty" json:"max_body,omitempty"`

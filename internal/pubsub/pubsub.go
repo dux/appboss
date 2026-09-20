@@ -47,16 +47,24 @@ type Channel struct {
 
 type App struct {
 	Name     string    `json:"name"`
+	Process  string    `json:"process"`
 	Path     string    `json:"path"`
 	Clients  int       `json:"clients"`
 	Channels []Channel `json:"channels"`
 }
 
-// Service owns every app's channels. It is a daemon module: Start runs the janitor that drops
-// idle empty channels, Close disconnects every subscriber.
+// hubID identifies one web process's realtime hub. An app may run several web processes, each with
+// its own path, secret and channel namespace.
+type hubID struct{ app, process string }
+
+// secretKey is the state file key for a hub's generated publish secret.
+func secretKey(app, process string) string { return app + "/" + process }
+
+// Service owns every web process's channels. It is a daemon module: Start runs the janitor that
+// drops idle empty channels, Close disconnects every subscriber.
 type Service struct {
 	mu      sync.Mutex
-	apps    map[string]*appHub
+	hubs    map[hubID]*appHub
 	secrets *secretStore
 	client  []byte
 }
@@ -66,7 +74,7 @@ func New(stateDir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{apps: map[string]*appHub{}, secrets: secrets, client: clientJS}, nil
+	return &Service{hubs: map[hubID]*appHub{}, secrets: secrets, client: clientJS}, nil
 }
 
 func (s *Service) Name() string { return "pubsub" }
@@ -79,27 +87,27 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, hub := range s.apps {
+	for _, hub := range s.hubs {
 		for _, ch := range hub.channels {
 			for sub := range ch.subs {
 				sub.stop()
 			}
 		}
 	}
-	s.apps = map[string]*appHub{}
+	s.hubs = map[hubID]*appHub{}
 	return nil
 }
 
-// Secret returns the effective publish secret: the one in the config, or a generated per-app one.
-func (s *Service) Secret(app string, cfg config.Pubsub) (string, error) {
+// Secret returns the effective publish secret: the one in the config, or a generated per-hub one.
+func (s *Service) Secret(app, process string, cfg config.Pubsub) (string, error) {
 	if cfg.Secret != "" {
 		return cfg.Secret, nil
 	}
-	return s.secrets.ensure(app)
+	return s.secrets.ensure(secretKey(app, process))
 }
 
 // Rotate mints a new generated secret. A secret that comes from the config is rejected.
-func (s *Service) Rotate(app string, cfg config.Pubsub) (string, error) {
+func (s *Service) Rotate(app, process string, cfg config.Pubsub) (string, error) {
 	if cfg.Secret != "" {
 		return "", errors.New("secret comes from the config; change it there")
 	}
@@ -107,60 +115,72 @@ func (s *Service) Rotate(app string, cfg config.Pubsub) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.secrets.set(app, secret); err != nil {
+	if err := s.secrets.set(secretKey(app, process), secret); err != nil {
 		return "", err
 	}
 	return secret, nil
 }
 
 // Publish sends a message to a channel on behalf of the CLI or console.
-func (s *Service) Publish(app, channel string, msg Message, replay int) int {
-	return s.publish(app, channel, msg, replay)
+func (s *Service) Publish(app, process, channel string, msg Message, replay int) int {
+	return s.publish(hubID{app, process}, channel, msg, replay)
 }
 
-// Reconcile drops generated secrets for apps that no longer serve channels.
+// Reconcile drops generated secrets for hubs that no longer serve channels.
 func (s *Service) Reconcile(snapshots []super.Snapshot) {
-	live := make(map[string]bool, len(snapshots))
+	live := map[string]bool{}
 	for _, snapshot := range snapshots {
-		if snapshot.Web.Pubsub.Enabled() {
-			live[snapshot.Name] = true
+		for _, web := range snapshot.WebProcesses {
+			if web.Pubsub.Enabled() {
+				live[secretKey(snapshot.Name, web.Name)] = true
+			}
 		}
 	}
 	_ = s.secrets.reconcile(live)
 }
 
-// Stats is per-app counters, keyed by app name.
+// Stats is per-app counters aggregated across the app's web processes, keyed by app name.
 func (s *Service) Stats() map[string]Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := make(map[string]Stats, len(s.apps))
-	for name, hub := range s.apps {
-		result[name] = Stats{Clients: hub.clients, Channels: len(hub.channels), Messages: hub.messages}
+	result := map[string]Stats{}
+	for id, hub := range s.hubs {
+		stats := result[id.app]
+		stats.Clients += hub.clients
+		stats.Channels += len(hub.channels)
+		stats.Messages += hub.messages
+		result[id.app] = stats
 	}
 	return result
 }
 
-// Snapshot lists every app that serves channels, with its channels and subscriber counts.
+// Snapshot lists every web process that serves channels, with its channels and subscriber counts.
 func (s *Service) Snapshot(snapshots []super.Snapshot) []App {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := make([]App, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		cfg := snapshot.Web.Pubsub
-		if !cfg.Enabled() {
-			continue
-		}
-		entry := App{Name: snapshot.Name, Path: cfg.Path, Channels: []Channel{}}
-		if hub := s.apps[snapshot.Name]; hub != nil {
-			entry.Clients = hub.clients
-			for name, ch := range hub.channels {
-				entry.Channels = append(entry.Channels, Channel{Name: name, Subscribers: len(ch.subs), Messages: ch.messages})
+		for _, web := range snapshot.WebProcesses {
+			if !web.Pubsub.Enabled() {
+				continue
 			}
-			sort.Slice(entry.Channels, func(i, j int) bool { return entry.Channels[i].Name < entry.Channels[j].Name })
+			entry := App{Name: snapshot.Name, Process: web.Name, Path: web.Pubsub.Path, Channels: []Channel{}}
+			if hub := s.hubs[hubID{snapshot.Name, web.Name}]; hub != nil {
+				entry.Clients = hub.clients
+				for name, ch := range hub.channels {
+					entry.Channels = append(entry.Channels, Channel{Name: name, Subscribers: len(ch.subs), Messages: ch.messages})
+				}
+				sort.Slice(entry.Channels, func(i, j int) bool { return entry.Channels[i].Name < entry.Channels[j].Name })
+			}
+			result = append(result, entry)
 		}
-		result = append(result, entry)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].Process < result[j].Process
+	})
 	return result
 }
 
@@ -189,10 +209,10 @@ func newSubscriber() *subscriber {
 
 func (s *subscriber) stop() { s.once.Do(func() { close(s.quit) }) }
 
-func (s *Service) subscribe(app, name string, cfg config.Pubsub) (*subscriber, []Message, error) {
+func (s *Service) subscribe(id hubID, name string, cfg config.Pubsub) (*subscriber, []Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hub := s.hubLocked(app)
+	hub := s.hubLocked(id)
 	if cfg.MaxClients > 0 && hub.clients >= cfg.MaxClients {
 		return nil, nil, errTooManyClients
 	}
@@ -207,10 +227,10 @@ func (s *Service) subscribe(app, name string, cfg config.Pubsub) (*subscriber, [
 	return sub, ch.backlogLocked(), nil
 }
 
-func (s *Service) unsubscribe(app, name string, sub *subscriber) {
+func (s *Service) unsubscribe(id hubID, name string, sub *subscriber) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hub := s.apps[app]
+	hub := s.hubs[id]
 	if hub == nil {
 		sub.stop()
 		return
@@ -232,10 +252,10 @@ func (s *Service) unsubscribe(app, name string, sub *subscriber) {
 
 // publish fans msg out to every subscriber of the channel and keeps it for replay. A subscriber
 // whose buffer is full is dropped instead of blocking the publisher. It returns the delivery count.
-func (s *Service) publish(app, name string, msg Message, replay int) int {
+func (s *Service) publish(id hubID, name string, msg Message, replay int) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hub := s.hubLocked(app)
+	hub := s.hubLocked(id)
 	ch := hub.channelLocked(name)
 	msg.TS = time.Now().UTC()
 	ch.addLocked(msg, replay)
@@ -259,11 +279,11 @@ func (s *Service) publish(app, name string, msg Message, replay int) int {
 	return delivered
 }
 
-func (s *Service) hubLocked(app string) *appHub {
-	hub := s.apps[app]
+func (s *Service) hubLocked(id hubID) *appHub {
+	hub := s.hubs[id]
 	if hub == nil {
 		hub = &appHub{channels: map[string]*channel{}}
-		s.apps[app] = hub
+		s.hubs[id] = hub
 	}
 	return hub
 }
@@ -321,7 +341,7 @@ func (s *Service) janitor(ctx context.Context) {
 func (s *Service) prune(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, hub := range s.apps {
+	for _, hub := range s.hubs {
 		for name, ch := range hub.channels {
 			if len(ch.subs) == 0 && now.Sub(ch.last) > time.Hour {
 				delete(hub.channels, name)

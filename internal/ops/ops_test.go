@@ -94,6 +94,7 @@ func (f *fakeRuntime) Rescan() ([]error, error) {
 }
 
 func (f *fakeRuntime) RestartRequired() []string { return f.restart }
+func (f *fakeRuntime) HostConfig() config.Config { return config.Default() }
 
 func (f *fakeRuntime) Logs(name, process string, lines int) (map[string][]string, error) {
 	f.actions = append(f.actions, "logs "+name)
@@ -179,6 +180,16 @@ func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
 	}
 }
 
+func TestRescanAppliesPostgresConfig(t *testing.T) {
+	postgres := &fakePG{}
+	if _, err := New(&fakeRuntime{}, nil, nil, postgres, nil).Rescan(); err != nil {
+		t.Fatal(err)
+	}
+	if postgres.applied != 1 {
+		t.Fatalf("rescan should re-apply the postgres config, applied=%d", postgres.applied)
+	}
+}
+
 type fakePG struct {
 	enabled   bool
 	available bool
@@ -201,7 +212,6 @@ func (f *fakePG) Restore(context.Context, pg.RestoreRequest) (pg.RestoreResult, 
 	return pg.RestoreResult{Target: "app_restore"}, nil
 }
 func (f *fakePG) BackupConfig() config.PostgresBackup { return config.PostgresBackup{} }
-func (f *fakePG) S3Configured() bool                  { return false }
 func (f *fakePG) Apply(config.Config)                 { f.applied++ }
 
 func TestPGActionsDispatch(t *testing.T) {

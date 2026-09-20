@@ -29,7 +29,7 @@ type Service struct {
 	opts       options
 	connConfig *pgx.ConnConfig
 	snapshot   Snapshot
-	interval   time.Duration
+	at         string
 	next       time.Time
 
 	refreshMu sync.Mutex
@@ -83,13 +83,11 @@ func (s *Service) Close() error {
 // background, so a slow or missing server never blocks the caller.
 func (s *Service) ApplyConfig() {
 	s.mu.Lock()
-	interval := s.opts.postgres.Backup.Every.Value()
-	switch {
-	case interval <= 0:
-		s.interval, s.next = 0, time.Time{}
-	case interval != s.interval || s.next.IsZero():
-		// A new interval restarts the clock, so a change takes effect from now.
-		s.interval, s.next = interval, time.Now().Add(interval)
+	at := s.opts.postgres.Backup.At
+	if at != s.at || (at != "" && s.next.IsZero()) {
+		// A new time recomputes the next run, so a change takes effect from now.
+		s.at = at
+		s.next = nextRun(at, time.Now())
 	}
 	ctx := s.baseCtx
 	s.mu.Unlock()
@@ -124,13 +122,6 @@ func (s *Service) BackupConfig() config.PostgresBackup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.opts.postgres.Backup
-}
-
-// S3Configured reports whether dumps can be uploaded.
-func (s *Service) S3Configured() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.opts.s3.Configured()
 }
 
 // Available reports whether the last inspection reached a server.
@@ -248,19 +239,37 @@ func (s *Service) backupLoop(ctx context.Context) {
 	}
 }
 
-// maybeBackup fires the scheduled run when one is due. The actual work runs off the loop.
+// maybeBackup fires the daily run when one is due. The actual work runs off the loop.
 func (s *Service) maybeBackup(ctx context.Context, now time.Time) {
 	s.mu.Lock()
-	interval, next := s.interval, s.next
-	if interval <= 0 || next.IsZero() || now.Before(next) {
+	at, next := s.at, s.next
+	if at == "" || next.IsZero() || now.Before(next) {
 		s.mu.Unlock()
 		return
 	}
-	s.next = now.Add(interval)
+	s.next = nextRun(at, now)
 	s.mu.Unlock()
 	go func() {
 		if err := s.BackupAll(ctx); err != nil {
 			logx.Warnf("postgres backup: %v", err)
 		}
 	}()
+}
+
+// nextRun is the next occurrence of the UTC time of day at, strictly after now. An empty or invalid
+// at disables the schedule.
+func nextRun(at string, now time.Time) time.Time {
+	if at == "" {
+		return time.Time{}
+	}
+	moment, err := time.Parse("15:04", at)
+	if err != nil {
+		return time.Time{}
+	}
+	now = now.UTC()
+	next := time.Date(now.Year(), now.Month(), now.Day(), moment.Hour(), moment.Minute(), 0, 0, time.UTC)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
 }

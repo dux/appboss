@@ -16,23 +16,6 @@ func TestCandidateDSNs(t *testing.T) {
 	}
 }
 
-func TestParseEndpoint(t *testing.T) {
-	for _, test := range []struct {
-		in     string
-		host   string
-		secure bool
-	}{
-		{"https://account.r2.cloudflarestorage.com/", "account.r2.cloudflarestorage.com", true},
-		{"http://minio.local:9000", "minio.local:9000", false},
-		{"s3.amazonaws.com", "s3.amazonaws.com", true},
-	} {
-		host, secure := parseEndpoint(test.in)
-		if host != test.host || secure != test.secure {
-			t.Errorf("parseEndpoint(%q) = %q, %t; want %q, %t", test.in, host, secure, test.host, test.secure)
-		}
-	}
-}
-
 func TestCatalogRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	catalog := newCatalog(dir)
@@ -55,21 +38,22 @@ func TestCatalogRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDestinationsApplyOverride(t *testing.T) {
-	no := false
-	backup := config.PostgresBackup{Dir: "/dumps", S3: true, Databases: map[string]config.Target{
-		"both":   {},
-		"local":  {S3: &no},
-		"s3only": {Local: &no},
-	}}
-	local, s3 := backup.Destinations("both")
-	if !local || !s3 {
-		t.Fatalf("empty target should follow defaults, got local=%t s3=%t", local, s3)
+func TestSelectedDatabases(t *testing.T) {
+	days := 90
+	backup := config.PostgresBackup{
+		Days: 30,
+		Databases: map[string]config.DatabaseBackup{
+			"reports": {},
+			"app":     {Days: &days},
+		},
 	}
-	if local, s3 := backup.Destinations("local"); !local || s3 {
-		t.Fatalf("s3: false should disable s3, got local=%t s3=%t", local, s3)
+	if got := backup.Selected(); len(got) != 2 || got[0] != "app" || got[1] != "reports" {
+		t.Fatalf("Selected() = %v", got)
 	}
-	if local, s3 := backup.Destinations("s3only"); local || !s3 {
-		t.Fatalf("local: false should disable local, got local=%t s3=%t", local, s3)
+	if got := backup.RetentionDays("app"); got != 90 {
+		t.Fatalf("RetentionDays(app) = %d, want its override", got)
+	}
+	if got := backup.RetentionDays("reports"); got != 30 {
+		t.Fatalf("RetentionDays(reports) = %d, want the host policy", got)
 	}
 }

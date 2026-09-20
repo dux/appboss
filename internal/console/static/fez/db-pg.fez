@@ -4,7 +4,6 @@
       this.state.snapshot = null
       this.state.backups = []
       this.state.backup = {}
-      this.state.s3 = false
       this.state.selection = {}
       this.state.policy = {}
       this.state.loading = false
@@ -55,42 +54,56 @@
       }
       this.state.snapshot = snapshot
       this.state.backups = data.backups || []
-      this.state.backup = data.backup || {}
-      this.state.s3 = Boolean(data.s3)
+      const backup = data.backup || {}
+      this.state.backup = backup
+      // A database's keep override is preserved as-is; the form edits the host policy, not the
+      // per-database retention.
+      const databaseOpts = backup.databases || {}
       const selection = {}
       for (const database of (data.snapshot && data.snapshot.databases) || []) {
         selection[database.name] = {
-          selected: database.backup_selected,
-          local: database.backup_local,
-          s3: database.backup_s3,
+          selected: Boolean(database.backup_selected),
+          keep: databaseOpts[database.name]?.keep || null,
         }
       }
       this.state.selection = selection
-      const backup = data.backup || {}
       this.state.policy = {
         dir: backup.dir || '',
-        s3: backup.s3 !== false,
-        every: backup.every || '',
+        at: backup.at || '',
+        days: backup.days || 0,
         timeout: backup.timeout || '',
         globals: backup.globals !== false,
-        keep: backup.keep || { hourly: 0, daily: 0, weekly: 0, monthly: 0 },
       }
       this.state.dirty = false
       this.state.needsSync = true
     }
 
+    // The config stores the daily run time in UTC; the time input shows and edits local time.
+    utcToLocalTime(value) {
+      if (!value) return ''
+      const [hours, minutes] = value.split(':').map(Number)
+      if (Number.isNaN(hours) || Number.isNaN(minutes)) return ''
+      const date = new Date()
+      date.setUTCHours(hours, minutes, 0, 0)
+      return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+    }
+
+    localToUTCTime(value) {
+      if (!value) return ''
+      const [hours, minutes] = value.split(':').map(Number)
+      if (Number.isNaN(hours) || Number.isNaN(minutes)) return ''
+      const date = new Date()
+      date.setHours(hours, minutes, 0, 0)
+      return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
+    }
+
     syncInputs() {
       const policy = this.state.policy
       if (this.state.dirInput) this.state.dirInput.value = policy.dir
-      if (this.state.everyInput) this.state.everyInput.value = policy.every
+      if (this.state.atInput) this.state.atInput.value = this.utcToLocalTime(policy.at)
+      if (this.state.daysInput) this.state.daysInput.value = policy.days
       if (this.state.timeoutInput) this.state.timeoutInput.value = policy.timeout
-      if (this.state.s3Input) this.state.s3Input.checked = policy.s3
       if (this.state.globalsInput) this.state.globalsInput.checked = policy.globals
-      const keep = policy.keep || {}
-      if (this.state.hourlyInput) this.state.hourlyInput.value = keep.hourly
-      if (this.state.dailyInput) this.state.dailyInput.value = keep.daily
-      if (this.state.weeklyInput) this.state.weeklyInput.value = keep.weekly
-      if (this.state.monthlyInput) this.state.monthlyInput.value = keep.monthly
     }
 
     setFilter(value) {
@@ -108,18 +121,9 @@
       return Boolean(this.state.selection[name] && this.state.selection[name].selected)
     }
 
-    destination(name, kind) {
-      const entry = this.state.selection[name]
-      return entry ? Boolean(entry[kind]) : false
-    }
-
     toggleDatabase(name, checked) {
-      this.state.selection[name] = { ...this.state.selection[name], selected: checked }
-      this.state.dirty = true
-    }
-
-    toggleDestination(name, kind, checked) {
-      this.state.selection[name] = { ...this.state.selection[name], [kind]: checked }
+      const entry = this.state.selection[name] || { keep: null }
+      this.state.selection[name] = { ...entry, selected: checked }
       this.state.dirty = true
     }
 
@@ -133,24 +137,14 @@
       const databases = {}
       for (const [name, entry] of Object.entries(selection)) {
         if (!entry.selected) continue
-        const target = {}
-        if (!entry.local) target.local = false
-        if (!entry.s3) target.s3 = false
-        databases[name] = target
-      }
-      const keep = {
-        hourly: Number(this.state.hourlyInput.value) || 0,
-        daily: Number(this.state.dailyInput.value) || 0,
-        weekly: Number(this.state.weeklyInput.value) || 0,
-        monthly: Number(this.state.monthlyInput.value) || 0,
+        databases[name] = entry.keep ? { keep: entry.keep } : {}
       }
       const backup = {
         dir: this.state.dirInput.value.trim(),
-        s3: this.state.s3Input.checked,
-        every: this.state.everyInput.value.trim(),
+        at: this.localToUTCTime(this.state.atInput.value),
+        days: Number(this.state.daysInput.value) || 0,
         timeout: this.state.timeoutInput.value.trim(),
         globals: this.state.globalsInput.checked,
-        keep,
         databases,
       }
       try {
@@ -259,10 +253,7 @@
     }
 
     location(entry) {
-      const places = []
-      if (entry.local_path) places.push('local')
-      if (entry.s3_key) places.push('s3')
-      return places.length ? places.join(' + ') : '-'
+      return entry.local_path ? 'local' : '-'
     }
   }
 </script>
@@ -383,7 +374,7 @@
 
   <div class="section-head">
     <h2>Databases</h2>
-    <span class="text-muted">Select what to back up and where</span>
+    <span class="text-muted">Select what to back up</span>
   </div>
   <section class="card">
     <div class="card-header">
@@ -399,8 +390,6 @@
         <span class="subheader">Owner</span>
         <span class="subheader">Conns</span>
         <span class="subheader">Back up</span>
-        <span class="subheader">Local</span>
-        <span class="subheader">S3</span>
         <span class="subheader"></span>
       </div>
       {#each databases() as database}
@@ -410,8 +399,6 @@
           <span class="sys-version">{database.owner}</span>
           <span class="service-value">{database.connections}</span>
           <span><input type="checkbox" checked={state.selection[database.name].selected} onchange="fez.toggleDatabase('{database.name}', this.checked)" /></span>
-          <span><input type="checkbox" checked={state.selection[database.name].local} disabled={!state.selection[database.name].selected} onchange="fez.toggleDestination('{database.name}', 'local', this.checked)" /></span>
-          <span><input type="checkbox" checked={state.selection[database.name].s3} disabled={!state.selection[database.name].selected} onchange="fez.toggleDestination('{database.name}', 's3', this.checked)" /></span>
           <span><button class="btn btn-sm" type="button" onclick="fez.backupNow('{database.name}')" disabled={state.busy}>Back up</button></span>
         </div>
       {:else}
@@ -430,19 +417,10 @@
   <section class="card">
     <div class="datagrid pg-settings">
       <div class="datagrid-item"><span class="subheader">Local directory</span><input type="text" fez:this="dirInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Interval</span><input type="text" fez:this="everyInput" oninput="fez.markDirty()" placeholder="6h" /></div>
+      <div class="datagrid-item"><span class="subheader">Daily at (local)</span><input type="time" fez:this="atInput" oninput="fez.markDirty()" /></div>
+      <div class="datagrid-item"><span class="subheader">Retention (days)</span><input type="number" min="0" fez:this="daysInput" oninput="fez.markDirty()" /></div>
       <div class="datagrid-item"><span class="subheader">Timeout</span><input type="text" fez:this="timeoutInput" oninput="fez.markDirty()" placeholder="1h" /></div>
-      <div class="datagrid-item"><span class="subheader">S3 destination</span><label class="pg-check"><input type="checkbox" fez:this="s3Input" onchange="fez.markDirty()" /> copy to S3</label></div>
       <div class="datagrid-item"><span class="subheader">Globals</span><label class="pg-check"><input type="checkbox" fez:this="globalsInput" onchange="fez.markDirty()" /> roles &amp; tablespaces</label></div>
-    </div>
-    <div class="datagrid pg-settings pg-keep">
-      <div class="datagrid-item"><span class="subheader">Keep hourly</span><input type="number" min="0" fez:this="hourlyInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Keep daily</span><input type="number" min="0" fez:this="dailyInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Keep weekly</span><input type="number" min="0" fez:this="weeklyInput" oninput="fez.markDirty()" /></div>
-      <div class="datagrid-item"><span class="subheader">Keep monthly</span><input type="number" min="0" fez:this="monthlyInput" oninput="fez.markDirty()" /></div>
-    </div>
-    <div class="text-muted pg-note">
-      {state.s3 ? 'S3 is configured; dumps marked s3 are uploaded.' : 'S3 is not configured. Set the s3 block in the host config to enable off-host copies.'}
     </div>
     {#if state.message}
       <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>

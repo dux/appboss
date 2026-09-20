@@ -89,7 +89,6 @@ Service blocks:
 * `daemon` - ticks, schedules, log level
 * `notify` - webhook settings
 * `postgres` - connection and backup policy
-* `s3` - object storage
 
 Blocks shared by service and app:
 

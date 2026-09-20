@@ -86,9 +86,10 @@ procfile:
 ```
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
-The process that declares `domains` is the web process; a process with only a command is a background worker. Running dboss inside an app folder with no domains binds the first process to `.lvh.me`.
+Every process that declares `domains` is a web process, and an app may have several, each serving its own hostnames; a process with only a command is a background worker. Running dboss inside an app folder with no domains binds the first process to `.lvh.me`.
 Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` equals `allow_ips: [10.0.0.0/8]`.
 A leading `*.` in a domain matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `domains: .myapp.com` covers `myapp.com` and `*.myapp.com`.
+The web process can also set `canonical_host` (one of its domains); every other domain answers 301 to it, so `www` never serves content.
 `proxy.listen` and `management.host` are such lists: several listen addresses each get a listener with the same routing, and several console hostnames are all accepted.
 A `$NAME` in a value is replaced with that variable from the daemon's environment at load time, so `url: $ALERT_WEBHOOK_URL` keeps a secret out of the file; only all-uppercase names expand, an unset name stays as written, and `procfile` and cron commands are never expanded because they are runtime shell lines.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
@@ -250,15 +251,15 @@ procfile:
     pubsub: true            # or /socketio, or a mapping
     # pubsub:
     #   path: /socketio
-    #   secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per app under state_dir
+    #   secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per web process under state_dir
     #   replay: 10               # messages kept per channel and replayed to a late subscriber
-    #   max_clients: 500         # subscriber cap per app; 0 means unlimited
+    #   max_clients: 500         # subscriber cap per hub; 0 means unlimited
     #   max_message_size: 64k    # largest publish body; 0 means unlimited
     #   client_events: true      # a WebSocket client may publish to its own channel
     #   test: false              # serve the browser self-test at <path>/_test
 ```
 
-`pubsub` lives on the web process only, because the hub is served on that process's domains.
+`pubsub` lives on a web process, because the hub is served on that process's domains. An app with several web processes may run one hub per process, each with its own path, secret and channels.
 
 **Subscribe.** A `GET <path>/<channel>` upgrades to a WebSocket, or streams SSE when the request carries no `Upgrade` header. Messages are `{"event","data","ts"}`; the last `replay` are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher.
 
@@ -284,11 +285,11 @@ curl -X POST https://myapp.example.com/socketio/chat \
   -d '{"event":"message","data":{"text":"hello"}}'
 ```
 
-The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`, and satisfies a publish even when the app sets `basic_auth`. With no `secret` in the config, dboss generates a 64-character one per app under `state_dir/pubsub-secrets.json` on first use; `dboss pubsub` prints it, and `dboss pubsub rotate [app]` replaces it.
+The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`, and satisfies a publish even when the app sets `basic_auth`. With no `secret` in the config, dboss generates a 64-character one per web process under `state_dir/pubsub-secrets.json` on first use; `dboss pubsub` prints it, and `dboss pubsub rotate [app]` replaces it.
 
 **Self-test.** With `test: true`, `GET <path>/_test` serves a page that opens a WebSocket and an SSE connection and reports PASS or FAIL in the browser.
 
-`dboss pubsub [app]` lists channels and subscriber counts, `dboss pubsub secret [app]` prints the credential and example URLs, `dboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `dboss pubsub help` prints the integration guide. The console's **PubSub** tab (when any web process sets `pubsub`) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `dboss_pubsub_clients`, `dboss_pubsub_channels` and `dboss_pubsub_messages_total`, each labeled by app.
+`dboss pubsub [app]` lists channels and subscriber counts, `dboss pubsub secret [app] [--process name]` prints the credential and example URLs, `dboss pubsub publish [app] <channel> [--event name] [--data json|-] [--process name]` sends a message through the control socket, and `dboss pubsub help` prints the integration guide. Name `--process` only when the app runs several hubs. The console's **PubSub** tab (when any web process sets `pubsub`) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `dboss_pubsub_clients`, `dboss_pubsub_channels` and `dboss_pubsub_messages_total`, each labeled by app.
 
 ## Health and metrics
 
@@ -302,7 +303,7 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while a visitor would be served, `503` otherwise. An app stopped by `idle_stop` (or `dboss stop`) still answers `200` with `"state":"stopped"`, because the next request wakes it, so a Cloudflare Health Check or Load Balancer never flags a sleeping app. Draining, maintenance, starting, crashed and a stopped `autostart: button` app answer `503`. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
-The supervisor also watches the web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
+The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
 `dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
 
@@ -319,46 +320,35 @@ notify:
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump or upload that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over `alerts.window`, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over `alerts.window`, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
 
 ## PostgreSQL inspection and backups
 
 When a PostgreSQL server is reachable, the console gains a **PostgreSQL** tab and the daemon can back up selected databases on a schedule.
 
-Configuration is two host-level blocks:
+Configuration is one host-level block:
 
 ```yaml
 postgres:
   enabled: true
   dsn: $DATABASE_URL            # empty auto-detects the local socket, then 127.0.0.1:5432
   backup:
-    dir: ./.dboss/pg-backups  # local destination; empty disables local copies
-    s3: true                    # default: also upload to the s3 block
-    every: 6h                   # 0 makes backups manual only
+    dir: ./pg_backups           # destination, one subfolder per database
+    at: "04:00"                 # one daily run, UTC; the tab shows local time
+    days: 30                    # keep 30 days of dumps; 0 keeps them forever
     timeout: 1h
     globals: true               # also pg_dumpall --globals-only (roles and tablespaces)
-    keep: {hourly: 24, daily: 7, weekly: 8, monthly: 6}
     databases:
-      myapp_production: {}          # local + s3
-      reports: {local: false}       # s3 only
-      legacy: {s3: false}           # local only
-
-s3:
-  endpoint: https://<account>.r2.cloudflarestorage.com
-  region: auto
-  bucket: dboss-backups
-  prefix: pg/
-  access_key: $S3_ACCESS_KEY
-  secret_key: $S3_SECRET_KEY
-  path_style: false
-  sse: ""
+      myapp_production: {}       # uses the host retention
+      reports:
+        days: 90                 # per-database retention override
 ```
 
 The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, every database with its size and owner, and the backup history.
 
-Backups are per-database logical dumps (`pg_dump -Fc`), optional cluster globals (`pg_dumpall --globals-only`), and copy to the local directory and/or the `s3` bucket. Retention is grandfather-father-son: each bucket keeps the newest N dumps for its hour, day, ISO week and month, and prunes the rest from disk, S3 and the catalog. The catalog lives at `state_dir/pg-backups.json`.
+Backups are per-database logical dumps (`pg_dump -Fc`), optional cluster globals (`pg_dumpall --globals-only`), written to the local directory. One run happens each day at `at` (UTC), and dumps older than `days` are pruned from disk and the catalog; `days: 0` keeps them forever. The catalog lives at `state_dir/pg-backups.json`.
 
-The console's checkboxes write the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reload the daemon, so no restart is needed. Restore verifies the checksum and dump listing, then loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation.
+The console's checkboxes write the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reload the daemon, so no restart is needed. A plain edit on disk applies on the next config save or `dboss rescan`. Restore verifies the checksum and dump listing, then loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation.
 
 On the box this feature needs `pg_dump`, `pg_dumpall` and `pg_restore` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:
 
@@ -432,10 +422,11 @@ Each request walks the stages in this order: canonical redirect, `allow_ips`, he
 
 ## Static files and error pages
 
-Every app serves `./public` straight from disk (`static`, relative to the app folder) for GET and HEAD, without waking the app.
+Each web process serves `./public` straight from disk (`static` on the web procfile entry, relative to the app folder) for GET and HEAD, without waking the app.
+Set `static: /path` for another directory or `static: false` to disable it for that process.
 Only the common asset types in `static_extensions` are served: css, js, mjs, map, json, txt, xml, ico, images, fonts, mp4, webm, mp3, pdf, wasm and webmanifest.
 A missing file, a directory, or a file with any other extension (an `.html` page, a dotfile, no extension) is a normal request to the app, so a route always wins over a stray file.
-A missing `public` folder simply turns static serving off for that app; `static: ""` does the same on purpose and `static_extensions: []` serves any regular file.
+A missing `public` folder simply turns static serving off; `static_extensions: []` serves any regular file.
 Paths under `static_immutable` (default `/assets/`) are cached as immutable for a year, everything else for an hour.
 
 `error_page_path` names one static HTML file, relative to the app folder (for example `public/error_500.html`).
@@ -455,7 +446,7 @@ Single-app mode cannot destroy itself, and retained logs, audit rows and config 
 
 On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Real-IP` when they are missing; whatever Cloudflare sent is left untouched. `X-Forwarded-For` is appended by the reverse proxy.
 
-An app's processes start with the web process (the one with `domains`) first, then the rest in name order, so a web process that expects other services to be up still gets that.
+An app's processes start with the web processes (the ones with `domains`) first, then the rest in name order, so a web process that expects other services to be up still gets that.
 
 ## Audit log
 
@@ -486,7 +477,7 @@ management console: https://dboss.example.com (AuthCog sign-in)
 `dboss start --login` also prints a one-time loopback sign-in link on stdout (never in the daemon log); `make demo` uses it.
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, and adds a typed-confirmation destroy action when the app sets `deletable: true`.
 It links to the process logs and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
-The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; S3, Notifications and the PostgreSQL connection for the host).
+The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
 A form save is written to the server-only `dboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
 The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, uptime, load, memory and disk use, the dboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
@@ -561,7 +552,7 @@ internal/logstore/    per-app SQLite log store: requests, channels, FTS search, 
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
 internal/logx/        leveled logger for dboss's own output (daemon.log_level)
 internal/sysinfo/     read-only host inspection: OS, load, memory, disks and installed toolchains
-internal/pg/          PostgreSQL inspection, scheduled dumps, S3 upload, retention and restore
+internal/pg/          PostgreSQL inspection, scheduled dumps, retention and restore
 internal/metrics/     Prometheus text rendered from the app snapshots
 internal/notify/      debounced operator webhook for crash and failure events
 internal/version/     release version, overridden at build time

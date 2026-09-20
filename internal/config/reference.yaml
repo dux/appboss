@@ -162,7 +162,9 @@ management:
   # or host (for example an http demo); its host must be one of the hosts above.
   url: ""
   auth:
-    # AuthCog realm used for login and the server-side callback exchange.
+    # Full AuthCog hostname used for login and the server-side callback exchange. Unlike an app's
+    # authcog.realm, which is a bare subdomain label (auth means auth.authcog.com), this is the
+    # whole host.
     realm: auth.authcog.com
     # Only these authenticated email addresses may open the console.
     admin_emails:
@@ -201,14 +203,14 @@ defaults:
   idle_stop: 6h
 
   # Readiness check after spawn, flips starting -> running.
-  # The check itself is `health` on the web process in the procfile: a path such as /up that must
-  # answer 2xx, or omitted for a plain TCP connect to PORT. Only the web process is checked.
+  # The check itself is `health` on a web process in the procfile: a path such as /up that must
+  # answer 2xx, or omitted for a plain TCP connect to PORT. Only web processes are checked.
   health_interval: 500ms
   health_timeout: 60s
-  # After the web process is ready it keeps being polled at health_interval. This many
+  # After a web process is ready it keeps being polled at health_interval. This many
   # consecutive failures restart it (kill, then the restart policy, backoff and max_restarts
   # apply); one success resets the count. 0 disables the ongoing check, so only readiness runs.
-  # Applies to the web process only; workers are covered by their exit and restart policy.
+  # Applies to web processes only; workers are covered by their exit and restart policy.
   unhealthy_threshold: 3
 
   # Graceful stop: SIGTERM to the process group, wait, then SIGKILL.
@@ -218,7 +220,7 @@ defaults:
   # Restart policy when a process exits on its own (not via dboss stop).
   #   on-failure   restart only when exit code != 0 or killed by signal
   #   always       restart on any exit
-  #   never        leave it stopped, mark app crashed if it was the web process
+  #   never        leave it stopped, mark app crashed if it was a web process
   restart: on-failure
   # Consecutive failures before the app is marked crashed and left alone.
   # A process that stays up longer than restart_reset resets the counter.
@@ -261,20 +263,17 @@ defaults:
   memory_max: 0             # 0 = unlimited. e.g. 512m
   cpu_max: 0                # 0 = unlimited. percent of one core, e.g. 150
 
-  # --- Web keys: what nginx or Caddy did in front of the app. App-level only. -------------
+  # --- Web keys: what nginx or Caddy did in front of the app. Shared by every web process. ----
+  # Set here for every app, or at the top level of one app's file to override it there. The
+  # per-process web keys (domains, static, pubsub, health, canonical_host) live on the procfile
+  # entry instead.
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
   # Order per request: canonical redirect -> allow_ips -> auth -> basic_auth -> maintenance -> static
   # -> max_body/body buffer -> wake or forward -> headers.
 
-  # Directory served straight from disk for GET and HEAD, relative to the app folder.
-  # A missing directory disables static serving for that app, so the default is safe for every
-  # app; "" turns it off. Regular files only; directories, missing files and extensions outside
-  # static_extensions fall through to the app as a normal request. No index lookup.
-  # Served with Last-Modified, If-Modified-Since and range support, without waking the app.
-  static: ./public
-  # File extensions served from static, lowercase and without the dot; the match ignores case.
-  # Anything else under the directory (an .html page, a dotfile, a file with no extension) is
-  # the app's to answer, even when the file exists. [] serves any regular file.
+  # File extensions served from the web process's static directory, lowercase and without the dot;
+  # the match ignores case. Anything else under the directory (an .html page, a dotfile, a file
+  # with no extension) is the app's to answer, even when the file exists. [] serves any regular file.
   static_extensions: [css, js, mjs, map, json, txt, xml, ico, png, jpg, jpeg, gif, svg, webp, avif, woff, woff2, ttf, otf, eot, mp4, webm, mp3, pdf, wasm, webmanifest]
   # Public status path on the app's own hosts, so a Cloudflare health check or uptime monitor
   # can probe the app domain. GET/HEAD answer 200 {"app","state"} while a visitor would be served:
@@ -282,8 +281,8 @@ defaults:
   # maintenance, starting, crashed and a stopped `autostart: button` app answer 503.
   # It runs before basic auth and never wakes the app. Empty disables it.
   health_endpoint: /.well-known/dboss/health
-  # Path prefixes under static that get "public, max-age=31536000, immutable".
-  # Everything else under static gets "public, max-age=3600".
+  # Path prefixes under the static directory that get "public, max-age=31536000, immutable".
+  # Everything else under it gets "public, max-age=3600".
   static_immutable: [/assets/]
 
   # Request body limit. 0 = none. The body is read in full before the app is contacted
@@ -309,14 +308,15 @@ defaults:
   #   X-Powered-By: ""
 
   # File served while the app is in maintenance mode (`dboss maintenance <app> on`), relative
-  # to the app folder. Default: <static>/503.html when it exists, then the built-in page.
+  # to the app folder. Default: 503.html under the web process's static directory when it exists,
+  # then the built-in page.
   # HTML GETs get the page with 503 and Retry-After: 30; everything else an empty 503.
   maintenance_page: ""
 
   # Static HTML file served instead of an error, relative to the app folder, sent as it is on disk
   # (no placeholders) and read on every request. Only a GET that accepts text/html gets a page;
   # API and non-GET requests are never rewritten.
-  #   - dboss's own errors (502 upstream unavailable or timed out, web process has no port):
+  #   - dboss's own errors (502 upstream unavailable or timed out, a web process has no port):
   #     this file, or the built-in page when the key is empty or the file is unreadable.
   #   - the app's own 5xx answers: replaced with this file, status kept, only when the key is set
   #     and the file is readable. Empty keeps the app's own error page.
@@ -364,7 +364,7 @@ notify:
   # Events to post:
   #   crash           an app entered the crashed state
   #   restart-loop    a process failed and restarted again (second failure and later)
-  #   health-timeout  the readiness check gave up, or the web process failed its liveness checks
+  #   health-timeout  the readiness check gave up, or a web process failed its liveness checks
   #   wake-failed     a request tried to start a stopped app and the start failed
   #   hook-failed     a deploy hook exited non-zero
   #   deploy          a deploy hook with restart: true succeeded and the app rolled
@@ -393,53 +393,24 @@ postgres:
   # Empty means: try /var/run/postgresql, then 127.0.0.1:5432, with the PG* environment merged in.
   dsn: ""
   backup:
-    # Local directory that receives dumps, one subfolder per database. Empty disables local
-    # copies, so a database with s3: false and no dir has nowhere to go and is rejected.
-    dir: ./.dboss/pg-backups
-    # Default destination for every selected database. A database can override it per entry.
-    s3: true
-    # Interval between scheduled backups, a Go duration. 0 makes backups manual only.
-    every: 6h
+    # Directory that receives dumps, one subfolder per database. Required when a database or the
+    # globals are selected.
+    dir: ./pg_backups
+    # UTC time of the one daily backup run, HH:MM. Empty disables scheduled backups, so dumps are
+    # manual only. The console shows and edits this in local time.
+    at: "04:00"
+    # Days of dumps kept. 0 keeps them forever.
+    days: 30
     # Kill a dump that is still running after this long. 0 means no limit.
     timeout: 1h
     # Also dump roles and tablespaces with pg_dumpall --globals-only, as one _globals entry.
     globals: true
-    # Grandfather-father-son retention. Each bucket keeps the newest N dumps for its period
-    # (hour, day, ISO week, month) and the rest are removed from disk and S3. 0 disables a bucket.
-    keep:
-      hourly: 24
-      daily: 7
-      weekly: 8
-      monthly: 6
-    # Databases to back up. A key being present selects the database; the value overrides the
-    # destinations above. {} selects it for both local and s3.
-    databases: {}
-    #   myapp_production: {}            # local + s3
-    #   reports: {local: false}         # s3 only
-    #   legacy: {s3: false}             # local only
-
-# --- Object storage ----------------------------------------------------------
-# Optional S3-compatible storage for off-host backup copies. Cloudflare R2, AWS S3 and MinIO all
-# work. Empty endpoint or bucket disables it. Keep the keys out of the committed file with $VARS.
-
-s3:
-  # Full endpoint URL. Empty disables object storage.
-  endpoint: ""
-  #   https://<account>.r2.cloudflarestorage.com
-  # Bucket region. auto is the R2 default.
-  region: auto
-  # Bucket that receives the objects. Empty disables object storage.
-  bucket: ""
-  #   dboss-backups
-  # Key prefix prepended to every object (a trailing / is added).
-  prefix: ""
-  #   pg/
-  access_key: $S3_ACCESS_KEY
-  secret_key: $S3_SECRET_KEY
-  # Path-style addressing. Required by MinIO and some other S3 servers.
-  path_style: false
-  # Server-side encryption algorithm for uploads, e.g. AES256. Empty uses the bucket default.
-  sse: ""
+    # Databases to dump into dir on the daily run, one subfolder each. A key selects the database;
+    # its block may override the host retention with its own days.
+    databases:
+      myapp_production: {}
+      reports:
+        days: 90
 
 # =============================================================================
 # PART 2: <app>/dboss.yaml   (required, per app)
@@ -452,30 +423,44 @@ s3:
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
 # Command strings are not env-expanded; $VAR is passed to the shell at run time.
-# A scalar value is a background process. A mapping adds domains; the single process that
-# declares domains is the web process that receives proxied traffic, and its command must not
-# be empty. An app with no domains anywhere is background-only. Domains are matched against the
-# request Host header, case-insensitive, port stripped. A leading "*." matches subdomains only;
-# a leading "." matches the bare domain and every subdomain, so ".myapp.com" means "myapp.com"
-# and "*.myapp.com". Longest match wins.
+# A scalar value is a background process. A mapping adds domains; every process that declares
+# domains is a web process that receives proxied traffic on those domains, and its command must
+# not be empty. An app may have several web processes, each with its own domains, health,
+# canonical host and realtime hub, and each bound to its own PORT. An app with no domains
+# anywhere is background-only. Domains are matched against the request Host header,
+# case-insensitive, port stripped, and must be unique across the app's web processes. A leading
+# "*." matches subdomains only; a leading "." matches the bare domain and every subdomain, so
+# ".myapp.com" means "myapp.com" and "*.myapp.com". Longest match wins.
 # In single mode (no domains declared) the first process is bound to .lvh.me for local dev.
 #
-# The web process may also set `health`, the readiness path dboss polls until the start flips to
+# A web process may set `static`, the directory served straight from disk for GET and HEAD on its
+# hosts. `static: true` (the default) uses ./public, a path sets another directory, and
+# `static: false` disables it. Files are resolved relative to the app folder on every request, so a
+# release symlink swap is picked up immediately. Regular files only, and only the extensions in
+# static_extensions: a directory, a missing file or another extension falls through to the app.
+# No index lookup. Served with Last-Modified, If-Modified-Since and range support, without waking
+# the app.
+#
+# A web process may set `health`, the readiness path dboss polls until the start flips to
 # running, e.g. /up (GET http://127.0.0.1:PORT/up must answer 2xx). Omitted means a plain TCP
 # connect. The same check keeps the process alive after readiness; see unhealthy_threshold.
 #
-# The web process may also set `pubsub`, a realtime hub dboss serves on its domains. It accepts
+# A web process may set `canonical_host`, one of its domains. Requests for any other of its
+# domains answer 301 to <scheme>://<canonical_host><path?query>; the scheme follows
+# X-Forwarded-Proto, default https. Runs before auth and static files, so www never serves content.
+#
+# A web process may set `pubsub`, a realtime hub dboss serves on its domains. It accepts
 # true (the /socketio default), a path, or a mapping:
 #   pubsub: true                    -> path /socketio
 #   pubsub: /realtime               -> that path
 #   pubsub:                         -> full settings
 #     path: /socketio
-#     # Bearer token a publisher presents. Empty generates a 64-character secret per app under
-#     # state_dir on first use; `dboss pubsub` prints it and `dboss pubsub rotate` replaces it.
+#     # Bearer token a publisher presents. Empty generates a 64-character secret per web process
+#     # under state_dir on first use; `dboss pubsub` prints it and `dboss pubsub rotate` replaces it.
 #     secret: $PUBSUB_SECRET
 #     # Messages kept per channel and replayed to a late subscriber, oldest first.
 #     replay: 10
-#     # Subscriber limit per app across all channels. 0 means unlimited; further connects get 503.
+#     # Subscriber limit per hub across all channels. 0 means unlimited; further connects get 503.
 #     max_clients: 500
 #     # Largest accepted publish body. 0 means unlimited.
 #     max_message_size: 64k
@@ -493,7 +478,9 @@ procfile:
     domains:
       - ".myapp.com"
     pubsub: true
+    static: ./public
     health: /up
+    canonical_host: myapp.com
   worker: bundle exec lux jobs:work
   cron: bundle exec lux jobs:cron
 
@@ -509,11 +496,6 @@ autostart: true
 # unlinked without following its target. Single-app mode can never destroy itself.
 deletable: false
 
-# Optional. Must be one of the web process domains. Requests for any other host answer 301 to
-# <scheme>://<canonical_host><path?query>; the scheme follows X-Forwarded-Proto, default https.
-# Runs before auth and static files, so www never serves content.
-canonical_host: myapp.com
-
 # Per-app overrides of defaults.* (all optional, same semantics as above).
 idle_stop: 0                # this app never sleeps
 health_timeout: 90s
@@ -528,7 +510,6 @@ memory_max: 512m
 cpu_max: 0
 env:
   MALLOC_ARENA_MAX: "2"
-static: ./public
 static_immutable: [/assets/, /packs/]
 max_body: 50m
 headers:
@@ -541,8 +522,9 @@ headers:
 # through the proxy. Read the allocation with `dboss ports`.
 
 # Per-proctype overrides. Process keys only (stop, restart, logs, shell, env,
-# resources); a web key here is an error, and `health` lives on the web procfile entry.
-# Useful for a worker that needs a longer stop_timeout than the web process.
+# resources); a web key here is an error, and `health`/`canonical_host`/`static`/`pubsub` live on
+# the web procfile entry.
+# Useful for a worker that needs a longer stop_timeout than the web process it runs next to.
 processes:
   worker:
     stop_timeout: 120s

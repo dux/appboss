@@ -197,9 +197,9 @@ func validateApp(appCfg config.App) (map[string]Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(appCfg.Hosts) > 0 {
-		if _, ok := commands[appCfg.WebProcess]; !ok {
-			return nil, fmt.Errorf("web process %q is not in procfile", appCfg.WebProcess)
+	for _, web := range appCfg.WebProcesses {
+		if _, ok := commands[web.Name]; !ok {
+			return nil, fmt.Errorf("web process %q is not in procfile", web.Name)
 		}
 	}
 	for process := range appCfg.Processes {

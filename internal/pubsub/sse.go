@@ -6,17 +6,16 @@ import (
 	"net/http"
 	"time"
 
-	"dboss/internal/config"
 	"dboss/internal/super"
 )
 
-func (s *Service) serveSSE(w http.ResponseWriter, r *http.Request, app super.Snapshot, cfg config.Pubsub, channel string) {
-	sub, backlog, err := s.subscribe(app.Name, channel, cfg)
+func (s *Service) serveSSE(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+	sub, backlog, err := s.subscribe(hubID{app, web.Name}, channel, web.Pubsub)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	defer s.unsubscribe(app.Name, channel, sub)
+	defer s.unsubscribe(hubID{app, web.Name}, channel, sub)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

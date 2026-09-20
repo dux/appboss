@@ -41,7 +41,7 @@ func (h *Handler) writePG(w http.ResponseWriter) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "s3": h.service.S3Configured(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
 // pgRefresh re-inspects the server on demand. It is read-only, so it writes no audit row.
@@ -54,7 +54,7 @@ func (h *Handler) pgRefresh(w http.ResponseWriter, r *http.Request, session auth
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "s3": h.service.S3Configured(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
 func (h *Handler) writePGBackups(w http.ResponseWriter) {
@@ -140,7 +140,7 @@ func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authS
 	}
 	h.service.Audit(session.Email, "", "pg-config", written.ID, nil)
 	snapshot, _ := h.service.PGSnapshot(false)
-	writeJSON(w, http.StatusOK, map[string]any{"file": written, "snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "s3": h.service.S3Configured(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"file": written, "snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
 // patchPostgresBackup replaces the postgres.backup mapping in a host config, leaving every other

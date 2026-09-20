@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -175,7 +176,6 @@ type Config struct {
 	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
 	Notify     Notify     `yaml:"notify" json:"notify"`
 	Postgres   Postgres   `yaml:"postgres" json:"postgres"`
-	S3         S3         `yaml:"s3" json:"s3"`
 }
 
 // Postgres is the host's PostgreSQL server. The console inspects it read-only and the daemon
@@ -186,44 +186,22 @@ type Postgres struct {
 	Backup  PostgresBackup `yaml:"backup" json:"backup"`
 }
 
-// PostgresBackup is the host-wide backup policy. Databases maps a database name to its
-// destination overrides; a key being present selects the database.
+// PostgresBackup is the host-wide backup policy. One daily run at At (UTC) dumps the databases in
+// Databases and, when Globals is set, the cluster globals. Databases maps a database name to its
+// per-database overrides; a key being present selects the database.
 type PostgresBackup struct {
-	Dir       string            `yaml:"dir" json:"dir"`
-	S3        bool              `yaml:"s3" json:"s3"`
-	Every     Duration          `yaml:"every" json:"every"`
-	Timeout   Duration          `yaml:"timeout" json:"timeout"`
-	Globals   bool              `yaml:"globals" json:"globals"`
-	Keep      PostgresKeep      `yaml:"keep" json:"keep"`
-	Databases map[string]Target `yaml:"databases" json:"databases"`
+	Dir       string                    `yaml:"dir" json:"dir"`
+	At        string                    `yaml:"at" json:"at"`
+	Days      int                       `yaml:"days" json:"days"`
+	Timeout   Duration                  `yaml:"timeout" json:"timeout"`
+	Globals   bool                      `yaml:"globals" json:"globals"`
+	Databases map[string]DatabaseBackup `yaml:"databases" json:"databases"`
 }
 
-// PostgresKeep is the grandfather-father-son retention policy: the newest N dumps are kept in
-// each bucket and the rest are pruned. Zero disables that bucket.
-type PostgresKeep struct {
-	Hourly  int `yaml:"hourly" json:"hourly"`
-	Daily   int `yaml:"daily" json:"daily"`
-	Weekly  int `yaml:"weekly" json:"weekly"`
-	Monthly int `yaml:"monthly" json:"monthly"`
-}
-
-// Target overrides where one database's dumps go. A nil field follows the backup-level default.
-type Target struct {
-	Local *bool `yaml:"local" json:"local,omitempty"`
-	S3    *bool `yaml:"s3" json:"s3,omitempty"`
-}
-
-// S3 is the optional object storage used for off-host backup copies. Empty endpoint or bucket
-// disables it.
-type S3 struct {
-	Endpoint  string `yaml:"endpoint" json:"endpoint"`
-	Region    string `yaml:"region" json:"region"`
-	Bucket    string `yaml:"bucket" json:"bucket"`
-	Prefix    string `yaml:"prefix" json:"prefix"`
-	AccessKey string `yaml:"access_key" json:"access_key,omitempty"`
-	SecretKey string `yaml:"secret_key" json:"-"`
-	PathStyle bool   `yaml:"path_style" json:"path_style"`
-	SSE       string `yaml:"sse" json:"sse"`
+// DatabaseBackup overrides the host backup policy for one database. A nil field follows the host
+// policy.
+type DatabaseBackup struct {
+	Days *int `yaml:"days,omitempty" json:"days,omitempty"`
 }
 
 // Proxy has one listener per Listen address; every listener serves the same routing.
@@ -313,7 +291,7 @@ type Defaults struct {
 }
 
 type Process struct {
-	IdleStop           Duration          `yaml:"idle_stop" json:"idle_stop"`
+	IdleStop Duration `yaml:"idle_stop" json:"idle_stop"`
 	// Health is resolved from the web process's procfile health path; it is not a settable key.
 	Health             string            `yaml:"-" json:"-"`
 	HealthInterval     Duration          `yaml:"health_interval" json:"health_interval"`
@@ -342,7 +320,6 @@ type Process struct {
 // hashes stay out of the console and `dboss status --json`.
 type Web struct {
 	HealthEndpoint   string            `yaml:"health_endpoint" json:"health_endpoint"`
-	Static           string            `yaml:"static" json:"static"`
 	StaticImmutable  List              `yaml:"static_immutable" json:"static_immutable"`
 	StaticExtensions List              `yaml:"static_extensions" json:"static_extensions"`
 	MaxBody          Size              `yaml:"max_body" json:"max_body"`
@@ -351,12 +328,10 @@ type Web struct {
 	Headers          map[string]string `yaml:"headers" json:"headers"`
 	MaintenancePage  string            `yaml:"maintenance_page" json:"maintenance_page"`
 	ErrorPagePath    string            `yaml:"error_page_path" json:"error_page_path"`
-	// Pubsub is resolved from the web process's pubsub option; it is not a settable key of its own.
-	Pubsub        Pubsub  `yaml:"-" json:"-"`
-	Alerts        Alerts  `yaml:"alerts" json:"alerts"`
-	Auth          Auth    `yaml:"auth" json:"auth"`
-	AuthCog       AuthCog `yaml:"authcog" json:"authcog"`
-	allowPrefixes []netip.Prefix
+	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
+	Auth             Auth              `yaml:"auth" json:"auth"`
+	AuthCog          AuthCog           `yaml:"authcog" json:"authcog"`
+	allowPrefixes    []netip.Prefix
 }
 
 // AuthCog is the app-only login service: dboss runs the AuthCog round trip on the app's behalf
@@ -435,6 +410,9 @@ type Pubsub struct {
 // Enabled reports whether the app serves realtime channels.
 func (p Pubsub) Enabled() bool { return p.Path != "" }
 
+// defaultPubsub is the base every web process's hub starts from; the procfile entry overrides keys.
+var defaultPubsub = Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}
+
 // AllowPrefixes is allow_ips parsed at load time; empty means every client is allowed.
 func (w Web) AllowPrefixes() []netip.Prefix { return w.allowPrefixes }
 
@@ -464,11 +442,10 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, TLS: ProxyTLS{Redirect: true}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", Static: "./public", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}, AuthCog: AuthCog{Realm: "auth", Path: "/authcog"}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}, AuthCog: AuthCog{Realm: "auth", Path: "/authcog"}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
 		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed", "error-rate", "slow"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
-		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".dboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
-		S3:         S3{Region: "auto"},
+		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: "./pg_backups", At: "04:00", Days: 30, Timeout: Duration(time.Hour), Globals: true}},
 	}
 }
 
@@ -479,7 +456,7 @@ type file struct {
 	appFile `yaml:",inline"`
 }
 
-var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres", "s3"}
+var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres"}
 
 // decode parses one document into raw and reports every top-level key present in it. The node
 // tree is kept so every error can be pointed at a line and a key.
@@ -581,6 +558,20 @@ func Parse(data []byte, path string) (Config, error) {
 	if hasApp && keys["apps"] {
 		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root dboss.yaml or drop apps"}, path, root)
 	}
+	if !hasApp {
+		// A host file only accepts the host keys; the shared and app keys are ignored otherwise,
+		// and silently ignoring a setting is worse than rejecting it.
+		names := make([]string, 0, len(keys))
+		for key := range keys {
+			names = append(names, key)
+		}
+		sort.Strings(names)
+		for _, key := range names {
+			if !slices.Contains(hostKeys, key) {
+				return Config{}, located(&Error{Key: key, Message: "is only valid in an app file", Hint: "put shared keys under defaults: in the host file"}, path, root)
+			}
+		}
+	}
 	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
 	if hasApp {
 		// Single mode: the root file is the app, so the host apps directory does not apply.
@@ -619,6 +610,7 @@ func RestartRequired(old, current Config) []string {
 		{"management", !reflect.DeepEqual(old.Management, current.Management)},
 		{"ports", old.Ports != current.Ports},
 		{"daemon", old.Daemon != current.Daemon},
+		{"notify", !reflect.DeepEqual(old.Notify, current.Notify)},
 	} {
 		if key.changed {
 			keys = append(keys, key.name)
@@ -697,29 +689,10 @@ func (c Config) validate(hasApp bool) error {
 	if err := validateNotify(c.Notify); err != nil {
 		return scoped(err, "notify")
 	}
-	if err := validateS3(c.S3); err != nil {
-		return scoped(err, "s3")
-	}
-	if err := validatePostgres(c.Postgres, c.S3); err != nil {
+	if err := validatePostgres(c.Postgres); err != nil {
 		return scoped(err, "postgres")
 	}
 	return nil
-}
-
-// Destinations reports where a database's dumps go, applying its per-database override to the
-// backup-level defaults. A database that is not in Databases still gets the defaults, so the
-// caller decides whether it is selected by checking the map.
-func (b PostgresBackup) Destinations(name string) (local, s3 bool) {
-	local, s3 = b.Dir != "", b.S3
-	if target, ok := b.Databases[name]; ok {
-		if target.Local != nil {
-			local = *target.Local
-		}
-		if target.S3 != nil {
-			s3 = *target.S3
-		}
-	}
-	return local, s3
 }
 
 // Selected lists the databases configured for backup.
@@ -732,57 +705,43 @@ func (b PostgresBackup) Selected() []string {
 	return names
 }
 
+// RetentionDays returns the number of days of dumps kept for one database: its own days override
+// when set, else the host policy. 0 keeps them forever.
+func (b PostgresBackup) RetentionDays(name string) int {
+	if target, ok := b.Databases[name]; ok && target.Days != nil {
+		return *target.Days
+	}
+	return b.Days
+}
+
 var databaseName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,62}$`)
 
-func validatePostgres(p Postgres, s3 S3) error {
+func validatePostgres(p Postgres) error {
 	if !p.Enabled {
 		return nil
 	}
-	for key, value := range map[string]Duration{"every": p.Backup.Every, "timeout": p.Backup.Timeout} {
-		if value < 0 {
-			return keyErr("backup."+key, "cannot be negative")
+	if p.Backup.At != "" {
+		if _, err := time.Parse("15:04", p.Backup.At); err != nil {
+			return keyErr("backup.at", "must be a UTC time HH:MM, not %q", p.Backup.At)
 		}
 	}
-	for key, value := range map[string]int{"hourly": p.Backup.Keep.Hourly, "daily": p.Backup.Keep.Daily, "weekly": p.Backup.Keep.Weekly, "monthly": p.Backup.Keep.Monthly} {
-		if value < 0 {
-			return keyErr("backup.keep."+key, "cannot be negative")
-		}
+	if p.Backup.Days < 0 {
+		return keyErr("backup.days", "cannot be negative")
 	}
-	for _, name := range p.Backup.Selected() {
+	if p.Backup.Timeout < 0 {
+		return keyErr("backup.timeout", "cannot be negative")
+	}
+	selected := p.Backup.Selected()
+	if (len(selected) > 0 || p.Backup.Globals) && p.Backup.Dir == "" {
+		return &Error{Key: "backup.dir", Message: "a directory is required when databases or globals are backed up"}
+	}
+	for _, name := range selected {
 		if !databaseName.MatchString(name) {
 			return &Error{Key: "backup.databases", Message: fmt.Sprintf("invalid database name %q", name), Hint: "names match [A-Za-z_][A-Za-z0-9_$]*, e.g. myapp_production"}
 		}
-		local, wants3 := p.Backup.Destinations(name)
-		if !local && !wants3 {
-			return keyErr("backup.databases", "database %q has neither a local nor an s3 destination", name)
+		if target := p.Backup.Databases[name]; target.Days != nil && *target.Days < 0 {
+			return keyErr("backup.databases."+name+".days", "cannot be negative")
 		}
-		if wants3 && !s3.Configured() {
-			return &Error{Key: "backup.databases", Message: fmt.Sprintf("database %q targets s3 but s3 is not configured", name), Hint: "set s3.endpoint, s3.bucket and credentials, or set local: true"}
-		}
-	}
-	return nil
-}
-
-// Configured reports whether the S3 block has enough to store objects.
-func (s S3) Configured() bool {
-	return s.Endpoint != "" && s.Bucket != "" && s.AccessKey != "" && s.SecretKey != ""
-}
-
-func validateS3(s S3) error {
-	if s.Endpoint == "" && s.Bucket == "" {
-		return nil
-	}
-	if s.Endpoint == "" || s.Bucket == "" {
-		return &Error{Key: "endpoint", Message: "endpoint and bucket must be set together", Hint: "set both, or clear both to disable s3"}
-	}
-	if parsed, err := url.Parse(s.Endpoint); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return &Error{Key: "endpoint", Message: fmt.Sprintf("invalid URL %q", s.Endpoint), Hint: "use the full endpoint, e.g. https://<account>.r2.cloudflarestorage.com"}
-	}
-	if s.Region == "" {
-		return keyErr("region", "must not be empty; use auto for R2 or the bucket's region")
-	}
-	if s.AccessKey == "" || s.SecretKey == "" {
-		return keyErr("access_key", "access_key and secret_key are required when s3 is configured")
 	}
 	return nil
 }
@@ -1059,10 +1018,8 @@ func validateAuthCog(w Web) error {
 	if !authcogRealm.MatchString(w.AuthCog.Realm) {
 		return &Error{Key: "authcog.realm", Message: fmt.Sprintf("invalid realm %q", w.AuthCog.Realm), Hint: "use one DNS label such as auth (auth.authcog.com) or dboss"}
 	}
-	for _, other := range []struct{ key, path string }{{"the realtime hub path", w.Pubsub.Path}, {"health_endpoint", w.HealthEndpoint}} {
-		if other.path != "" && other.path == w.AuthCog.Path {
-			return keyErr("authcog.path", "must differ from %s %q", other.key, other.path)
-		}
+	if w.HealthEndpoint != "" && w.HealthEndpoint == w.AuthCog.Path {
+		return keyErr("authcog.path", "must differ from health_endpoint %q", w.HealthEndpoint)
 	}
 	return nil
 }
@@ -1166,23 +1123,31 @@ func (a *Autostart) UnmarshalYAML(node *yaml.Node) error {
 // DefaultPubsubPath is the path a bare `pubsub: true` enables on the web process.
 const DefaultPubsubPath = "/socketio"
 
+// DefaultStatic is the directory a web process serves static files from unless it sets `static`.
+const DefaultStatic = "./public"
+
 // DevDomain is bound to a single-app config that declares no domains, so `dboss start` inside an
 // app folder serves it on *.lvh.me with no config.
 const DevDomain = ".lvh.me"
 
 // ProcessSpec is one entry of a procfile: the command to run, the domains the single web process
-// answers, its optional realtime hub and its readiness check. A scalar value is the command alone,
-// so a background process stays a one-liner; a mapping adds the rest.
+// answers, its optional realtime hub, its readiness check and the canonical hostname. A scalar
+// value is the command alone, so a background process stays a one-liner; a mapping adds the rest.
 type ProcessSpec struct {
 	Command string      `yaml:"command" json:"command"`
 	Domains List        `yaml:"domains,omitempty" json:"domains,omitempty"`
 	Pubsub  *PubsubSpec `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
+	Static  *StaticSpec `yaml:"static,omitempty" json:"static,omitempty"`
 	// Health is the web process's readiness path, e.g. /up; empty means a TCP connect.
 	Health string `yaml:"health,omitempty" json:"health,omitempty"`
+	// CanonicalHost is the web process hostname every other domain redirects to; it must be one
+	// of Domains.
+	CanonicalHost string `yaml:"canonical_host,omitempty" json:"canonical_host,omitempty"`
 }
 
-// UnmarshalYAML accepts a bare command string or a {command, domains, pubsub, health} mapping. The
-// keys are checked here because a custom decoder is a leaf as far as the schema walk is concerned.
+// UnmarshalYAML accepts a bare command string or a {command, domains, pubsub, static, health,
+// canonical_host} mapping. The keys are checked here because a custom decoder is a leaf as far as
+// the schema walk is concerned.
 func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
 	case yaml.ScalarNode:
@@ -1191,16 +1156,18 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
-			case "command", "domains", "pubsub", "health":
+			case "command", "domains", "pubsub", "static", "health", "canonical_host":
 			default:
-				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, domains, pubsub, health"}
+				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, domains, pubsub, static, health, canonical_host"}
 			}
 		}
 		var raw struct {
-			Command string      `yaml:"command"`
-			Domains List        `yaml:"domains"`
-			Pubsub  *PubsubSpec `yaml:"pubsub"`
-			Health  string      `yaml:"health"`
+			Command       string      `yaml:"command"`
+			Domains       List        `yaml:"domains"`
+			Pubsub        *PubsubSpec `yaml:"pubsub"`
+			Static        *StaticSpec `yaml:"static"`
+			Health        string      `yaml:"health"`
+			CanonicalHost string      `yaml:"canonical_host"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return err
@@ -1208,37 +1175,82 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 		p.Command = raw.Command
 		p.Domains = raw.Domains
 		p.Pubsub = raw.Pubsub
+		p.Static = raw.Static
 		p.Health = raw.Health
+		p.CanonicalHost = raw.CanonicalHost
 		return nil
 	}
-	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, domains, pubsub, health} mapping"}
+	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, domains, pubsub, static, health, canonical_host} mapping"}
 }
 
 // MarshalYAML writes a scalar command when the process only runs a command, else the full mapping,
 // so a resolved config reads like the file it came from.
 func (p ProcessSpec) MarshalYAML() (any, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil && p.Health == "" {
+	if len(p.Domains) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
 		return p.Command, nil
 	}
 	return struct {
-		Command string      `yaml:"command"`
-		Domains List        `yaml:"domains,omitempty"`
-		Pubsub  *PubsubSpec `yaml:"pubsub,omitempty"`
-		Health  string      `yaml:"health,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub, p.Health}, nil
+		Command       string      `yaml:"command"`
+		Domains       List        `yaml:"domains,omitempty"`
+		Pubsub        *PubsubSpec `yaml:"pubsub,omitempty"`
+		Static        *StaticSpec `yaml:"static,omitempty"`
+		Health        string      `yaml:"health,omitempty"`
+		CanonicalHost string      `yaml:"canonical_host,omitempty"`
+	}{p.Command, p.Domains, p.Pubsub, p.Static, p.Health, p.CanonicalHost}, nil
 }
 
 // MarshalJSON mirrors MarshalYAML for `dboss config -d --json`.
 func (p ProcessSpec) MarshalJSON() ([]byte, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil && p.Health == "" {
+	if len(p.Domains) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
 		return json.Marshal(p.Command)
 	}
 	return json.Marshal(struct {
-		Command string      `json:"command"`
-		Domains List        `json:"domains,omitempty"`
-		Pubsub  *PubsubSpec `json:"pubsub,omitempty"`
-		Health  string      `json:"health,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub, p.Health})
+		Command       string      `json:"command"`
+		Domains       List        `json:"domains,omitempty"`
+		Pubsub        *PubsubSpec `json:"pubsub,omitempty"`
+		Static        *StaticSpec `json:"static,omitempty"`
+		Health        string      `json:"health,omitempty"`
+		CanonicalHost string      `json:"canonical_host,omitempty"`
+	}{p.Command, p.Domains, p.Pubsub, p.Static, p.Health, p.CanonicalHost})
+}
+
+// StaticSpec is a web process's static file option: `true` for the default ./public, a path, or
+// `false` to disable. An absent option also uses the default.
+type StaticSpec struct {
+	Path string
+}
+
+// UnmarshalYAML accepts true (the default directory), a path, or false (disabled).
+func (s *StaticSpec) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return &Error{Line: node.Line, Key: "static", Message: "must be true, a path, or false"}
+	}
+	switch node.Tag {
+	case "!!bool":
+		if node.Value == "true" {
+			s.Path = DefaultStatic
+		}
+		return nil
+	case "!!null":
+		return nil
+	}
+	s.Path = node.Value
+	return nil
+}
+
+// MarshalYAML writes false when static serving is off, else the directory.
+func (s StaticSpec) MarshalYAML() (any, error) {
+	if s.Path == "" {
+		return false, nil
+	}
+	return s.Path, nil
+}
+
+func (s StaticSpec) MarshalJSON() ([]byte, error) {
+	if s.Path == "" {
+		return []byte("false"), nil
+	}
+	return json.Marshal(s.Path)
 }
 
 // PubsubSpec is the web process's realtime option: `true` for the default path, a bare path, or a
@@ -1308,19 +1320,30 @@ func validPubsubKey(key string) bool {
 	return false
 }
 
+// WebProcess is one procfile entry that answers proxied traffic: the hosts it serves, the
+// canonical hostname its other hosts redirect to, and its realtime hub. An app may have several,
+// each bound to its own PORT.
+type WebProcess struct {
+	Name          string
+	Hosts         List
+	CanonicalHost string
+	Pubsub        Pubsub
+	// Static is the directory served straight from disk; empty disables it.
+	Static string
+}
+
 type App struct {
 	Procfile map[string]ProcessSpec `yaml:"procfile" json:"procfile"`
-	// Hosts and WebProcess are derived from the one procfile entry that declares domains or
-	// pubsub; they are never written back to YAML and exist for the supervisor and proxy.
-	Hosts         List               `yaml:"-" json:"-"`
-	WebProcess    string             `yaml:"-" json:"-"`
-	CanonicalHost string             `yaml:"canonical_host" json:"canonical_host"`
-	Autostart     Autostart          `yaml:"autostart" json:"autostart"`
-	Deletable     bool               `yaml:"deletable" json:"deletable"`
-	Cron          map[string]CronJob `yaml:"cron" json:"cron"`
-	Hooks         map[string]Hook    `yaml:"hooks" json:"hooks"`
-	Defaults      `yaml:",inline"`
-	Processes     map[string]ProcessOverrides `yaml:"processes" json:"processes"`
+	// WebProcesses and Hosts are derived from every procfile entry that declares domains; they
+	// are never written back to YAML and exist for the supervisor and proxy.
+	WebProcesses []WebProcess       `yaml:"-" json:"-"`
+	Hosts        List               `yaml:"-" json:"-"`
+	Autostart    Autostart          `yaml:"autostart" json:"autostart"`
+	Deletable    bool               `yaml:"deletable" json:"deletable"`
+	Cron         map[string]CronJob `yaml:"cron" json:"cron"`
+	Hooks        map[string]Hook    `yaml:"hooks" json:"hooks"`
+	Defaults     `yaml:",inline"`
+	Processes    map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
 
 // processNames lists procfile names sorted, so every derived choice and error is deterministic.
@@ -1333,33 +1356,52 @@ func processNames(procfile map[string]ProcessSpec) []string {
 	return names
 }
 
-// deriveWeb sets Hosts and WebProcess from the single procfile entry that declares domains or
-// pubsub.
+// IsWeb reports whether a procfile entry serves proxied traffic because it declares domains.
+func (a App) IsWeb(name string) bool {
+	for _, web := range a.WebProcesses {
+		if web.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// deriveWeb builds one WebProcess per procfile entry that declares domains, unions their hosts and
+// rejects a host pattern used by two processes of the same app.
 func (a *App) deriveWeb() error {
+	seen := map[string]string{}
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
-		if len(spec.Domains) == 0 && (spec.Pubsub == nil || !spec.Pubsub.enabled()) {
+		if len(spec.Domains) == 0 {
 			continue
 		}
-		if a.WebProcess != "" {
-			return &Error{Key: "procfile." + name, Message: fmt.Sprintf("%q and %q both declare domains or pubsub; only one process can be the web process", a.WebProcess, name)}
+		web := WebProcess{Name: name, Hosts: spec.Domains, CanonicalHost: spec.CanonicalHost, Static: DefaultStatic}
+		if spec.Static != nil {
+			web.Static = spec.Static.Path
 		}
-		a.WebProcess = name
-		a.Hosts = spec.Domains
+		a.WebProcesses = append(a.WebProcesses, web)
+		for _, host := range spec.Domains {
+			normalized := strings.ToLower(strings.TrimSuffix(host, "."))
+			if owner, ok := seen[normalized]; ok {
+				return &Error{Key: "procfile." + name + ".domains", Message: fmt.Sprintf("host pattern %q is already used by process %q", host, owner)}
+			}
+			seen[normalized] = name
+			a.Hosts = append(a.Hosts, host)
+		}
 	}
 	return nil
 }
 
-// resolveHealth moves the web process's health path onto its process keys. Only the web process
-// may set it, and the value is a path because dboss always talks HTTP to a process port.
+// resolveHealth moves each web process's health path onto its process keys. Only a web process may
+// set it, and the value is a path because dboss always talks HTTP to a process port.
 func (a *App) resolveHealth() error {
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
 		if spec.Health == "" {
 			continue
 		}
-		if name != a.WebProcess {
-			return &Error{Key: "procfile." + name + ".health", Message: "health is only valid on the web process", Hint: "declare domains on this process, or set health on the process that declares them"}
+		if !a.IsWeb(name) {
+			return &Error{Key: "procfile." + name + ".health", Message: "health is only valid on a web process", Hint: "declare domains on this process, or set health on a process that declares them"}
 		}
 		if !strings.HasPrefix(spec.Health, "/") {
 			return &Error{Key: "procfile." + name + ".health", Message: fmt.Sprintf("must be a path starting with /, not %q", spec.Health), Hint: "e.g. health: /up"}
@@ -1372,45 +1414,64 @@ func (a *App) resolveHealth() error {
 	return nil
 }
 
-// resolvePubsub moves the web process's pubsub option onto the app's runtime Web.Pubsub. Only the
-// web process may set it.
+// resolvePubsub resolves every web process's pubsub option onto its WebProcess. A process that
+// sets pubsub must declare domains so the hub has hosts to serve on.
 func (a *App) resolvePubsub() error {
-	for _, name := range processNames(a.Procfile) {
-		spec := a.Procfile[name]
+	for index := range a.WebProcesses {
+		web := &a.WebProcesses[index]
+		spec := a.Procfile[web.Name]
 		if spec.Pubsub == nil || !spec.Pubsub.enabled() {
 			continue
 		}
-		if name != a.WebProcess {
-			return &Error{Key: "procfile." + name + ".pubsub", Message: "pubsub is only valid on the web process"}
-		}
-		pubsub := a.Defaults.Web.Pubsub
+		pubsub := defaultPubsub
 		if spec.Pubsub.Path != "" {
 			pubsub.Path = spec.Pubsub.Path
 		}
 		if settings := spec.Pubsub.Settings; settings != nil {
 			settings.applyOverride(reflect.ValueOf(&pubsub).Elem())
 		}
-		if err := validatePubsub(pubsub, "procfile."+name+".pubsub"); err != nil {
+		if err := validatePubsub(pubsub, "procfile."+web.Name+".pubsub"); err != nil {
 			return err
 		}
-		a.Defaults.Web.Pubsub = pubsub
+		web.Pubsub = pubsub
+	}
+	for _, name := range processNames(a.Procfile) {
+		spec := a.Procfile[name]
+		if spec.Pubsub != nil && spec.Pubsub.enabled() && !a.IsWeb(name) {
+			return &Error{Key: "procfile." + name + ".pubsub", Message: "pubsub needs domains on the same process", Hint: "add domains to this process or move pubsub to a web process"}
+		}
 	}
 	return nil
 }
 
-// UseDevDomains binds the web process to DevDomain when no process declares domains. It is
+// resolveCanonical validates each web process's canonical_host against its own domains and rejects
+// canonical_host on a process that serves no domains.
+func (a *App) resolveCanonical() error {
+	for _, web := range a.WebProcesses {
+		if web.CanonicalHost != "" && !hostAllowed(web.CanonicalHost, web.Hosts) {
+			return keyErr("procfile."+web.Name+".canonical_host", "%q is not one of the domains %v", web.CanonicalHost, web.Hosts)
+		}
+	}
+	for _, name := range processNames(a.Procfile) {
+		spec := a.Procfile[name]
+		if spec.CanonicalHost != "" && !a.IsWeb(name) {
+			return &Error{Key: "procfile." + name + ".canonical_host", Message: "canonical_host is only valid on a web process", Hint: "declare domains on this process, or set canonical_host on a process that declares them"}
+		}
+	}
+	return nil
+}
+
+// UseDevDomains binds the first process to DevDomain when no process declares domains. It is
 // single-app mode only, so a host running a folder with no config still gets a hostname.
 func (a *App) UseDevDomains() {
 	if len(a.Hosts) > 0 || len(a.Procfile) == 0 {
 		return
 	}
-	if a.WebProcess == "" {
-		if _, ok := a.Procfile["web"]; ok {
-			a.WebProcess = "web"
-		} else {
-			a.WebProcess = processNames(a.Procfile)[0]
-		}
+	name := "web"
+	if _, ok := a.Procfile["web"]; !ok {
+		name = processNames(a.Procfile)[0]
 	}
+	a.WebProcesses = []WebProcess{{Name: name, Hosts: List{DevDomain}, Static: DefaultStatic}}
 	a.Hosts = List{DevDomain}
 }
 
@@ -1439,14 +1500,13 @@ type Hook struct {
 }
 
 type appFile struct {
-	Procfile      map[string]ProcessSpec `yaml:"procfile"`
-	CanonicalHost string                 `yaml:"canonical_host"`
-	Autostart     Autostart              `yaml:"autostart"`
-	Deletable     bool                   `yaml:"deletable"`
-	Cron          map[string]CronJob     `yaml:"cron"`
-	Hooks         map[string]Hook        `yaml:"hooks"`
-	Overrides     `yaml:",inline"`
-	Processes     map[string]ProcessOverrides `yaml:"processes"`
+	Procfile  map[string]ProcessSpec `yaml:"procfile"`
+	Autostart Autostart              `yaml:"autostart"`
+	Deletable bool                   `yaml:"deletable"`
+	Cron      map[string]CronJob     `yaml:"cron"`
+	Hooks     map[string]Hook        `yaml:"hooks"`
+	Overrides `yaml:",inline"`
+	Processes map[string]ProcessOverrides `yaml:"processes"`
 }
 
 // LoadApp reads an app's dboss.yaml under a host. Host keys are rejected here because only the
@@ -1482,7 +1542,7 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, CanonicalHost: raw.CanonicalHost, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
 	if err := app.deriveWeb(); err != nil {
 		return App{}, err
 	}
@@ -1502,8 +1562,13 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 	if err := app.resolvePubsub(); err != nil {
 		return App{}, err
 	}
-	if !single && app.Defaults.Web.Pubsub.Enabled() && len(app.Hosts) == 0 {
-		return App{}, &Error{Key: "procfile." + app.WebProcess + ".pubsub", Message: "the web process needs domains to serve the realtime hub"}
+	if err := app.resolveCanonical(); err != nil {
+		return App{}, err
+	}
+	for _, web := range app.WebProcesses {
+		if web.Pubsub.Enabled() && app.AuthCog.Enabled() && web.Pubsub.Path == app.AuthCog.Path {
+			return App{}, &Error{Key: "procfile." + web.Name + ".pubsub", Message: fmt.Sprintf("path %q collides with authcog.path", web.Pubsub.Path)}
+		}
 	}
 	if err := validateDefaults(app.Defaults); err != nil {
 		return App{}, err
@@ -1515,9 +1580,6 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)
-	if app.CanonicalHost != "" && !hostAllowed(app.CanonicalHost, app.Hosts) {
-		return App{}, keyErr("canonical_host", "%q is not one of the web process domains %v", app.CanonicalHost, app.Hosts)
-	}
 	for name := range app.Processes {
 		if err := validateProcess(app.Process(name)); err != nil {
 			return App{}, scoped(err, "processes."+name)
@@ -1533,6 +1595,12 @@ func (a App) Process(name string) Process {
 		apply(&p, o)
 	}
 	return p
+}
+
+// NormalizeHost lowercases a request host and strips its port and any trailing dot, the form every
+// host pattern is matched against.
+func NormalizeHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.Split(host, ":")[0], "."))
 }
 
 // MatchHost scores a concrete host against a hosts pattern. A leading "*." matches subdomains

@@ -600,14 +600,14 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	if err := os.WriteFile(configPath, []byte("apps: ./apps\nproxy:\n  listen: 127.0.0.1:9999\ndefaults:\n  static: ./public\n  headers:\n    X-Robots-Tag: none\n"), 0o640); err != nil {
+	if err := os.WriteFile(configPath, []byte("apps: ./apps\nproxy:\n  listen: 127.0.0.1:9999\ndefaults:\n  max_body: 50m\n  headers:\n    X-Robots-Tag: none\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.Rescan(); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, _ := manager.Snapshot("one")
-	if snapshot.Web.Static != "./public" || snapshot.Web.Headers["X-Robots-Tag"] != "none" || snapshot.Dir != appDir {
+	if snapshot.Web.MaxBody != 50<<20 || snapshot.Web.Headers["X-Robots-Tag"] != "none" || snapshot.Dir != appDir {
 		t.Fatalf("defaults did not reach the app: %+v", snapshot)
 	}
 	if keys := manager.RestartRequired(); len(keys) != 1 || keys[0] != "proxy" {

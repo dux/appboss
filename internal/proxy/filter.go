@@ -39,7 +39,7 @@ func (h *Handler) initFilters(extra ...Filter) {
 // The built-in stages, in request order.
 
 func (h *Handler) canonical(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
-	if redirectCanonical(w, r, app.CanonicalHost) {
+	if web, ok := app.WebForHost(r.Host); ok && redirectCanonical(w, r, web.CanonicalHost) {
 		return
 	}
 	next()
@@ -96,7 +96,7 @@ func (h *Handler) publicHealth(w http.ResponseWriter, r *http.Request, app super
 
 func (h *Handler) maintain(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
 	if app.Maintenance {
-		h.unavailablePage(w, r, h.maintenancePage(app), app.Name, maintenanceRetryAfter)
+		h.unavailablePage(w, r, h.maintenancePage(app, r.Host), app.Name, maintenanceRetryAfter)
 		return
 	}
 	next()

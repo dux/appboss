@@ -1,6 +1,6 @@
 // Package pg inspects the host's PostgreSQL server and backs up the databases the operator
-// selects. Inspection is read-only; backups shell out to pg_dump and copy the result locally
-// and, when configured, to S3. The daemon keeps one Service and registers it as a module.
+// selects. Inspection is read-only; backups shell out to pg_dump and copy the result into the
+// configured local directory. The daemon keeps one Service and registers it as a module.
 package pg
 
 import (
@@ -225,14 +225,13 @@ func describe(connConfig *pgx.ConnConfig) string {
 	return fmt.Sprintf("%s:%d user %s", connConfig.Host, connConfig.Port, connConfig.User)
 }
 
-// options is the pair the service is rebuilt from on every config reload.
+// options is the config the service is rebuilt from on every reload.
 type options struct {
 	postgres config.Postgres
-	s3       config.S3
 	stateDir string
 	logDir   string
 }
 
 func optionsFrom(cfg config.Config) options {
-	return options{postgres: cfg.Postgres, s3: cfg.S3, stateDir: cfg.StateDir, logDir: cfg.LogDir}
+	return options{postgres: cfg.Postgres, stateDir: cfg.StateDir, logDir: cfg.LogDir}
 }

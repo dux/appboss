@@ -186,13 +186,29 @@ func (c CLI) remote(command string, args []string) error {
 			return nil
 		case len(pub) > 0 && pub[0] == "rotate":
 			request.Method = ops.ActionPubsubRotate
-			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
-				return fmt.Errorf("usage: dboss pubsub rotate [app] (%w)", err)
+			set := flag.NewFlagSet("pubsub rotate", flag.ContinueOnError)
+			set.SetOutput(c.Err)
+			process := set.String("process", "", "web process name when the app serves several hubs")
+			flags, positionals := splitFlags(pub[1:], "--process", "-process")
+			if err := set.Parse(flags); err != nil {
+				return err
+			}
+			request.Process = *process
+			if request.App, err = appArgument(positionals, opts.config); err != nil {
+				return fmt.Errorf("usage: dboss pubsub rotate [app] [--process name] (%w)", err)
 			}
 		case len(pub) > 0 && pub[0] == "secret":
 			request.Method = ops.ActionPubsubSecret
-			if request.App, err = appArgument(pub[1:], opts.config); err != nil {
-				return fmt.Errorf("usage: dboss pubsub secret [app] (%w)", err)
+			set := flag.NewFlagSet("pubsub secret", flag.ContinueOnError)
+			set.SetOutput(c.Err)
+			process := set.String("process", "", "web process name when the app serves several hubs")
+			flags, positionals := splitFlags(pub[1:], "--process", "-process")
+			if err := set.Parse(flags); err != nil {
+				return err
+			}
+			request.Process = *process
+			if request.App, err = appArgument(positionals, opts.config); err != nil {
+				return fmt.Errorf("usage: dboss pubsub secret [app] [--process name] (%w)", err)
 			}
 		case len(pub) > 0 && pub[0] == "publish":
 			request.Method = ops.ActionPubsubPublish
@@ -200,17 +216,19 @@ func (c CLI) remote(command string, args []string) error {
 			set.SetOutput(c.Err)
 			event := set.String("event", "message", "event name")
 			data := set.String("data", "", `JSON payload, or - to read stdin`)
-			flags, positionals := splitFlags(pub[1:], "--event", "-event", "--data", "-data")
+			process := set.String("process", "", "web process name when the app serves several hubs")
+			flags, positionals := splitFlags(pub[1:], "--event", "-event", "--data", "-data", "--process", "-process")
 			if err := set.Parse(flags); err != nil {
 				return err
 			}
 			if len(positionals) == 0 {
-				return errors.New("usage: dboss pubsub publish [app] <channel> [--event name] [--data json|-]")
+				return errors.New("usage: dboss pubsub publish [app] <channel> [--event name] [--data json|-] [--process name]")
 			}
 			request.Channel = positionals[len(positionals)-1]
 			if request.App, err = appArgument(positionals[:len(positionals)-1], opts.config); err != nil {
 				return fmt.Errorf("usage: dboss pubsub publish <app> <channel> (%w)", err)
 			}
+			request.Process = *process
 			request.Event = *event
 			request.Data, err = pubsubData(*data, c.In)
 			if err != nil {

@@ -61,8 +61,6 @@ type Database struct {
 	Deadlocks      int64  `json:"deadlocks"`
 	TempBytes      int64  `json:"temp_bytes"`
 	BackupSelected bool   `json:"backup_selected"`
-	BackupLocal    bool   `json:"backup_local"`
-	BackupS3       bool   `json:"backup_s3"`
 }
 
 // Activity summarizes what the server is doing right now.
@@ -201,7 +199,6 @@ func collectDatabases(ctx context.Context, conn *pgx.Conn, backupConfig config.P
 			continue
 		}
 		_, database.BackupSelected = backupConfig.Databases[database.Name]
-		database.BackupLocal, database.BackupS3 = backupConfig.Destinations(database.Name)
 		databases = append(databases, database)
 	}
 	return databases

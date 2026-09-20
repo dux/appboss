@@ -111,7 +111,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if recorder.suppressed {
 		return
 	}
-	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: snapshot.WebProcess, Country: country(r)})
+	process := ""
+	if web, ok := snapshot.WebForHost(r.Host); ok {
+		process = web.Name
+	}
+	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: process, Country: country(r)})
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
@@ -163,10 +167,11 @@ func authorized(r *http.Request, snapshot super.Snapshot) bool {
 // directories fall through to the app. The directory is resolved on every request so a release
 // symlink swap is picked up immediately, and os.Root keeps the lookup inside it.
 func serveStatic(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) bool {
-	if snapshot.Web.Static == "" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+	web, ok := snapshot.WebForHost(r.Host)
+	if !ok || web.Static == "" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		return false
 	}
-	root, err := os.OpenRoot(resolveAppPath(snapshot.Dir, snapshot.Web.Static))
+	root, err := os.OpenRoot(resolveAppPath(snapshot.Dir, web.Static))
 	if err != nil {
 		return false
 	}
@@ -331,9 +336,14 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 		h.unavailablePage(w, r, h.starting, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
 		return
 	}
+	web, ok := snapshot.WebForHost(r.Host)
+	if !ok {
+		h.errorPage(w, r, snapshot, http.StatusBadGateway)
+		return
+	}
 	port := 0
 	for _, process := range snapshot.Processes {
-		if process.Name == snapshot.WebProcess && process.State == super.Running {
+		if process.Name == web.Name && process.State == super.Running {
 			port = process.Port
 			break
 		}
@@ -468,13 +478,13 @@ func ensureRequestID(r *http.Request) string {
 	return id
 }
 
-func (h *Handler) maintenancePage(snapshot super.Snapshot) []byte {
+func (h *Handler) maintenancePage(snapshot super.Snapshot, host string) []byte {
 	var candidates []string
 	if snapshot.Web.MaintenancePage != "" {
 		candidates = append(candidates, resolveAppPath(snapshot.Dir, snapshot.Web.MaintenancePage))
 	}
-	if snapshot.Web.Static != "" {
-		candidates = append(candidates, filepath.Join(resolveAppPath(snapshot.Dir, snapshot.Web.Static), "503.html"))
+	if web, ok := snapshot.WebForHost(host); ok && web.Static != "" {
+		candidates = append(candidates, filepath.Join(resolveAppPath(snapshot.Dir, web.Static), "503.html"))
 	}
 	for _, candidate := range candidates {
 		if data, err := os.ReadFile(candidate); err == nil {

@@ -79,6 +79,7 @@ type Runtime interface {
 	Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
+	HostConfig() config.Config
 	Logs(name, process string, lines int) (map[string][]string, error)
 	Ports() map[string]int
 }
@@ -126,16 +127,15 @@ type PG interface {
 	Backups() []pg.Backup
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
 	BackupConfig() config.PostgresBackup
-	S3Configured() bool
 	Apply(cfg config.Config)
 }
 
 // Pubsub is the realtime channel surface. pubsub.Service implements it; a nil value disables the
 // feature and every pubsub action answers with a clear error.
 type Pubsub interface {
-	Secret(app string, cfg config.Pubsub) (string, error)
-	Rotate(app string, cfg config.Pubsub) (string, error)
-	Publish(app, channel string, msg pubsub.Message, replay int) int
+	Secret(app, process string, cfg config.Pubsub) (string, error)
+	Rotate(app, process string, cfg config.Pubsub) (string, error)
+	Publish(app, process, channel string, msg pubsub.Message, replay int) int
 	Snapshot(snapshots []super.Snapshot) []pubsub.App
 	Stats() map[string]pubsub.Stats
 	Reconcile(snapshots []super.Snapshot)
@@ -294,11 +294,11 @@ func (s *Service) dispatch(request Request) (any, error) {
 	case ActionPubsub:
 		return s.PubsubApps(), nil
 	case ActionPubsubSecret:
-		return s.PubsubSecret(request.App)
+		return s.PubsubSecret(request.App, request.Process)
 	case ActionPubsubRotate:
-		return s.PubsubRotate(request.App)
+		return s.PubsubRotate(request.App, request.Process)
 	case ActionPubsubPublish:
-		return s.PubsubPublish(request.App, request.Channel, request.Event, request.Data)
+		return s.PubsubPublish(request.App, request.Process, request.Channel, request.Event, request.Data)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -526,9 +526,6 @@ func (s *Service) PGBackupConfig() config.PostgresBackup {
 	return s.pg.BackupConfig()
 }
 
-// S3Configured reports whether object storage is ready for uploads.
-func (s *Service) S3Configured() bool { return s.pg != nil && s.pg.S3Configured() }
-
 // PubsubApps lists every app that serves realtime channels, with its channels and subscriber
 // counts.
 func (s *Service) PubsubApps() []pubsub.App {
@@ -546,9 +543,11 @@ func (s *Service) PubsubStats() map[string]pubsub.Stats {
 	return s.pubsub.Stats()
 }
 
-// PubsubSecret is an app's publish credential and the URLs it enables, for the CLI and console.
+// PubsubSecret is a web process's publish credential and the URLs it enables, for the CLI and
+// console.
 type PubsubSecret struct {
 	App       string `json:"app"`
+	Process   string `json:"process"`
 	Path      string `json:"path"`
 	Host      string `json:"host"`
 	Secret    string `json:"secret"`
@@ -556,34 +555,36 @@ type PubsubSecret struct {
 	Publish   string `json:"publish_url"`
 }
 
-// PubsubSecret returns an app's effective publish secret and its example URLs.
-func (s *Service) PubsubSecret(app string) (PubsubSecret, error) {
-	snapshot, cfg, err := s.pubsubApp(app)
+// PubsubSecret returns a web process's effective publish secret and its example URLs.
+func (s *Service) PubsubSecret(app, process string) (PubsubSecret, error) {
+	snapshot, web, err := s.pubsubHub(app, process)
 	if err != nil {
 		return PubsubSecret{}, err
 	}
-	secret, err := s.pubsub.Secret(snapshot.Name, cfg)
+	cfg := web.Pubsub
+	secret, err := s.pubsub.Secret(snapshot.Name, web.Name, cfg)
 	if err != nil {
 		return PubsubSecret{}, err
 	}
-	host := snapshot.CanonicalHost
-	if host == "" && len(snapshot.Hosts) > 0 {
-		host = config.BaseHost(snapshot.Hosts[0])
+	host := web.CanonicalHost
+	if host == "" && len(web.Hosts) > 0 {
+		host = config.BaseHost(web.Hosts[0])
 	}
 	base := "https://" + host + cfg.Path
-	return PubsubSecret{App: snapshot.Name, Path: cfg.Path, Host: host, Secret: secret, Subscribe: base + "/<channel>", Publish: base + "/<channel>"}, nil
+	return PubsubSecret{App: snapshot.Name, Process: web.Name, Path: cfg.Path, Host: host, Secret: secret, Subscribe: base + "/<channel>", Publish: base + "/<channel>"}, nil
 }
 
-// PubsubRotate replaces an app's generated publish secret and returns the new credential and URLs.
-func (s *Service) PubsubRotate(app string) (PubsubSecret, error) {
-	snapshot, cfg, err := s.pubsubApp(app)
+// PubsubRotate replaces a web process's generated publish secret and returns the new credential
+// and URLs.
+func (s *Service) PubsubRotate(app, process string) (PubsubSecret, error) {
+	snapshot, web, err := s.pubsubHub(app, process)
 	if err != nil {
 		return PubsubSecret{}, err
 	}
-	if _, err := s.pubsub.Rotate(snapshot.Name, cfg); err != nil {
+	if _, err := s.pubsub.Rotate(snapshot.Name, web.Name, web.Pubsub); err != nil {
 		return PubsubSecret{}, err
 	}
-	return s.PubsubSecret(app)
+	return s.PubsubSecret(app, web.Name)
 }
 
 // PubsubPublished is the result of a console or CLI publish.
@@ -592,9 +593,9 @@ type PubsubPublished struct {
 	Subscribers int    `json:"subscribers"`
 }
 
-// PubsubPublish sends one message to an app's channel from the CLI or console.
-func (s *Service) PubsubPublish(app, channel, event string, data json.RawMessage) (PubsubPublished, error) {
-	snapshot, cfg, err := s.pubsubApp(app)
+// PubsubPublish sends one message to a web process's channel from the CLI or console.
+func (s *Service) PubsubPublish(app, process, channel, event string, data json.RawMessage) (PubsubPublished, error) {
+	snapshot, web, err := s.pubsubHub(app, process)
 	if err != nil {
 		return PubsubPublished{}, err
 	}
@@ -607,25 +608,48 @@ func (s *Service) PubsubPublish(app, channel, event string, data json.RawMessage
 	if len(data) == 0 {
 		data = json.RawMessage("null")
 	}
-	delivered := s.pubsub.Publish(snapshot.Name, channel, pubsub.Message{Event: event, Data: data}, cfg.Replay)
+	delivered := s.pubsub.Publish(snapshot.Name, web.Name, channel, pubsub.Message{Event: event, Data: data}, web.Pubsub.Replay)
 	return PubsubPublished{Channel: channel, Subscribers: delivered}, nil
 }
 
-func (s *Service) pubsubApp(app string) (super.Snapshot, config.Pubsub, error) {
+// pubsubHub resolves the web process a pubsub action targets. An empty process picks the app's
+// only hub; an app with several hubs requires naming one.
+func (s *Service) pubsubHub(app, process string) (super.Snapshot, super.WebProcessSnapshot, error) {
 	if s.pubsub == nil {
-		return super.Snapshot{}, config.Pubsub{}, errors.New("pubsub is not enabled")
+		return super.Snapshot{}, super.WebProcessSnapshot{}, errors.New("pubsub is not enabled")
 	}
 	if app == "" {
-		return super.Snapshot{}, config.Pubsub{}, errors.New("app is required")
+		return super.Snapshot{}, super.WebProcessSnapshot{}, errors.New("app is required")
 	}
 	snapshot, err := s.runtime.Snapshot(app)
 	if err != nil {
-		return super.Snapshot{}, config.Pubsub{}, err
+		return super.Snapshot{}, super.WebProcessSnapshot{}, err
 	}
-	if !snapshot.Web.Pubsub.Enabled() {
-		return super.Snapshot{}, config.Pubsub{}, fmt.Errorf("app %q has no pubsub path", app)
+	var enabled []super.WebProcessSnapshot
+	for _, web := range snapshot.WebProcesses {
+		if web.Pubsub.Enabled() {
+			enabled = append(enabled, web)
+		}
 	}
-	return snapshot, snapshot.Web.Pubsub, nil
+	if len(enabled) == 0 {
+		return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q has no pubsub path", app)
+	}
+	if process == "" {
+		if len(enabled) > 1 {
+			names := make([]string, len(enabled))
+			for index, web := range enabled {
+				names[index] = web.Name
+			}
+			return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q has several pubsub processes %v; name one", app, names)
+		}
+		return snapshot, enabled[0], nil
+	}
+	for _, web := range enabled {
+		if web.Name == process {
+			return snapshot, web, nil
+		}
+	}
+	return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q web process %q has no pubsub path", app, process)
 }
 
 // RestartRequired lists the host keys whose value on disk differs from the running session.
@@ -635,6 +659,10 @@ func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired(
 // so every transport answers with the same shape.
 func (s *Service) Rescan() (RescanResult, error) {
 	invalid, err := s.runtime.Rescan()
+	if s.pg != nil {
+		// postgres is a host key that hot-reloads, so a rescan re-applies it like a config save.
+		s.pg.Apply(s.runtime.HostConfig())
+	}
 	if s.pubsub != nil {
 		s.pubsub.Reconcile(s.runtime.Snapshots())
 	}

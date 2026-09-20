@@ -4,9 +4,8 @@ procfile:
     domains:
       - .sinatra.lvh.me
     health: /up
+    canonical_host: sinatra.lvh.me
+    static: ./public
   job: ./job.sh
-
-canonical_host: sinatra.lvh.me
-static: ./public
 
 autostart: false

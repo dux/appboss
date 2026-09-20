@@ -27,15 +27,16 @@ func TestDumpNameUsesFormatPerKind(t *testing.T) {
 	}
 }
 
-func TestObjectKeyNormalizesPrefix(t *testing.T) {
-	if got := objectKey("/pg/", "app", false, "app.dump"); got != "pg/app/app.dump" {
-		t.Fatalf("objectKey = %q", got)
+func TestNextRunUsesUTCTime(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	if got := nextRun("04:00", now); !got.Equal(time.Date(2026, 9, 21, 4, 0, 0, 0, time.UTC)) {
+		t.Fatalf("nextRun(past) = %s, want tomorrow 04:00 UTC", got)
 	}
-	if got := objectKey("", "app", false, "app.dump"); got != "app/app.dump" {
-		t.Fatalf("empty prefix objectKey = %q", got)
+	if got := nextRun("18:00", now); !got.Equal(time.Date(2026, 9, 20, 18, 0, 0, 0, time.UTC)) {
+		t.Fatalf("nextRun(future) = %s, want today 18:00 UTC", got)
 	}
-	if got := objectKey("pg", "ignored", true, "globals.sql"); got != "pg/"+globalsDatabase+"/globals.sql" {
-		t.Fatalf("globals objectKey = %q", got)
+	if got := nextRun("", now); !got.IsZero() {
+		t.Fatalf("empty at should disable the schedule, got %s", got)
 	}
 }
 

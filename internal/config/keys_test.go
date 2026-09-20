@@ -26,7 +26,6 @@ func TestKeysDocumentEveryConfigKey(t *testing.T) {
 		}
 	}
 	for path, want := range map[string]Key{
-		"static":          {Block: "web", Scope: ScopeBoth, Type: "string", Default: "./public", Example: "./dist"},
 		"idle_stop":       {Block: "runtime", Scope: ScopeBoth, Type: "duration", Default: "6h", Example: "30m", PerProcess: true},
 		"health_interval": {Block: "runtime", Scope: ScopeBoth, Type: "duration", Default: "500ms", Example: "1s", PerProcess: true},
 		"restart_backoff": {Block: "runtime", Scope: ScopeBoth, Type: "list", Default: "[1s, 2, 60s]", Example: "[500ms, 2.0, 30s]", PerProcess: true},

@@ -25,13 +25,15 @@ const (
 // channelPattern is the accepted channel name: one URL path segment, no reserved names.
 var channelPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,64}$`)
 
-// Filter is the proxy stage. It answers the app's pubsub path and lets every other request through.
+// Filter is the proxy stage. It answers the pubsub path of the web process that owns the request
+// host and lets every other request through.
 func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
-	cfg := app.Web.Pubsub
-	if !cfg.Enabled() {
+	web, ok := app.WebForHost(r.Host)
+	if !ok || !web.Pubsub.Enabled() {
 		next()
 		return
 	}
+	cfg := web.Pubsub
 	rest, ok := route(cfg.Path, r.URL.Path)
 	if !ok {
 		next()
@@ -53,15 +55,15 @@ func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snaps
 			next()
 			return
 		}
-		s.serveTestPublish(w, r, app)
+		s.serveTestPublish(w, r, app.Name, web)
 	case rest == testChannel:
 		if !cfg.Test {
 			next()
 			return
 		}
-		s.serveChannel(w, r, app, cfg, rest)
+		s.serveChannel(w, r, app.Name, web, rest)
 	case validChannel(rest):
-		s.serveChannel(w, r, app, cfg, rest)
+		s.serveChannel(w, r, app.Name, web, rest)
 	default:
 		next()
 	}
@@ -71,28 +73,28 @@ func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snaps
 // The proxy's basic-auth stage consults it so a publisher needs only the publish secret, even when
 // the app also has basic_auth.
 func (s *Service) AuthorizesPublish(r *http.Request, app super.Snapshot) bool {
-	cfg := app.Web.Pubsub
-	if !cfg.Enabled() || r.Method != http.MethodPost {
+	web, ok := app.WebForHost(r.Host)
+	if !ok || !web.Pubsub.Enabled() || r.Method != http.MethodPost {
 		return false
 	}
-	rest, ok := route(cfg.Path, r.URL.Path)
+	rest, ok := route(web.Pubsub.Path, r.URL.Path)
 	if !ok || !validChannel(rest) {
 		return false
 	}
-	return s.authorize(r, app)
+	return s.authorize(r, app.Name, web)
 }
 
-func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app super.Snapshot, cfg config.Pubsub, channel string) {
+func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
 	switch r.Method {
 	case http.MethodPost:
-		s.servePublish(w, r, app, cfg, channel)
+		s.servePublish(w, r, app, web, channel)
 	case http.MethodGet, http.MethodHead:
 		if upgradeRequested(r) {
-			s.serveWebSocket(w, r, app, cfg, channel)
+			s.serveWebSocket(w, r, app, web, channel)
 			return
 		}
 		if acceptsEventStream(r) {
-			s.serveSSE(w, r, app, cfg, channel)
+			s.serveSSE(w, r, app, web, channel)
 			return
 		}
 		w.Header().Set("Allow", "GET, POST")
@@ -103,18 +105,19 @@ func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app super
 	}
 }
 
-func (s *Service) servePublish(w http.ResponseWriter, r *http.Request, app super.Snapshot, cfg config.Pubsub, channel string) {
-	if !s.authorize(r, app) {
+func (s *Service) servePublish(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+	if !s.authorize(r, app, web) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="pubsub"`)
 		http.Error(w, "invalid or missing publish secret", http.StatusUnauthorized)
 		return
 	}
+	cfg := web.Pubsub
 	body, err := readBody(r, cfg.MaxMessageSize)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	delivered := s.publish(app.Name, channel, parseMessage(body), cfg.Replay)
+	delivered := s.publish(hubID{app, web.Name}, channel, parseMessage(body), cfg.Replay)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{"channel": channel, "subscribers": delivered})
@@ -132,7 +135,7 @@ func (s *Service) serveClient(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(s.client)
 }
 
-func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app super.Snapshot) {
+func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -143,16 +146,16 @@ func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app s
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&request)
 	data, _ := json.Marshal(map[string]string{"nonce": request.Nonce})
-	s.publish(app.Name, testChannel, Message{Event: "selftest", Data: data}, 0)
+	s.publish(hubID{app, web.Name}, testChannel, Message{Event: "selftest", Data: data}, 0)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = io.WriteString(w, `{"ok":true}`+"\n")
 }
 
-// authorize compares the request's publish token against the app's effective secret in constant
+// authorize compares the request's publish token against the hub's effective secret in constant
 // time.
-func (s *Service) authorize(r *http.Request, app super.Snapshot) bool {
-	secret, err := s.Secret(app.Name, app.Web.Pubsub)
+func (s *Service) authorize(r *http.Request, app string, web super.WebProcessSnapshot) bool {
+	secret, err := s.Secret(app, web.Name, web.Pubsub)
 	if err != nil || secret == "" {
 		return false
 	}
