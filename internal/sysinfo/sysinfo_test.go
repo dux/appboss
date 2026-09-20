@@ -2,7 +2,9 @@ package sysinfo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,5 +96,18 @@ func TestCollectDirsReportsMissingPath(t *testing.T) {
 	dirs := collectDirs(inspector.dirs)
 	if len(dirs) != 1 || dirs[0].Error == "" {
 		t.Fatalf("missing path should carry an error: %+v", dirs)
+	}
+}
+
+// A zero load is a real value; the Sys tab formats all three unconditionally.
+func TestHostJSONKeepsZeroLoad(t *testing.T) {
+	data, err := json.Marshal(Host{Load1: 0.4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"load1":`, `"load5":`, `"load15":`} {
+		if !strings.Contains(string(data), key) {
+			t.Fatalf("missing %s in %s", key, data)
+		}
 	}
 }

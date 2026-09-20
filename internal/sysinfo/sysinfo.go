@@ -66,9 +66,9 @@ type Host struct {
 	Kernel    string  `json:"kernel,omitempty"`
 	UptimeSec int64   `json:"uptime_seconds,omitempty"`
 	CPUs      int     `json:"cpus"`
-	Load1     float64 `json:"load1,omitempty"`
-	Load5     float64 `json:"load5,omitempty"`
-	Load15    float64 `json:"load15,omitempty"`
+	Load1     float64 `json:"load1"`
+	Load5     float64 `json:"load5"`
+	Load15    float64 `json:"load15"`
 	MemTotal  int64   `json:"mem_total,omitempty"`
 	MemFree   int64   `json:"mem_free,omitempty"`
 	MemUsed   int64   `json:"mem_used,omitempty"`
