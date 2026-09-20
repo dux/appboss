@@ -3,24 +3,17 @@ WATCH ?= watchexec
 BIN_DIR := ./bin
 BINARY := $(BIN_DIR)/dboss
 CMD := ./cmd/dboss
-SSHKEY := $(BIN_DIR)/sshkey
-SSHKEY_CMD := ./cmd/sshkey
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build sshkey test fmt vet lint check demo demo-watch kill clean
+.PHONY: help build test fmt vet lint check demo demo-watch kill clean
 
 help: ## List available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build dboss and sshkey into ./bin
+build: ## Build dboss into ./bin/dboss
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BINARY) $(CMD)
-	$(GO) build -o $(SSHKEY) $(SSHKEY_CMD)
-
-sshkey: ## Build sshkey into ./bin/sshkey
-	@mkdir -p $(BIN_DIR)
-	$(GO) build -o $(SSHKEY) $(SSHKEY_CMD)
 
 test: ## Run the test suite
 	$(GO) test ./...

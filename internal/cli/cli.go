@@ -79,6 +79,8 @@ func (c CLI) Run(args []string) int {
 		err = c.password(args[1:])
 	case "init":
 		err = c.init(args[1:])
+	case "sshkey":
+		err = c.sshkey(args[1:])
 	case "config", "check", "kill", "doctor":
 		err = c.local(command, args[1:])
 	default:

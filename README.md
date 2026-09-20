@@ -139,6 +139,7 @@ Config
   rescan        re-read the apps directory, every dboss.yaml and the host defaults
   ports         show the live port table, one fixed port per app process
   password      print a bcrypt hash for basic_auth
+  sshkey        list the local SSH public keys, or create a new key
 ```
 
 `dboss start` always runs in the foreground; systemd is the daemonizer and `dboss systemd --install` writes and enables the unit.

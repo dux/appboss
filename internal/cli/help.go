@@ -106,6 +106,9 @@ var commands = []command{
 		options: []option{socketOption, configOption, jsonOption}},
 	{name: "password", args: "", group: "Config", summary: "print a bcrypt hash for basic_auth",
 		details: []string{"Prompts without echo on a terminal; reads one line from stdin otherwise, so `printf secret | dboss password` works in scripts."}},
+	{name: "sshkey", args: "[list [--dir path] [--json]] | new [name] [-t type] [-b bits] [-C comment] [-f path] [--no-passphrase] [--force]", group: "Config", summary: "list the local SSH public keys, or create a new key",
+		details: []string{"list prints every *.pub in ~/.ssh as name plus the public key value, ready to paste into GitHub or GitLab. --json adds the type, bits, fingerprint, comment and whether the private key exists next to it.", "new runs ssh-keygen, ed25519 by default, then prints the public value and the GitHub and GitLab add pages. It refuses to overwrite an existing key without --force."},
+		options: []option{{"--dir <path>", "key directory (default ~/.ssh)"}, {"-t <type>", "ed25519 (default), rsa or ecdsa"}, {"-b <bits>", "key bits (default 4096 rsa, 521 ecdsa)"}, {"-C <comment>", "key comment (default user@host)"}, {"-f <path>", "target path (default <dir>/<name>)"}, {"--no-passphrase", "create without a passphrase"}, {"--force", "overwrite an existing key"}, jsonOption}},
 }
 
 func findCommand(name string) *command {
