@@ -184,6 +184,23 @@
       }
     }
 
+    async deleteBackup(id) {
+      if (this.state.busy) return
+      if (!window.confirm(`Delete backup ${id}?`)) return
+      try {
+        this.state.busy = true
+        const data = await Dboss.api('/api/pg/backup/delete', { method: 'POST', body: JSON.stringify({ id }) })
+        this.state.backups = data.backups || []
+        Toast.show('Backup deleted')
+        this.message('Backup deleted.')
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        this.state.busy = false
+      }
+    }
+
     async dropDatabase(name) {
       if (this.state.busy) return
       const typed = window.prompt(`This permanently drops ${name}. Type the database name to confirm.`)
@@ -385,6 +402,7 @@
             {:else}
               <span class="text-muted">{entry.error || '-'}</span>
             {/if}
+            <button class="btn btn-sm" type="button" onclick="fez.deleteBackup('{entry.id}')" disabled={state.busy}>Delete</button>
           </span>
         </div>
       {:else}

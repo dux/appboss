@@ -175,6 +175,12 @@ func (c CLI) remote(command string, args []string) error {
 			if *force {
 				request.Confirm = *target
 			}
+		case pgArgs[0] == "delete":
+			if len(pgArgs) != 2 {
+				return errors.New("usage: dboss pg delete <backup-id>")
+			}
+			request.Method = ops.ActionPGDeleteDump
+			request.BackupID = pgArgs[1]
 		case pgArgs[0] == "drop":
 			set := flag.NewFlagSet("pg drop", flag.ContinueOnError)
 			set.SetOutput(c.Err)
@@ -188,7 +194,7 @@ func (c CLI) remote(command string, args []string) error {
 			request.Method = ops.ActionPGDrop
 			request.Database, request.Confirm = set.Arg(0), *confirm
 		default:
-			return errors.New("usage: dboss pg [backups | backup [database] | restore <backup-id> | drop <database>]")
+			return errors.New("usage: dboss pg [backups | backup [database] | delete <backup-id> | restore <backup-id> | drop <database>]")
 		}
 	case "pubsub":
 		pub := opts.rest

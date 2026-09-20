@@ -31,6 +31,20 @@ const (
 // Backups lists every recorded dump, newest first.
 func (s *Service) Backups() []Backup { return s.catalog.list() }
 
+// DeleteBackup removes one recorded dump from disk and the catalog.
+func (s *Service) DeleteBackup(id string) error {
+	entry, ok := s.catalog.get(id)
+	if !ok {
+		return fmt.Errorf("unknown backup %q", id)
+	}
+	if entry.LocalPath != "" {
+		if err := os.Remove(entry.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return s.catalog.forget(map[string]bool{id: true})
+}
+
 // BackupAll dumps every selected database. It returns the first error but always attempts every
 // database, so one failure does not skip the rest.
 func (s *Service) BackupAll(ctx context.Context) error {

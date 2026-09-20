@@ -1115,6 +1115,9 @@ input[type="radio"] {
 }
 
 .pg-backup-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
 }
 

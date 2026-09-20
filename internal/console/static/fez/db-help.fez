@@ -660,7 +660,7 @@
         <ul>
           <li>Backups without a cron script: pick databases in the console, set their rotation, done.</li>
           <li>Bounded storage: one daily run, scheduled dumps kept for a week or a month, a manual backup kept until you remove it.</li>
-          <li>Restoring or dropping a database from the console, and seeing sizes and connections at a glance.</li>
+          <li>Restoring, deleting or dropping a database from the console, and seeing sizes and connections at a glance.</li>
         </ul>
         <h3>Config keys</h3>
         <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases" /></div>

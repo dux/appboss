@@ -49,6 +49,7 @@ const (
 	ActionPGBackups     = "pg-backups"
 	ActionPGRestore     = "pg-restore"
 	ActionPGDrop        = "pg-drop"
+	ActionPGDeleteDump  = "pg-delete-dump"
 	ActionPubsub        = "pubsub"
 	ActionPubsubSecret  = "pubsub-secret"
 	ActionPubsubRotate  = "pubsub-rotate"
@@ -59,7 +60,7 @@ const (
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
-	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true,
+	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
 
@@ -126,6 +127,7 @@ type PG interface {
 	BackupAll(ctx context.Context) error
 	BackupDatabase(ctx context.Context, database string, manual bool) (pg.Backup, error)
 	Backups() []pg.Backup
+	DeleteBackup(id string) error
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
 	DropDatabase(ctx context.Context, database, confirm string) error
 	BackupConfig() config.PostgresBackup
@@ -295,6 +297,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.Restore(pg.RestoreRequest{ID: request.BackupID, Target: request.Target, Replace: request.Replace, Confirm: request.Confirm})
 	case ActionPGDrop:
 		return request.Database, s.DropDatabase(request.Database, request.Confirm)
+	case ActionPGDeleteDump:
+		return request.BackupID, s.DeleteBackup(request.BackupID)
 	case ActionPubsub:
 		return s.PubsubApps(), nil
 	case ActionPubsubSecret:
@@ -367,6 +371,8 @@ func auditDetail(request Request) string {
 		return request.BackupID
 	case ActionPGDrop:
 		return request.Database
+	case ActionPGDeleteDump:
+		return request.BackupID
 	case ActionPubsubPublish:
 		return request.Channel
 	default:
@@ -523,6 +529,14 @@ func (s *Service) DropDatabase(database, confirm string) error {
 		return errors.New("postgres is not enabled")
 	}
 	return s.pg.DropDatabase(context.Background(), database, confirm)
+}
+
+// DeleteBackup removes one recorded dump from disk and the catalog.
+func (s *Service) DeleteBackup(id string) error {
+	if s.pg == nil || !s.pg.Enabled() {
+		return errors.New("postgres is not enabled")
+	}
+	return s.pg.DeleteBackup(id)
 }
 
 // ApplyPGConfig pushes a freshly saved config into the PostgreSQL service, so PG settings and

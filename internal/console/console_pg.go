@@ -80,6 +80,25 @@ func (h *Handler) pgBackup(w http.ResponseWriter, r *http.Request, session authS
 	writeJSON(w, http.StatusOK, map[string]any{"result": result, "backups": h.service.Backups(), "updated_at": time.Now().UTC()})
 }
 
+// pgDeleteBackup removes one recorded dump from disk and the catalog.
+func (h *Handler) pgDeleteBackup(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.service.Do(ops.Request{Method: ops.ActionPGDeleteDump, BackupID: strings.TrimSpace(request.ID), Actor: session.Email}); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": h.service.Backups(), "updated_at": time.Now().UTC()})
+}
+
 func (h *Handler) pgRestore(w http.ResponseWriter, r *http.Request, session authSession) {
 	if !h.requireCSRF(w, r, session) {
 		return

@@ -266,6 +266,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writePGBackups(w)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/backup":
 		h.pgBackup(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/backup/delete":
+		h.pgDeleteBackup(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/restore":
 		h.pgRestore(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/drop":

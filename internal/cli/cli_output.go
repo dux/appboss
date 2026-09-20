@@ -266,6 +266,8 @@ func (c CLI) printHuman(method string, data any) error {
 		fmt.Fprintf(c.Out, "restored %d bytes into %s\n", result.Bytes, result.Target)
 	case ops.ActionPGDrop:
 		fmt.Fprintf(c.Out, "dropped %s\n", data.(string))
+	case ops.ActionPGDeleteDump:
+		fmt.Fprintf(c.Out, "deleted backup %s\n", data.(string))
 	case ops.ActionPubsub:
 		apps := data.([]pubsub.App)
 		if len(apps) == 0 {

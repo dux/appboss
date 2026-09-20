@@ -352,6 +352,7 @@ On the box this feature needs `pg_dump` and `psql` on the service user's `PATH`,
 dboss pg                      # server summary and databases
 dboss pg backups              # recorded dumps
 dboss pg backup [database]    # dump one or every selected database
+dboss pg delete <backup-id>   # remove one recorded dump
 dboss pg restore <id> [--target name] [--force]
 dboss pg drop <database> --confirm <database>
 ```
