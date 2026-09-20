@@ -67,8 +67,8 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, app super.Sn
 }
 
 // publicHealth answers the app's own status path without auth, so a Cloudflare health check or
-// uptime monitor can probe the app domain. It reports liveness, not readiness: 200 while the app
-// runs and is not draining, 503 otherwise, and it never wakes a stopped app.
+// uptime monitor can probe the app domain. It reports whether a visitor would be served: 200 while
+// the app runs or sleeps until the next request, 503 otherwise, and it never wakes a stopped app.
 func (h *Handler) publicHealth(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
 	path := app.Web.HealthEndpoint
 	if path == "" || r.URL.Path != path || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
@@ -76,7 +76,7 @@ func (h *Handler) publicHealth(w http.ResponseWriter, r *http.Request, app super
 		return
 	}
 	status := http.StatusOK
-	if app.State != super.Running || app.Draining {
+	if !app.Serving() {
 		status = http.StatusServiceUnavailable
 	}
 	w.Header().Set("Content-Type", "application/json")

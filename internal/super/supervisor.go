@@ -86,6 +86,15 @@ type Snapshot struct {
 	LogFlush        time.Duration     `json:"-"`
 }
 
+// Serving reports whether a request for the app would be answered by the app itself: it runs, or
+// it is stopped and the proxy wakes it on the next request. Button apps only wake on a POST.
+func (s Snapshot) Serving() bool {
+	if s.Draining || s.Maintenance {
+		return false
+	}
+	return s.State == Running || (s.State == Stopped && !s.WakeButton)
+}
+
 const failureLogLines = 1000
 
 type Manager struct {

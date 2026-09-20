@@ -1,6 +1,7 @@
 package console
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -329,12 +330,12 @@ func (h *Handler) healthz(w http.ResponseWriter) {
 	_, _ = io.WriteString(w, "ok\n")
 }
 
-// readyz is 200 only while every autostart app is running, so a load balancer or uptime checker
-// can hold traffic back during a startup.
+// readyz is 200 only while every autostart app serves, so a load balancer or uptime checker can
+// hold traffic back during a startup. An app put to sleep by idle_stop still counts as ready.
 func (h *Handler) readyz(w http.ResponseWriter) {
 	var notReady []string
 	for _, app := range h.service.Apps() {
-		if app.Autostart && (app.State != super.Running || app.Draining) {
+		if app.Autostart && !app.Serving() {
 			notReady = append(notReady, app.Name+"="+string(app.State))
 		}
 	}
@@ -674,7 +675,7 @@ func (h *Handler) writeLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, e := range entries {
-			fmt.Fprintf(w, "%s %s %s %d %s %dms %dB %s\n", e.Time.Format(time.RFC3339), e.Method, e.Host, e.Status, e.Path, e.DurationMS, e.BytesOut, e.IP)
+			fmt.Fprintf(w, "%s %s %s %d %s %dms %dB %s %s\n", e.Time.Format(time.RFC3339), e.Method, e.Host, e.Status, e.Path, e.DurationMS, e.BytesOut, e.IP, cmp.Or(e.Country, "-"))
 		}
 		return
 	}

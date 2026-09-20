@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,9 +87,10 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nmax_body: 1k\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nmax_body: 1k\nerror_page_path: public/error_500.html\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
 	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
+	writeProxyFixture(t, filepath.Join(appDir, "public", "error_500.html"), "<h1>custom error {{APP_NAME}}</h1>")
 	cfg := config.Default()
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
@@ -124,6 +126,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/hello?x=1", nil)
 	request.Host = "demo.test"
 	request.Header.Set("CF-Ray", "ray-123")
+	request.Header.Set("CF-IPCountry", "hr")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	body, _ := io.ReadAll(response.Result().Body)
@@ -143,6 +146,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	forwarded := httptest.NewRequest(http.MethodGet, "http://demo.test/headers", nil)
 	forwarded.Host = "demo.test"
 	forwarded.Header.Set("CF-Connecting-IP", "203.0.113.9")
+	forwarded.Header.Set("CF-IPCountry", "not-a-country")
 	forwardedResponse := httptest.NewRecorder()
 	handler.ServeHTTP(forwardedResponse, forwarded)
 	forwardedBody, _ := io.ReadAll(forwardedResponse.Result().Body)
@@ -162,11 +166,15 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var requestID string
-	if err := db.QueryRow(`SELECT request_id FROM requests WHERE path = '/hello?x=1'`).Scan(&requestID); err != nil || requestID != "ray-123" {
-		t.Fatalf("request id row = %q, %v", requestID, err)
+	var requestID, visitorCountry string
+	if err := db.QueryRow(`SELECT request_id, country FROM requests WHERE path = '/hello?x=1'`).Scan(&requestID, &visitorCountry); err != nil || requestID != "ray-123" || visitorCountry != "HR" {
+		t.Fatalf("request id row = %q %q, %v", requestID, visitorCountry, err)
+	}
+	if err := db.QueryRow(`SELECT country FROM requests WHERE path = '/headers'`).Scan(&visitorCountry); err != nil || visitorCountry != "" {
+		t.Fatalf("junk country row = %q, %v", visitorCountry, err)
 	}
 	assertUpgradePassthrough(t, handler)
+	assertAppErrorPage(t, handler)
 	if err := manager.Stop("demo"); err != nil {
 		t.Fatal(err)
 	}
@@ -262,10 +270,53 @@ func assertUpgradePassthrough(t *testing.T, handler http.Handler) {
 	}
 }
 
+// assertAppErrorPage pins error_page_path against a live app: a 5xx answer to an HTML GET gets the
+// static file with the app's status, and nothing else the app says is rewritten.
+func assertAppErrorPage(t *testing.T, handler *Handler) {
+	t.Helper()
+	call := func(method, target, accept string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, "http://demo.test"+target, nil)
+		request.Host = "demo.test"
+		if accept != "" {
+			request.Header.Set("Accept", accept)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	page := call(http.MethodGet, "/boom", "text/html,application/xhtml+xml")
+	// The file is sent as it is on disk: no placeholder substitution.
+	if page.Code != http.StatusInternalServerError || page.Body.String() != "<h1>custom error {{APP_NAME}}</h1>" {
+		t.Fatalf("app 500 on an html GET = %d %q", page.Code, page.Body.String())
+	}
+	if got := page.Header(); !strings.Contains(got.Get("Content-Type"), "text/html") || got.Get("Cache-Control") != "no-store" || got.Get("Content-Encoding") != "" || got.Get("Etag") != "" || got.Get("Content-Length") != strconv.Itoa(page.Body.Len()) {
+		t.Fatalf("app 500 headers = %v", got)
+	}
+	if api := call(http.MethodGet, "/boom", "application/json"); api.Code != http.StatusInternalServerError || !strings.Contains(api.Body.String(), "stack trace") {
+		t.Fatalf("app 500 on a json GET must pass through: %d %q", api.Code, api.Body.String())
+	}
+	if post := call(http.MethodPost, "/boom", "text/html"); post.Code != http.StatusInternalServerError || !strings.Contains(post.Body.String(), "stack trace") {
+		t.Fatalf("app 500 on a POST must pass through: %d %q", post.Code, post.Body.String())
+	}
+	if missing := call(http.MethodGet, "/gone", "text/html"); missing.Code != http.StatusNotFound || missing.Body.String() != "app 404" {
+		t.Fatalf("app 404 must pass through: %d %q", missing.Code, missing.Body.String())
+	}
+}
+
 func TestProxyHelperProcess(t *testing.T) {
 	if os.Getenv("BOSS_PROXY_HELPER") != "1" {
 		return
 	}
+	http.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "identity")
+		w.Header().Set("Etag", `"boom"`)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "stack trace: boom")
+	})
+	http.HandleFunc("/gone", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, "app 404")
+	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Powered-By", "helper")
 		_, _ = io.WriteString(w, "hello from demo "+r.Header.Get("X-Request-ID"))

@@ -132,14 +132,16 @@ var keySpecs = map[string]KeySpec{
 	"cpu_max":             {Block: "runtime", Name: "CPU limit", Description: "CPU limit in percent of one core, cgroup backend only; 0 unlimited", Example: "200"},
 
 	// --- Web ---
-	"health_endpoint":  {Block: "web", Name: "Health endpoint", Description: "public status path on the app's own hosts: 200 when running, 503 otherwise; empty disables", Example: "/healthz"},
-	"static":           {Block: "web", Name: "Static directory", Description: "directory served straight from disk for GET and HEAD, relative to the app", Example: "./public"},
-	"static_immutable": {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under static cached as immutable for a year", Example: "[/assets/, /packs/]"},
-	"max_body":         {Block: "web", Name: "Max body size", Description: "request body limit; 0 none"},
-	"basic_auth":       {Block: "web", Name: "Basic auth users", Description: "HTTP basic auth users to bcrypt hashes from dboss password", Example: "{alice: \"$2a$10$...\"}", Secret: true},
-	"allow_ips":        {Block: "web", Name: "Allowed IPs", Description: "CIDRs allowed to reach the app; empty allows everyone", Example: "[10.0.0.0/8]"},
-	"headers":          {Block: "web", Name: "Response headers", Description: "response headers added to every response; an empty value removes one", Example: "{X-Frame-Options: DENY}"},
-	"maintenance_page": {Block: "web", Name: "Maintenance page", Description: "file served in maintenance mode, relative to the app", Example: "./public/503.html"},
+	"health_endpoint":   {Block: "web", Name: "Health endpoint", Description: "public status path on the app's own hosts: 200 when running or asleep and wakeable, 503 otherwise; empty disables", Example: "/healthz"},
+	"static":            {Block: "web", Name: "Static directory", Description: "directory served straight from disk for GET and HEAD, relative to the app", Example: "./dist"},
+	"static_immutable":  {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under static cached as immutable for a year", Example: "[/assets/, /packs/]"},
+	"static_extensions": {Block: "web", Name: "Static extensions", Description: "file extensions served from static, without the dot; empty serves any file", Example: "[css, js, png]"},
+	"max_body":          {Block: "web", Name: "Max body size", Description: "request body limit; 0 none"},
+	"basic_auth":        {Block: "web", Name: "Basic auth users", Description: "HTTP basic auth users to bcrypt hashes from dboss password", Example: "{alice: \"$2a$10$...\"}", Secret: true},
+	"allow_ips":         {Block: "web", Name: "Allowed IPs", Description: "CIDRs allowed to reach the app; empty allows everyone", Example: "[10.0.0.0/8]"},
+	"headers":           {Block: "web", Name: "Response headers", Description: "response headers added to every response; an empty value removes one", Example: "{X-Frame-Options: DENY}"},
+	"maintenance_page":  {Block: "web", Name: "Maintenance page", Description: "file served in maintenance mode, relative to the app", Example: "./public/503.html"},
+	"error_page_path":   {Block: "web", Name: "Error page", Description: "static HTML served for proxy errors and app 5xx answers, relative to the app", Example: "public/error_500.html"},
 
 	// --- PubSub ---
 	"pubsub.path":             {Block: "pubsub", Name: "Path prefix", Description: "URL prefix that serves realtime channels on the app hosts; empty disables the feature", Example: "/socketio"},

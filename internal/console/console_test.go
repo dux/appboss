@@ -261,7 +261,7 @@ func (fakeLogs) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, err
 }
 
 func (fakeLogs) SearchRequests(string, logstore.RequestFilter) ([]logstore.RequestEntry, error) {
-	return []logstore.RequestEntry{{Time: time.Now(), Method: "GET", Path: "/hello", Status: 200}}, nil
+	return []logstore.RequestEntry{{Time: time.Now(), Method: "GET", Path: "/hello", Status: 200, Country: "HR"}}, nil
 }
 
 func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
@@ -423,7 +423,7 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 		t.Fatalf("unexpected logs: %d %s", logs.Code, logs.Body.String())
 	}
 	requests := call(t, handler, cookie, session, http.MethodGet, "/api/log/search?app=sinatra&channel=request", "")
-	if requests.Code != http.StatusOK || !strings.Contains(requests.Body.String(), `"kind":"request"`) || !strings.Contains(requests.Body.String(), `"path":"/hello"`) {
+	if requests.Code != http.StatusOK || !strings.Contains(requests.Body.String(), `"kind":"request"`) || !strings.Contains(requests.Body.String(), `"path":"/hello"`) || !strings.Contains(requests.Body.String(), `"country":"HR"`) {
 		t.Fatalf("unexpected requests: %d %s", requests.Code, requests.Body.String())
 	}
 	channels := call(t, handler, cookie, session, http.MethodGet, "/api/log/channels?app=sinatra", "")

@@ -367,7 +367,7 @@
     <div class="log-toolbar-row">
       <label class="log-search">
         <svg class="icon"><use href="#i-search"></use></svg>
-        <input fez:this="queryNode" placeholder="Search (prefix match)" oninput="fez.queueSearch()" onkeydown="fez.searchKey(event)">
+        <input fez:this="queryNode" placeholder={isRequest() ? 'Search host, path, IP, agent or Ray ID' : 'Search (prefix match)'} oninput="fez.queueSearch()" onkeydown="fez.searchKey(event)">
       </label>
       <button class="btn btn-sm" type="button" onclick="fez.clearFilters()">Clear</button>
       <span class="log-spacer"></span>
@@ -397,6 +397,7 @@
             <th>Path</th>
             <th class="num">ms</th>
             <th class="num">Bytes</th>
+            <th>Geo</th>
             <th>IP</th>
           </tr>
         {:else}
@@ -418,6 +419,7 @@
               <td class="log-path">{row.path}</td>
               <td class="num">{row.duration_ms}</td>
               <td class="num">{row.bytes_out}</td>
+              <td class="log-ip">{row.country}</td>
               <td class="log-ip">{row.ip}</td>
             {:else}
               <td class="log-time">{row.timeLabel}</td>
@@ -428,7 +430,7 @@
           </tr>
           {#if state.expandedKey === rowKey(row)}
             <tr class="log-detail-row">
-              <td colspan="7">
+              <td colspan="8">
                 <div class="log-detail-head">
                   <strong>{row.process || row.method || 'row'}</strong>
                   <button class="btn btn-sm" type="button" onclick="fez.copyRow({index})">Copy</button>
@@ -439,7 +441,7 @@
           {/if}
         {:else}
           <tr>
-            <td colspan="7" class="text-muted log-empty">{state.loaded ? 'No matching rows' : 'Loading...'}</td>
+            <td colspan="8" class="text-muted log-empty">{state.loaded ? 'No matching rows' : 'Loading...'}</td>
           </tr>
         {/each}
       </tbody>

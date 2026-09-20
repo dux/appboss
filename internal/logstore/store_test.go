@@ -13,7 +13,7 @@ func TestRecordSearchAndPrune(t *testing.T) {
 	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
 
-	if err := store.Record("demo", time.Hour, RequestEntry{Time: time.Now(), Method: "GET", Host: "demo.test", Path: "/hello", Status: 200, IP: "1.2.3.4", UserAgent: "curl", RequestID: "abc"}); err != nil {
+	if err := store.Record("demo", time.Hour, RequestEntry{Time: time.Now(), Method: "GET", Host: "demo.test", Path: "/hello", Status: 200, IP: "1.2.3.4", UserAgent: "curl", RequestID: "ray-abc", Country: "HR"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordLogs("demo", []LogEntry{{Time: time.Now(), Source: "process", Process: "web", Stream: "combined", Level: "error", Message: "boom request", RequestID: "abc", Raw: "boom request"}}); err != nil {
@@ -24,8 +24,11 @@ func TestRecordSearchAndPrune(t *testing.T) {
 	}
 
 	requests := waitFor(t, func() ([]RequestEntry, error) { return store.SearchRequests("demo", RequestFilter{Query: "hello"}) })
-	if len(requests) != 1 || requests[0].RequestID != "abc" || requests[0].Status != 200 {
+	if len(requests) != 1 || requests[0].RequestID != "ray-abc" || requests[0].Status != 200 || requests[0].Country != "HR" {
 		t.Fatalf("unexpected requests: %+v", requests)
+	}
+	if byRay, err := store.SearchRequests("demo", RequestFilter{Query: "ray-ab"}); err != nil || len(byRay) != 1 {
+		t.Fatalf("search by request id: %v %+v", err, byRay)
 	}
 	logs := waitForLogs(t, func() ([]LogEntry, error) { return store.SearchLogs("demo", LogFilter{Query: "boom"}) })
 	if len(logs) != 1 || logs[0].Process != "web" || logs[0].Level != "error" {

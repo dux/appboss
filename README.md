@@ -162,6 +162,7 @@ Every app has one SQLite database at `log_dir/<app>/dboss.sqlite` with three tab
 written by the ingestion module) and `tail_offsets` (how far the file tailer has read).
 `logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`,
 and an FTS5 index over `message` and `raw` backs the text search.
+`requests` carries `request_id` (the `CF-Ray` when Cloudflare sent one, so a request from the Cloudflare dashboard can be found by pasting its Ray ID into the search) and `country` (the two-character `CF-IPCountry`, empty without it).
 
 Each row belongs to a channel and the console's **Logs** viewer selects one:
 
@@ -179,10 +180,9 @@ A second daily job at `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` 
 The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it
 seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
 ingestion module parses the sealed segment, commits its rows to the database and only then deletes the file, so a transient database error cannot lose lines.
-A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
 A segment whose commit failed stays on disk and is picked up again by the next pass.
+A JSON line is read for `level`, `message` and `request_id`; any other line keeps its text and a
 keyword guess for the level.
-`dboss logs -f` still tails the live file, while `dboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
 
 One row is one record, not one physical line:
 
@@ -193,6 +193,7 @@ One row is one record, not one physical line:
 * A row is capped at 1000 lines or 256 KiB. Its level comes from its first line.
 
 A record that is still being written is not cut: while a log was written to in the last 2 seconds its last open row waits for the next pass.
+`dboss logs -f` still tails the live file, while `dboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
 
 The full-screen viewer at `/logs` (the **Logs** button on an app card, opened in a new window)
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,
@@ -290,12 +291,12 @@ The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`
 The management host also serves three endpoints, enabled by `management.metrics.enabled` (default `true`):
 
 * `GET /healthz` - `200 ok` while the daemon is up.
-* `GET /readyz` - `200` only while every `autostart` app is running, else `503` with the apps that are not ready.
+* `GET /readyz` - `200` only while every `autostart` app serves (running, or asleep and woken by the next request), else `503` with the apps that are not ready.
 * `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-process restarts and memory, request rates per window, request duration quantiles (p50/p95/p99 over the last hour), and the last exit of each cron job and hook.
 
 `healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
 
-Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while it runs and is not draining, `503` otherwise. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
+Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while a visitor would be served, `503` otherwise. An app stopped by `idle_stop` (or `dboss stop`) still answers `200` with `"state":"stopped"`, because the next request wakes it, so a Cloudflare Health Check or Load Balancer never flags a sleeping app. Draining, maintenance, starting, crashed and a stopped `autostart: button` app answer `503`. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
 The supervisor also watches the web process for its whole lifetime: `health` (`tcp` or `http:<path>`) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
@@ -377,6 +378,40 @@ Two rules keep the two systems from colliding:
 * A hostname is routed by one proxy only. dboss routes just the hosts of the apps in its own `apps` directory, so a container host must be served by Cloudflare or another reverse proxy.
 
 The one bridge without code is a procfile wrapper (`shell: true` with `docker run -p 127.0.0.1:$PORT:$PORT ...`), which makes a container answer as a dboss app but leaves its lifecycle on the docker CLI, with the usual caveats around stopping it.
+
+## Access control
+
+`basic_auth` puts HTTP basic auth in front of the whole app, static files included.
+It maps a user to a bcrypt hash printed by `dboss password`; set it under `defaults:` in the host file to protect every app on a staging box with one block.
+`allow_ips` limits the app to a list of CIDRs, matched against the client IP from `proxy.client_ip_headers`.
+
+```yaml
+basic_auth:
+  alice: "$2a$10$..."   # dboss password
+allow_ips:
+  - 10.0.0.0/8
+```
+
+Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
+
+* A request with no or wrong credentials gets `401` at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.
+* With no `basic_auth` any request wakes a stopped app, except an `autostart: button` app, which only its start button's POST wakes.
+* The health endpoint answers before auth, so a Cloudflare health check works on a protected app. It never wakes the app.
+* A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials.
+
+## Static files and error pages
+
+Every app serves `./public` straight from disk (`static`, relative to the app folder) for GET and HEAD, without waking the app.
+Only the common asset types in `static_extensions` are served: css, js, mjs, map, json, txt, xml, ico, images, fonts, mp4, webm, mp3, pdf, wasm and webmanifest.
+A missing file, a directory, or a file with any other extension (an `.html` page, a dotfile, no extension) is a normal request to the app, so a route always wins over a stray file.
+A missing `public` folder simply turns static serving off for that app; `static: ""` does the same on purpose and `static_extensions: []` serves any regular file.
+Paths under `static_immutable` (default `/assets/`) are cached as immutable for a year, everything else for an hour.
+
+`error_page_path` names one static HTML file, relative to the app folder (for example `public/error_500.html`).
+It is sent as it is on disk and read on every request, and only a GET that accepts `text/html` ever gets a page; API and non-GET requests are never rewritten.
+
+* dboss's own errors (`502` when the app is unreachable, timed out or has no port) answer with this file, or with the built-in `./web/error.html` page when the key is empty or the file is unreadable.
+* The app's own `5xx` answers are replaced with this file, status kept, only when the key is set and the file is readable. With the key empty an app keeps its own error page.
 
 ## Restarts and forwarded headers
 
@@ -494,7 +529,7 @@ internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console
 internal/res/         resource backend: process groups or cgroup v2 limits
-web/                  starting, crashed, button, maintenance and 404 pages
+web/                  starting, crashed, button, maintenance, error and 404 pages
 demo/                 host config and three sample apps
 ```
 

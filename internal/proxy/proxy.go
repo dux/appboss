@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ type Handler struct {
 	unknown     []byte
 	button      []byte
 	maintenance []byte
+	failed      []byte
 	filters     []Filter
 }
 
@@ -77,8 +79,12 @@ func New(cfg config.Config, manager *super.Manager, recorder Recorder, authorize
 	if err != nil {
 		return nil, err
 	}
+	failed, err := readPage("web/error.html")
+	if err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed}
 	h.initFilters(extra...)
 	return h, nil
 }
@@ -99,7 +105,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if recorder.suppressed {
 		return
 	}
-	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: snapshot.WebProcess})
+	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: snapshot.WebProcess, Country: country(r)})
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
@@ -160,7 +166,7 @@ func serveStatic(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot
 	}
 	defer root.Close()
 	cleaned := path.Clean("/" + r.URL.Path)
-	if cleaned == "/" {
+	if cleaned == "/" || !staticExtension(cleaned, snapshot.Web.StaticExtensions) {
 		return false
 	}
 	file, err := root.Open(strings.TrimPrefix(cleaned, "/"))
@@ -176,6 +182,17 @@ func serveStatic(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot
 	applyHeaders(w.Header(), snapshot.Web.Headers)
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 	return true
+}
+
+// staticExtension keeps static serving to the asset types in static_extensions, so an HTML page,
+// a dotfile or an extensionless path under the directory is always the app's to answer. An empty
+// list serves any file.
+func staticExtension(requestPath string, extensions []string) bool {
+	if len(extensions) == 0 {
+		return true
+	}
+	extension := strings.ToLower(strings.TrimPrefix(path.Ext(requestPath), "."))
+	return extension != "" && slices.Contains(extensions, extension)
 }
 
 func cacheControl(requestPath string, immutable []string) string {
@@ -316,7 +333,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 		}
 	}
 	if port == 0 {
-		http.Error(w, "web process has no port", http.StatusBadGateway)
+		h.errorPage(w, r, snapshot, http.StatusBadGateway)
 		return
 	}
 	h.manager.Touch(snapshot.Name)
@@ -328,6 +345,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	reverse.Transport = h.transport
 	reverse.ModifyResponse = func(response *http.Response) error {
 		applyHeaders(response.Header, snapshot.Web.Headers)
+		replaceAppError(response, r, snapshot)
 		return nil
 	}
 	reverse.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -336,10 +354,60 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		h.errorPage(w, r, snapshot, http.StatusBadGateway)
 	}
 	reverse.ServeHTTP(w, r)
 	h.manager.Touch(snapshot.Name)
+}
+
+// customErrorPage reads the app's error_page_path on every request, so a deploy can replace it.
+func customErrorPage(snapshot super.Snapshot) ([]byte, bool) {
+	if snapshot.Web.ErrorPagePath == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(resolveAppPath(snapshot.Dir, snapshot.Web.ErrorPagePath))
+	return data, err == nil
+}
+
+// errorPage answers a failure of the proxy itself. An HTML GET gets the app's error_page_path, or
+// the built-in page when there is none; anything else gets the bare status. The file is sent as
+// it is on disk, with no placeholder substitution.
+func (h *Handler) errorPage(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot, status int) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !wantsHTML(r) {
+		w.WriteHeader(status)
+		return
+	}
+	if data, ok := customErrorPage(snapshot); ok {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write(data)
+		return
+	}
+	h.page(w, status, h.failed, snapshot.Name)
+}
+
+// replaceAppError swaps the body of an app 5xx answer to an HTML GET for the app's
+// error_page_path and keeps the status. It only acts when the key is set and the file is
+// readable, so an app keeps its own error page by default and API answers are never rewritten.
+func replaceAppError(response *http.Response, r *http.Request, snapshot super.Snapshot) {
+	if response.StatusCode < http.StatusInternalServerError || !wantsHTML(r) {
+		return
+	}
+	data, ok := customErrorPage(snapshot)
+	if !ok {
+		return
+	}
+	_ = response.Body.Close()
+	response.Body = io.NopCloser(bytes.NewReader(data))
+	response.ContentLength = int64(len(data))
+	for _, name := range []string{"Content-Encoding", "Etag", "Last-Modified", "Transfer-Encoding"} {
+		response.Header.Del(name)
+	}
+	response.TransferEncoding = nil
+	response.Header.Set("Content-Length", strconv.Itoa(len(data)))
+	response.Header.Set("Content-Type", "text/html; charset=utf-8")
+	response.Header.Set("Cache-Control", "no-store")
 }
 
 // applyForwardedHeaders adds the headers an app expects from a reverse proxy, but never
@@ -482,6 +550,8 @@ func readPage(path string) ([]byte, error) {
 		return []byte(defaultUnknownPage), nil
 	case "maintenance.html":
 		return []byte(defaultMaintenancePage), nil
+	case "error.html":
+		return []byte(defaultErrorPage), nil
 	default:
 		return nil, fmt.Errorf("read page %s: file not found", path)
 	}
@@ -493,6 +563,7 @@ const defaultButtonPage = `<!doctype html><html lang="en"><meta charset="utf-8">
 const defaultCrashedPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is unavailable</title>` + pageStyle + `<main><h1>{{APP_NAME}} is unavailable</h1><p>The application could not be started.</p></main></html>`
 const defaultUnknownPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Not found</title>` + pageStyle + `<main><h1>Application not found</h1></main></html>`
 const defaultMaintenancePage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is down for maintenance</title>` + pageStyle + `<main><h1>Down for maintenance</h1><p>{{APP_NAME}} will be back shortly.</p></main></html>`
+const defaultErrorPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is not responding</title>` + pageStyle + `<main><h1>Something went wrong</h1><p>{{APP_NAME}} did not answer. Please try again in a moment.</p></main></html>`
 const defaultForbiddenPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forbidden</title>` + pageStyle + `<main><h1>Forbidden</h1><p>Your address is not allowed to reach this application.</p></main></html>`
 
 func clientIP(r *http.Request, headers []string) string {
@@ -506,6 +577,16 @@ func clientIP(r *http.Request, headers []string) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// country is the visitor country Cloudflare reports in CF-IPCountry. Only a two-character code is
+// kept (T1 is Tor), so a missing or junk header never reaches the request log.
+func country(r *http.Request) string {
+	code := strings.ToUpper(strings.TrimSpace(r.Header.Get("CF-IPCountry")))
+	if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || (code[1] < 'A' || code[1] > 'Z') && (code[1] < '0' || code[1] > '9') {
+		return ""
+	}
+	return code
 }
 
 type responseRecorder struct {

@@ -46,6 +46,19 @@ func TestReadyzFailsWhileAnAutostartAppIsDown(t *testing.T) {
 	}
 }
 
+func TestReadyzCountsASleepingAutostartAppAsReady(t *testing.T) {
+	manager := &fakeManager{snapshots: []super.Snapshot{
+		{Name: "web", State: super.Running, Autostart: true},
+		{Name: "sleepy", State: super.Stopped, Autostart: true},
+	}}
+	handler := newTestHandler(t, manager, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/readyz", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("readyz = %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
 	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "web", State: super.Running, Autostart: true}}}
 	handler := newTestHandler(t, manager, nil)

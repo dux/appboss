@@ -270,13 +270,20 @@ defaults:
   # -> max_body/body buffer -> wake or forward -> headers.
 
   # Directory served straight from disk for GET and HEAD, relative to the app folder.
-  # A missing directory disables static serving for that app, so "./public" is safe globally.
-  # Regular files only; directories and missing files fall through to the app. No index lookup.
+  # A missing directory disables static serving for that app, so the default is safe for every
+  # app; "" turns it off. Regular files only; directories, missing files and extensions outside
+  # static_extensions fall through to the app as a normal request. No index lookup.
   # Served with Last-Modified, If-Modified-Since and range support, without waking the app.
-  static: ""
+  static: ./public
+  # File extensions served from static, lowercase and without the dot; the match ignores case.
+  # Anything else under the directory (an .html page, a dotfile, a file with no extension) is
+  # the app's to answer, even when the file exists. [] serves any regular file.
+  static_extensions: [css, js, mjs, map, json, txt, xml, ico, png, jpg, jpeg, gif, svg, webp, avif, woff, woff2, ttf, otf, eot, mp4, webm, mp3, pdf, wasm, webmanifest]
   # Public status path on the app's own hosts, so a Cloudflare health check or uptime monitor
-  # can probe the app domain. GET/HEAD answer 200 {"app","state"} while the app runs and is not
-  # draining, 503 otherwise. It runs before basic auth and never wakes the app. Empty disables it.
+  # can probe the app domain. GET/HEAD answer 200 {"app","state"} while a visitor would be served:
+  # the app runs, or it is stopped (idle_stop, dboss stop) and the next request wakes it. Draining,
+  # maintenance, starting, crashed and a stopped `autostart: button` app answer 503.
+  # It runs before basic auth and never wakes the app. Empty disables it.
   health_endpoint: /.well-known/dboss/health
   # Path prefixes under static that get "public, max-age=31536000, immutable".
   # Everything else under static gets "public, max-age=3600".
@@ -308,6 +315,16 @@ defaults:
   # to the app folder. Default: <static>/503.html when it exists, then the built-in page.
   # HTML GETs get the page with 503 and Retry-After: 30; everything else an empty 503.
   maintenance_page: ""
+
+  # Static HTML file served instead of an error, relative to the app folder, sent as it is on disk
+  # (no placeholders) and read on every request. Only a GET that accepts text/html gets a page;
+  # API and non-GET requests are never rewritten.
+  #   - dboss's own errors (502 upstream unavailable or timed out, web process has no port):
+  #     this file, or the built-in page when the key is empty or the file is unreadable.
+  #   - the app's own 5xx answers: replaced with this file, status kept, only when the key is set
+  #     and the file is readable. Empty keeps the app's own error page.
+  error_page_path: ""
+  #   error_page_path: public/error_500.html
 
 # --- Daemon ------------------------------------------------------------------
 

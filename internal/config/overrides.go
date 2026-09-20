@@ -40,15 +40,17 @@ type ProcessOverrides struct {
 }
 
 type WebOverrides struct {
-	HealthEndpoint  *string           `yaml:"health_endpoint,omitempty" json:"health_endpoint,omitempty"`
-	Static          *string           `yaml:"static,omitempty" json:"static,omitempty"`
-	StaticImmutable List              `yaml:"static_immutable,omitempty" json:"static_immutable,omitempty"`
-	MaxBody         *Size             `yaml:"max_body,omitempty" json:"max_body,omitempty"`
-	BasicAuth       map[string]string `yaml:"basic_auth,omitempty" json:"-"`
-	AllowIPs        List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
-	Headers         map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-	MaintenancePage *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
-	Pubsub          *PubsubOverrides  `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
+	HealthEndpoint   *string           `yaml:"health_endpoint,omitempty" json:"health_endpoint,omitempty"`
+	Static           *string           `yaml:"static,omitempty" json:"static,omitempty"`
+	StaticImmutable  List              `yaml:"static_immutable,omitempty" json:"static_immutable,omitempty"`
+	StaticExtensions List              `yaml:"static_extensions,omitempty" json:"static_extensions,omitempty"`
+	MaxBody          *Size             `yaml:"max_body,omitempty" json:"max_body,omitempty"`
+	BasicAuth        map[string]string `yaml:"basic_auth,omitempty" json:"-"`
+	AllowIPs         List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
+	Headers          map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	MaintenancePage  *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
+	ErrorPagePath    *string           `yaml:"error_page_path,omitempty" json:"error_page_path,omitempty"`
+	Pubsub           *PubsubOverrides  `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
 }
 
 // PubsubOverrides is the pubsub block as pointers, so an app can override one key and keep the

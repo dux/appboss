@@ -73,7 +73,8 @@
           <li>Host routing from <code>hosts</code>, including <code>*.</code> subdomains and <code>.example.com</code> for the apex plus every subdomain.</li>
           <li><code>canonical_host</code> 301s every other host; <code>maintenance</code> serves a page while the app keeps running.</li>
           <li>Access control with <code>basic_auth</code> (bcrypt via <code>dboss password</code>) and <code>allow_ips</code> CIDRs.</li>
-          <li>Static files from <code>static</code>, with immutable caching for chosen prefixes (<code>static_immutable</code>).</li>
+          <li>Static files from <code>static</code> (default <code>./public</code>) for the asset types in <code>static_extensions</code>, with immutable caching for chosen prefixes (<code>static_immutable</code>). Anything not found goes to the app.</li>
+          <li><code>error_page_path</code> serves one static HTML file for proxy errors and for the app's own <code>5xx</code> answers to HTML page loads.</li>
           <li>Response <code>headers</code> and a request body limit (<code>max_body</code>).</li>
           <li>Cloudflare-first: <code>trusted_cidrs</code> and <code>client_ip_headers</code>; forwarded headers are added only when missing.</li>
           <li>Tunable upstream timeouts and keep-alive pooling.</li>
@@ -204,9 +205,31 @@ idle_stop: 0s</pre>
         <p>Every app lists the hostnames it answers in <code>hosts</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to its <code>web</code> process. Non-web processes never get traffic.</p>
         <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list.</p>
         <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy.</p>
+        <h3>Access control</h3>
+        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a bcrypt hash printed by <code>dboss password</code>. Set it under <code>defaults:</code> in the host file to protect every app on a staging box with one block. <code>allow_ips</code> limits the app to a list of CIDRs, matched against the client IP from <code>proxy.client_ip_headers</code>.</p>
+        <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, health endpoint, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward.</p>
+        <ul>
+          <li>A request with no or wrong credentials gets <code>401</code> at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.</li>
+          <li>With no <code>basic_auth</code> any request wakes a stopped app, except an <code>autostart: button</code> app, which only its start button's POST wakes.</li>
+          <li>The health endpoint answers before auth, so a Cloudflare health check works on a protected app. It never wakes the app.</li>
+          <li>A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials.</li>
+        </ul>
+        <pre>basic_auth:
+  alice: "$2a$10$..."   # dboss password
+allow_ips:
+  - 10.0.0.0/8</pre>
+        <h3>Static files and error pages</h3>
+        <p>Files under <code>static</code> (default <code>./public</code>) are served straight from disk for GET and HEAD without waking the app, but only the asset types in <code>static_extensions</code>. A missing file, or any other extension such as <code>.html</code>, is a normal request to the app.</p>
+        <p><code>error_page_path</code> names one static HTML file, relative to the app folder. It is sent as it is on disk, and only to a GET that accepts <code>text/html</code>, so API answers are never rewritten.</p>
+        <ul>
+          <li>dboss's own errors (<code>502</code> when the app is unreachable, timed out or has no port) answer with this file, or with the built-in error page when the key is empty or the file is missing.</li>
+          <li>The app's own <code>5xx</code> answers are replaced with this file, status kept, only when the key is set. Leave it empty to keep the app's own error page.</li>
+        </ul>
         <pre>hosts:
   - shop.example.com
   - www.shop.example.com
+
+error_page_path: public/error_500.html
 
 proxy:
   client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]
@@ -220,7 +243,7 @@ proxy:
         <h2>Logs</h2>
         <p>Each app has one SQLite store at <code>log_dir/&lt;app&gt;/dboss.sqlite</code>. The full-screen viewer at <code>/logs</code> and <code>dboss logs</code> read the same data.</p>
         <ul>
-          <li><code>REQUEST</code> - one row per proxied request.</li>
+          <li><code>REQUEST</code> - one row per proxied request, with the visitor country from Cloudflare. Search also matches the request id, so a Cloudflare Ray ID can be pasted.</li>
           <li><code>STDOUT</code> - the stdout and stderr of each process.</li>
           <li><code>dboss</code> - the daemon's own log.</li>
           <li>one channel per <code>*.log</code> file under the app's <code>log/</code> folder.</li>

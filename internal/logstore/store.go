@@ -30,7 +30,8 @@ const (
 	maxBufferedLogs     = 32768
 )
 
-// RequestEntry is one proxied request. Process is the service that answered it.
+// RequestEntry is one proxied request. Process is the service that answered it; Country is the
+// visitor country the edge reported, empty when there is none.
 type RequestEntry struct {
 	Time       time.Time `json:"time"`
 	Method     string    `json:"method"`
@@ -43,6 +44,7 @@ type RequestEntry struct {
 	UserAgent  string    `json:"user_agent"`
 	RequestID  string    `json:"request_id"`
 	Process    string    `json:"process"`
+	Country    string    `json:"country"`
 }
 
 // LogEntry is one line of an app's process output.
@@ -293,9 +295,10 @@ func (s *Store) writer(app string) (*appWriter, error) {
 			return nil, err
 		}
 	}
-	// Databases written before requests carried a process are missing the column; the log cache is
-	// disposable but a failed insert would silently drop rows, so add it in place once.
+	// Databases written before requests carried a process or a country are missing the column; the
+	// log cache is disposable but a failed insert would silently drop rows, so add it in place once.
 	_, _ = db.Exec(`ALTER TABLE requests ADD COLUMN process TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE requests ADD COLUMN country TEXT NOT NULL DEFAULT ''`)
 	w := &appWriter{db: db, entries: make(chan entry, queueSize), stop: make(chan struct{}), done: make(chan struct{})}
 	s.apps[app] = w
 	go w.loop(s.flush)
@@ -343,7 +346,7 @@ func (s *Store) diskApps() []string {
 var schema = []string{
 	`PRAGMA journal_mode=WAL`,
 	`PRAGMA busy_timeout=5000`,
-	`CREATE TABLE IF NOT EXISTS requests (ts TEXT NOT NULL, method TEXT NOT NULL, host TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, bytes_out INTEGER NOT NULL, ip TEXT NOT NULL, ua TEXT NOT NULL, request_id TEXT NOT NULL DEFAULT '', process TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS requests (ts TEXT NOT NULL, method TEXT NOT NULL, host TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, bytes_out INTEGER NOT NULL, ip TEXT NOT NULL, ua TEXT NOT NULL, request_id TEXT NOT NULL DEFAULT '', process TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '')`,
 	`CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts)`,
 	`CREATE INDEX IF NOT EXISTS requests_process ON requests(process)`,
 	`CREATE TABLE IF NOT EXISTS logs (ts TEXT NOT NULL, source TEXT NOT NULL, process TEXT NOT NULL, stream TEXT NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL, request_id TEXT NOT NULL, raw TEXT NOT NULL)`,
@@ -424,13 +427,13 @@ func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry) error {
 		return err
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		statement, err := tx.Prepare(`INSERT INTO requests (ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 		for _, e := range requests {
-			if _, err := statement.Exec(stamp(e.Time), e.Method, e.Host, e.Path, e.Status, e.DurationMS, e.BytesOut, e.IP, e.UserAgent, e.RequestID, e.Process); err != nil {
+			if _, err := statement.Exec(stamp(e.Time), e.Method, e.Host, e.Path, e.Status, e.DurationMS, e.BytesOut, e.IP, e.UserAgent, e.RequestID, e.Process, e.Country); err != nil {
 				_ = statement.Close()
 				_ = tx.Rollback()
 				return err
@@ -568,11 +571,11 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 		args = append(args, stamp(filter.Before))
 	}
 	if filter.Query != "" {
-		where = append(where, "(host LIKE ? OR path LIKE ? OR ip LIKE ? OR ua LIKE ?)")
+		where = append(where, "(host LIKE ? OR path LIKE ? OR ip LIKE ? OR ua LIKE ? OR request_id LIKE ?)")
 		like := "%" + filter.Query + "%"
-		args = append(args, like, like, like, like)
+		args = append(args, like, like, like, like, like)
 	}
-	query := `SELECT ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process FROM requests`
+	query := `SELECT ts, method, host, path, status, duration_ms, bytes_out, ip, ua, request_id, process, country FROM requests`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -587,7 +590,7 @@ func (s *Store) SearchRequests(app string, filter RequestFilter) ([]RequestEntry
 	for rows.Next() {
 		var e RequestEntry
 		var ts string
-		if err := rows.Scan(&ts, &e.Method, &e.Host, &e.Path, &e.Status, &e.DurationMS, &e.BytesOut, &e.IP, &e.UserAgent, &e.RequestID, &e.Process); err != nil {
+		if err := rows.Scan(&ts, &e.Method, &e.Host, &e.Path, &e.Status, &e.DurationMS, &e.BytesOut, &e.IP, &e.UserAgent, &e.RequestID, &e.Process, &e.Country); err != nil {
 			return nil, err
 		}
 		e.Time, _ = time.Parse(time.RFC3339Nano, ts)

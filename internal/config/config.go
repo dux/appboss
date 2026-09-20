@@ -340,16 +340,18 @@ type Process struct {
 // Web drives the proxy in front of the app. BasicAuth never leaves the process as JSON so the
 // hashes stay out of the console and `dboss status --json`.
 type Web struct {
-	HealthEndpoint  string            `yaml:"health_endpoint" json:"health_endpoint"`
-	Static          string            `yaml:"static" json:"static"`
-	StaticImmutable List              `yaml:"static_immutable" json:"static_immutable"`
-	MaxBody         Size              `yaml:"max_body" json:"max_body"`
-	BasicAuth       map[string]string `yaml:"basic_auth" json:"-"`
-	AllowIPs        List              `yaml:"allow_ips" json:"allow_ips"`
-	Headers         map[string]string `yaml:"headers" json:"headers"`
-	MaintenancePage string            `yaml:"maintenance_page" json:"maintenance_page"`
-	Pubsub          Pubsub            `yaml:"pubsub" json:"pubsub"`
-	allowPrefixes   []netip.Prefix
+	HealthEndpoint   string            `yaml:"health_endpoint" json:"health_endpoint"`
+	Static           string            `yaml:"static" json:"static"`
+	StaticImmutable  List              `yaml:"static_immutable" json:"static_immutable"`
+	StaticExtensions List              `yaml:"static_extensions" json:"static_extensions"`
+	MaxBody          Size              `yaml:"max_body" json:"max_body"`
+	BasicAuth        map[string]string `yaml:"basic_auth" json:"-"`
+	AllowIPs         List              `yaml:"allow_ips" json:"allow_ips"`
+	Headers          map[string]string `yaml:"headers" json:"headers"`
+	MaintenancePage  string            `yaml:"maintenance_page" json:"maintenance_page"`
+	ErrorPagePath    string            `yaml:"error_page_path" json:"error_page_path"`
+	Pubsub           Pubsub            `yaml:"pubsub" json:"pubsub"`
+	allowPrefixes    []netip.Prefix
 }
 
 // Pubsub serves realtime channels on the app's own hosts under Path. An empty Path disables it.
@@ -397,7 +399,7 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, TLS: ProxyTLS{Redirect: true}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", Static: "./public", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
 		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
 		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".dboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
@@ -911,6 +913,11 @@ func validateWeb(w Web) error {
 	for _, prefix := range w.StaticImmutable {
 		if !strings.HasPrefix(prefix, "/") {
 			return keyErr("static_immutable", "%q must start with /", prefix)
+		}
+	}
+	for _, extension := range w.StaticExtensions {
+		if extension == "" || extension != strings.ToLower(extension) || strings.ContainsAny(extension, "./ ") {
+			return keyErr("static_extensions", "%q must be a lowercase extension without the dot", extension)
 		}
 	}
 	return validatePubsub(w.Pubsub)
