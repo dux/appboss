@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"dboss/internal/alerts"
 	"dboss/internal/apps"
 	"dboss/internal/config"
 	"dboss/internal/console"
@@ -95,7 +96,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		manager.Close()
 		return nil, err
 	}
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, sysInfo, postgres, channels), notifier: notifier, managementPort: managementPort}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), sysInfo, postgres, channels), notifier: notifier, managementPort: managementPort}
 	service := ops.New(manager, logs, logs, postgres, channels, notifier)
 	if len(cfg.Proxy.Listen) > 0 {
 		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier, sysInfo.Inspector(), channels)

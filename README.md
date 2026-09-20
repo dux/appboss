@@ -310,12 +310,12 @@ A host can post runtime events to one operator webhook:
 notify:
   url: $ALERT_WEBHOOK_URL
   format: generic       # generic | slack | discord | ntfy
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed]
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow]
   min_interval: 5m       # per app and event, so a crash loop does not spam
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, and `backup-failed` a PostgreSQL dump or upload that failed. Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump or upload that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over `alerts.window`, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
 
 ## PostgreSQL inspection and backups
 
@@ -392,12 +392,28 @@ allow_ips:
   - 10.0.0.0/8
 ```
 
-Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
+`auth` puts an AuthCog sign-in in front of the app, the way Cloudflare Access does, for people instead of shared passwords.
+
+```yaml
+auth:
+  allow_emails: [ana@example.com, "*@example.com"]   # empty leaves the app open
+  session_ttl: 24h
+```
+
+A visitor without a session is sent to AuthCog (`management.auth.realm`), returns to `/.well-known/dboss/auth` and gets a signed, host-only cookie; `/.well-known/dboss/logout` signs out.
+Only the listed emails and `*@domain` patterns get in, and the list is checked on every request, so removing an entry ends that session on the next `dboss rescan`.
+The app receives the signed-in email as `X-Dboss-User`; dboss strips that header from every inbound request, so the app can trust it.
+A request that does not accept `text/html` gets `401` instead of a redirect.
+AuthCog returns over plain http only to a local host on a port above 999, so local testing needs a `proxy.listen` port such as `:8080`.
+`basic_auth` and `auth` are independent: when both are set, both must pass.
+
+Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
 
 * A request with no or wrong credentials gets `401` at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.
 * With no `basic_auth` any request wakes a stopped app, except an `autostart: button` app, which only its start button's POST wakes.
 * The health endpoint answers before auth, so a Cloudflare health check works on a protected app. It never wakes the app.
-* A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials.
+* A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials or a sign-in session.
+* The same holds for `auth`: no session means no wake, the health endpoint stays open, and static files are protected.
 
 ## Static files and error pages
 
@@ -497,6 +513,7 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 * `fez/db-config.fez` - config file list, the YAML/Form mode toggle, the editor and revision history.
 * `fez/db-config-form.fez` - the visual config editor: one form per recipe, driven by `config.Recipes()`.
 * `fez/db-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
+* `fez/db-traffic.fez` - the Traffic tab: per-app requests over time, error rate, latency quantiles and the top paths, status codes, countries, client IPs and methods from the request log.
 * `fez/db-audit.fez` - the Audit tab: operator actions with app, actor and action filters.
 * `fez/db-sys.fez` - the Sys tab: read-only host facts, resource use and installed toolchains with versions.
 * `fez/db-help.fez` - the Help tab: a topic list with the operator guide and the live key reference.

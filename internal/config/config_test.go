@@ -444,11 +444,52 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
+		{"auth email", "procfile:\n  web: ./server\nauth:\n  allow_emails: [not-an-email]\n", "auth.allow_emails"},
+		{"auth domain pattern", "procfile:\n  web: ./server\nauth:\n  allow_emails: [\"*@bad domain\"]\n", "auth.allow_emails"},
+		{"auth duplicate", "procfile:\n  web: ./server\nauth:\n  allow_emails: [a@b.com, A@B.com]\n", "duplicate"},
+		{"auth session ttl", "procfile:\n  web: ./server\nauth:\n  session_ttl: 0s\n", "auth.session_ttl"},
+		{"alerts window", "procfile:\n  web: ./server\nalerts:\n  window: 0s\n", "alerts.window"},
+		{"alerts error rate", "procfile:\n  web: ./server\nalerts:\n  error_rate: 101\n", "alerts.error_rate"},
+		{"alerts slow p95", "procfile:\n  web: ./server\nalerts:\n  slow_p95: -1s\n", "alerts.slow_p95"},
 	} {
 		_, err := ParseApp([]byte(test.data), "dboss.yaml", defaults)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: got %v, want error containing %q", test.name, err, test.want)
 		}
+	}
+}
+
+func TestAuthAllowsEmailsAndDomains(t *testing.T) {
+	defaults := Default().Defaults
+	defaults.Auth.AllowEmails = List{"ops@host.test"}
+	open, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: []\n"), "dboss.yaml", defaults)
+	if err != nil || open.Auth.Enabled() {
+		t.Fatalf("an empty app list must replace the host list: %v %+v", err, open.Auth)
+	}
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: [Ana@Example.com, \"*@team.test\"]\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !app.Auth.Enabled() || app.Auth.SessionTTL.Value() != 24*time.Hour {
+		t.Fatalf("unexpected auth: %+v", app.Auth)
+	}
+	for email, want := range map[string]bool{"ana@example.com": true, "ANA@example.com": true, "bo@team.test": true, "bo@sub.team.test": false, "ops@host.test": false, "eve@example.com": false, "team.test": false} {
+		if got := app.Auth.Allows(email); got != want {
+			t.Errorf("Allows(%q) = %v, want %v", email, got, want)
+		}
+	}
+}
+
+func TestAlertsOverrideKeyByKey(t *testing.T) {
+	defaults := Default().Defaults
+	defaults.Alerts.ErrorRate = 25
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nalerts:\n  slow_p95: 2s\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 25, SlowP95: Duration(2 * time.Second)}
+	if app.Alerts != want || !app.Alerts.Enabled() {
+		t.Fatalf("alerts = %+v, want %+v", app.Alerts, want)
 	}
 }
 

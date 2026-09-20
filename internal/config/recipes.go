@@ -68,6 +68,28 @@ var recipeSpecs = []recipeSpec{
 		},
 	},
 	{
+		id:          "auth",
+		title:       "Sign-in",
+		description: "Ask visitors to sign in through AuthCog and let only the listed emails reach the app.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "auth.allow_emails"},
+			{path: "auth.session_ttl"},
+		},
+	},
+	{
+		id:          "alerts",
+		title:       "Alerts",
+		description: "Post to the notify webhook when the app answers with too many errors or too slowly.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "alerts.error_rate"},
+			{path: "alerts.slow_p95"},
+			{path: "alerts.window"},
+			{path: "alerts.min_requests"},
+		},
+	},
+	{
 		id:          "web",
 		title:       "Web",
 		description: "Hostnames, static files and the proxy behaviour in front of the app.",

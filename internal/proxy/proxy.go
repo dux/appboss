@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/super"
@@ -46,6 +47,7 @@ type Handler struct {
 	manager     *super.Manager
 	recorder    Recorder
 	pubsub      PublishAuthorizer
+	signin      *authcog.Flow
 	transport   *http.Transport
 	starting    []byte
 	crashed     []byte
@@ -83,8 +85,12 @@ func New(cfg config.Config, manager *super.Manager, recorder Recorder, authorize
 	if err != nil {
 		return nil, err
 	}
+	signin, err := authcog.New(cfg.StateDir, cfg.Management.Auth.Realm)
+	if err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, signin: signin, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed}
 	h.initFilters(extra...)
 	return h, nil
 }

@@ -351,8 +351,48 @@ type Web struct {
 	MaintenancePage  string            `yaml:"maintenance_page" json:"maintenance_page"`
 	ErrorPagePath    string            `yaml:"error_page_path" json:"error_page_path"`
 	Pubsub           Pubsub            `yaml:"pubsub" json:"pubsub"`
+	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
+	Auth             Auth              `yaml:"auth" json:"auth"`
 	allowPrefixes    []netip.Prefix
 }
+
+// Auth puts an AuthCog sign-in in front of the app. AllowEmails holds exact addresses and
+// *@domain patterns; an empty list leaves the app open.
+type Auth struct {
+	AllowEmails List     `yaml:"allow_emails" json:"allow_emails"`
+	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
+}
+
+// Enabled reports whether visitors must sign in.
+func (a Auth) Enabled() bool { return len(a.AllowEmails) > 0 }
+
+// Allows reports whether a signed-in email may reach the app.
+func (a Auth) Allows(email string) bool {
+	email = strings.ToLower(email)
+	_, domain, found := strings.Cut(email, "@")
+	if !found {
+		return false
+	}
+	for _, entry := range a.AllowEmails {
+		entry = strings.ToLower(entry)
+		if entry == email || entry == "*@"+domain {
+			return true
+		}
+	}
+	return false
+}
+
+// Alerts are the request log checks behind the error-rate and slow notify events. ErrorRate is
+// the percent of 5xx answers and SlowP95 the p95 latency that fires; 0 disables either check.
+type Alerts struct {
+	Window      Duration `yaml:"window" json:"window"`
+	MinRequests int      `yaml:"min_requests" json:"min_requests"`
+	ErrorRate   int      `yaml:"error_rate" json:"error_rate"`
+	SlowP95     Duration `yaml:"slow_p95" json:"slow_p95"`
+}
+
+// Enabled reports whether any check is on.
+func (a Alerts) Enabled() bool { return a.ErrorRate > 0 || a.SlowP95 > 0 }
 
 // Pubsub serves realtime channels on the app's own hosts under Path. An empty Path disables it.
 // Secret is the bearer token HTTP publishers present; when empty dboss generates a per-app
@@ -399,9 +439,9 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, TLS: ProxyTLS{Redirect: true}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", Static: "./public", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", Static: "./public", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Pubsub: Pubsub{Replay: 10, MaxClients: 500, MaxMessageSize: Size(64 << 10), ClientEvents: true}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
-		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
+		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed", "error-rate", "slow"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
 		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{Dir: ".dboss/pg-backups", S3: true, Every: Duration(6 * time.Hour), Timeout: Duration(time.Hour), Globals: true, Keep: PostgresKeep{Hourly: 24, Daily: 7, Weekly: 8, Monthly: 6}}},
 		S3:         S3{Region: "auto"},
 	}
@@ -723,7 +763,7 @@ func validateS3(s S3) error {
 }
 
 var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
-var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true, "backup-failed": true}
+var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true, "backup-failed": true, "error-rate": true, "slow": true}
 
 func validateNotify(n Notify) error {
 	if !notifyFormats[n.Format] {
@@ -920,7 +960,50 @@ func validateWeb(w Web) error {
 			return keyErr("static_extensions", "%q must be a lowercase extension without the dot", extension)
 		}
 	}
+	if err := validateAlerts(w.Alerts); err != nil {
+		return err
+	}
+	if err := validateAuth(w.Auth); err != nil {
+		return err
+	}
 	return validatePubsub(w.Pubsub)
+}
+
+func validateAuth(a Auth) error {
+	if a.SessionTTL <= 0 {
+		return keyErr("auth.session_ttl", "must be positive")
+	}
+	seen := map[string]bool{}
+	for _, entry := range a.AllowEmails {
+		if domain, pattern := strings.CutPrefix(entry, "*@"); pattern {
+			if !validHostname(domain) {
+				return keyErr("auth.allow_emails", "invalid domain pattern %q", entry)
+			}
+		} else if address, err := mail.ParseAddress(entry); err != nil || !strings.EqualFold(address.Address, entry) {
+			return &Error{Key: "auth.allow_emails", Message: fmt.Sprintf("invalid entry %q", entry), Hint: "use an address like ana@example.com or a whole domain like *@example.com"}
+		}
+		if seen[strings.ToLower(entry)] {
+			return keyErr("auth.allow_emails", "duplicate entry %q", entry)
+		}
+		seen[strings.ToLower(entry)] = true
+	}
+	return nil
+}
+
+func validateAlerts(a Alerts) error {
+	if a.Window <= 0 {
+		return keyErr("alerts.window", "must be positive")
+	}
+	if a.MinRequests < 0 {
+		return keyErr("alerts.min_requests", "cannot be negative")
+	}
+	if a.ErrorRate < 0 || a.ErrorRate > 100 {
+		return keyErr("alerts.error_rate", "must be a percent between 0 and 100")
+	}
+	if a.SlowP95 < 0 {
+		return keyErr("alerts.slow_p95", "cannot be negative")
+	}
+	return nil
 }
 
 func validatePubsub(p Pubsub) error {

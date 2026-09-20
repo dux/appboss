@@ -65,7 +65,7 @@ var keySpecs = map[string]KeySpec{
 	// --- Notifications ---
 	"notify.url":          {Block: "notify", Name: "Webhook URL", Description: "webhook that receives crash and failure events; empty disables notifications", Example: "$ALERT_WEBHOOK_URL"},
 	"notify.format":       {Block: "notify", Name: "Format", Description: "webhook payload shape", Enum: []string{"generic", "slack", "discord", "ntfy"}},
-	"notify.events":       {Block: "notify", Name: "Events", Description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed"},
+	"notify.events":       {Block: "notify", Name: "Events", Description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow"},
 	"notify.min_interval": {Block: "notify", Name: "Quiet period", Description: "quiet period per app and event, so a crash loop does not spam", Example: "10m"},
 	"notify.headers":      {Block: "notify", Name: "Extra headers", Description: "extra headers sent with every webhook request", Example: "{Authorization: \"Bearer $TOKEN\"}"},
 
@@ -151,4 +151,14 @@ var keySpecs = map[string]KeySpec{
 	"pubsub.max_message_size": {Block: "pubsub", Name: "Max message size", Description: "largest accepted publish body; 0 means unlimited"},
 	"pubsub.client_events":    {Block: "pubsub", Name: "Client publishing", Description: "allow a subscribed WebSocket client to publish back to its channel"},
 	"pubsub.test":             {Block: "pubsub", Name: "Self-test page", Description: "serve an interactive self-test page at <path>/_test"},
+
+	// --- Sign-in ---
+	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},
+	"auth.session_ttl":  {Block: "auth", Name: "Session lifetime", Description: "how long an app sign-in lasts before AuthCog is asked again", Example: "8h"},
+
+	// --- Alerts ---
+	"alerts.window":       {Block: "alerts", Name: "Window", Description: "sliding window of the request log the checks look at", Example: "10m"},
+	"alerts.min_requests": {Block: "alerts", Name: "Minimum requests", Description: "requests the window needs before a check runs, so a quiet app never pages", Example: "50"},
+	"alerts.error_rate":   {Block: "alerts", Name: "Error rate", Description: "percent of 5xx answers in the window that posts error-rate; 0 disables", Example: "5"},
+	"alerts.slow_p95":     {Block: "alerts", Name: "Slow p95", Description: "p95 request latency in the window that posts slow; 0 disables", Example: "2s"},
 }

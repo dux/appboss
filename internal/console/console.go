@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"dboss/internal/apps"
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/metrics"
@@ -151,7 +152,7 @@ func (h *Handler) LoginURL() (local, public string, err error) {
 // consoleHost accepts the configured management hostname, which AuthCog can sign in, and the
 // loopback names that only the CLI login can sign in.
 func (h *Handler) consoleHost(rawHost string) bool {
-	if _, err := authDestination(rawHost, h.auth.hosts); err == nil {
+	if _, err := authcog.Destination(rawHost, h.auth.gate.Hosts); err == nil {
 		return true
 	}
 	return loopbackHost(rawHost)
@@ -249,6 +250,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.hookRun(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/hooks/rotate":
 		h.hookRotate(w, r, session)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/traffic":
+		h.traffic(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/audit":
 		h.audit(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/sys":
@@ -573,6 +576,29 @@ func (h *Handler) audit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
+}
+
+// trafficRanges are the spans the Traffic tab offers. A fixed set keeps every aggregate bounded.
+var trafficRanges = map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}
+
+// traffic returns the aggregated request log of one app. It is read-only, so it writes no audit row.
+func (h *Handler) traffic(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	span, ok := trafficRanges[r.URL.Query().Get("range")]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "range must be 1h, 24h, 7d or 30d")
+		return
+	}
+	traffic, err := h.service.Traffic(app, time.Now().Add(-span))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"traffic": traffic, "updated_at": time.Now().UTC()})
 }
 
 // writeSys returns the cached host inspection for the console's Sys tab.

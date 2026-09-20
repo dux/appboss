@@ -264,6 +264,10 @@ func (fakeLogs) SearchRequests(string, logstore.RequestFilter) ([]logstore.Reque
 	return []logstore.RequestEntry{{Time: time.Now(), Method: "GET", Path: "/hello", Status: 200, Country: "HR"}}, nil
 }
 
+func (fakeLogs) Traffic(app string, since time.Time) (logstore.Traffic, error) {
+	return logstore.Traffic{Since: since, Bucket: "hour", Totals: logstore.Window{Count: 42}, Paths: []logstore.TrafficPath{{Path: "/hello", Count: 42}}}, nil
+}
+
 func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
 	return []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}}, nil
 }
@@ -465,6 +469,21 @@ func TestConsoleServesSystemInspection(t *testing.T) {
 	refresh := call(t, handler, cookie, session, http.MethodPost, "/api/sys/refresh", "{}")
 	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"hostname":"refreshed"`) {
 		t.Fatalf("unexpected sys refresh: %d %s", refresh.Code, refresh.Body.String())
+	}
+}
+
+func TestConsoleServesTraffic(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, session := sessionCookie(t, handler)
+
+	traffic := call(t, handler, cookie, session, http.MethodGet, "/api/traffic?app=sinatra&range=24h", "")
+	if traffic.Code != http.StatusOK || !strings.Contains(traffic.Body.String(), `"count":42`) || !strings.Contains(traffic.Body.String(), `"path":"/hello"`) {
+		t.Fatalf("unexpected traffic: %d %s", traffic.Code, traffic.Body.String())
+	}
+	for _, target := range []string{"/api/traffic?range=24h", "/api/traffic?app=sinatra&range=90d", "/api/traffic?app=sinatra"} {
+		if response := call(t, handler, cookie, session, http.MethodGet, target, ""); response.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", target, response.Code)
+		}
 	}
 }
 

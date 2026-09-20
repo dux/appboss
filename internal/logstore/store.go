@@ -726,25 +726,12 @@ func (s *Store) diskBytes(app string) int64 {
 
 // distinct runs a single-column query against the app database, without creating one.
 func (s *Store) distinct(app, query string) ([]string, error) {
-	s.mu.Lock()
-	w := s.apps[app]
-	s.mu.Unlock()
-	if w != nil {
-		return queryValues(w.db, query)
-	}
-	path := filepath.Join(s.dir, app, "dboss.sqlite")
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	return queryValues(db, query)
+	var values []string
+	err := s.read(app, func(db *sql.DB) (err error) {
+		values, err = queryValues(db, query)
+		return err
+	})
+	return values, err
 }
 
 func queryValues(db *sql.DB, query string) ([]string, error) {

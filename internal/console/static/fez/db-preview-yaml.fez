@@ -1,0 +1,52 @@
+<script>
+  // The caller writes the sample as an indented template literal; strip what the lines share.
+  const dedent = (text) => {
+    const lines = text.replace(/^\n/, '').replace(/\n *$/, '').split('\n')
+    const indent = Math.min(...lines.filter((line) => line.trim()).map((line) => line.search(/\S/)))
+    return lines.map((line) => line.slice(indent))
+  }
+
+  const escape = (text) => text.replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[character])
+
+  // One pass per line: comment, quoted string, key (block or flow), $VAR, bare scalar literal.
+  const YAML = new RegExp([
+    /((?:^|\s)#.*$)/,
+    /(\x22[^\x22]*\x22|\x27[^\x27]*\x27)/, // quotes as escapes: the vendored fez scanner reads a quote in a regex as a string start
+    /((?<=^\s*(?:- )?|[{,]\s*)[\w.-]+(?=:(?:\s|$)))/,
+    /(\$[A-Z_][A-Z0-9_]*)/,
+    /((?<=[:\[,-]\s+|\[)(?:true|false|\d+(?:\.\d+)?[a-z]*)(?=\s*(?:[,\]}#]|$)))/,
+  ].map((part) => part.source).join('|'), 'g')
+  const YAML_CLASSES = ['comment', 'string', 'key', 'var', 'literal']
+
+  const yamlLine = (line) => {
+    let html = ''
+    let last = 0
+    for (const match of line.matchAll(YAML)) {
+      const kind = YAML_CLASSES[match.slice(1).findIndex((group) => group !== undefined)]
+      html += escape(line.slice(last, match.index)) + `<span class="code-${kind}">${escape(match[0])}</span>`
+      last = match.index + match[0].length
+    }
+    return html + escape(line.slice(last))
+  }
+
+  class {
+    // :text is the sample; lang="text" skips the highlighting
+    PROPS = {
+      text: { type: String, default: '' },
+      lang: { type: String, default: 'yaml', enum: ['yaml', 'text'] },
+    }
+
+    init() {
+      this.state.html = ''
+    }
+
+    beforeRender() {
+      const line = this.props.lang === 'yaml' ? yamlLine : escape
+      // Fez collapses ">\n  <" in rendered HTML, which would glue two highlighted lines together,
+      // so line breaks travel as an entity.
+      this.state.html = dedent(this.props.text).map(line).join('&#10;')
+    }
+  }
+</script>
+
+<pre>{@html state.html}</pre>

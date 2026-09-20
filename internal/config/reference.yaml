@@ -266,7 +266,7 @@ defaults:
 
   # --- Web keys: what nginx or Caddy did in front of the app. App-level only. -------------
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
-  # Order per request: canonical redirect -> allow_ips -> basic_auth -> maintenance -> static
+  # Order per request: canonical redirect -> allow_ips -> auth -> basic_auth -> maintenance -> static
   # -> max_body/body buffer -> wake or forward -> headers.
 
   # Directory served straight from disk for GET and HEAD, relative to the app folder.
@@ -373,7 +373,9 @@ notify:
   #   deploy          a deploy hook with restart: true succeeded and the app rolled
   #   config-changed  a config write needs a restart (host keys changed on disk)
   #   backup-failed   a PostgreSQL backup dump or upload failed
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed]
+  #   error-rate      an app answered with too many 5xx in its alerts.window
+  #   slow            an app's p95 latency crossed alerts.slow_p95
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow]
   # Quiet period per app and event. 0 posts every event.
   min_interval: 5m
   # Extra headers sent with every request.
@@ -597,6 +599,48 @@ pubsub:
   # Serve the interactive self-test page at <path>/_test. It opens a WebSocket and an SSE
   # connection and reports PASS/FAIL, so a browser can confirm the hub end to end.
   test: false
+
+# --- Sign-in: AuthCog in front of the app ---------------------------------------------------
+# With allow_emails set, a visitor without a session is sent to AuthCog (the realm is
+# management.auth.realm) and comes back to /.well-known/dboss/auth with a signed, host-only
+# cookie. Only the listed emails get in; the list is checked on every request, so removing an
+# entry ends that session on the next rescan. /.well-known/dboss/logout signs out.
+#
+#   - The app receives the signed-in email as X-Dboss-User. dboss removes that header from
+#     every inbound request, so the app can trust it.
+#   - A request that does not accept text/html gets 401 instead of a redirect.
+#   - The health endpoint stays open, static files are protected, and a request without a
+#     session never wakes a stopped app.
+#   - A pubsub publisher presenting the publish secret passes without a session.
+#   - basic_auth is independent: when both are set, both must pass.
+#   - AuthCog returns over plain http only to a local host on a port above 999, so local
+#     testing needs a proxy.listen port like :8080.
+# Valid at the app top level and under host `defaults:`, which gates every app on a staging box.
+auth:
+  # Exact addresses and *@domain patterns. Empty leaves the app open.
+  allow_emails: []
+  #   - ana@example.com
+  #   - "*@example.com"
+  # How long a sign-in lasts.
+  session_ttl: 24h
+
+# --- Alerts: request log checks ------------------------------------------------------------
+# Once a minute dboss looks at the app's request log over `window` and posts to the notify
+# webhook: `error-rate` when the share of 5xx answers reaches error_rate, `slow` when the p95
+# latency reaches slow_p95. notify.min_interval bounds the repeats; there is no recovery event.
+# Valid at the app top level and under host `defaults:`. An app with log_retention: 0 has no
+# request log and is never checked.
+alerts:
+  # Sliding window the checks look at.
+  window: 5m
+  # Requests the window needs before a check runs, so one failed request on a quiet app
+  # never pages.
+  min_requests: 20
+  # Percent of 5xx answers that posts error-rate. 0 disables the check.
+  error_rate: 10
+  # p95 request latency that posts slow. 0 disables the check.
+  slow_p95: 0
+  #   2s
 
 # Procfile behavior:
 #   - Each command is split on whitespace and exec'd directly unless shell: true.

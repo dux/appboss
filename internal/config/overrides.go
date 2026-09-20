@@ -51,6 +51,8 @@ type WebOverrides struct {
 	MaintenancePage  *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
 	ErrorPagePath    *string           `yaml:"error_page_path,omitempty" json:"error_page_path,omitempty"`
 	Pubsub           *PubsubOverrides  `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
+	Alerts           *AlertsOverrides  `yaml:"alerts,omitempty" json:"alerts,omitempty"`
+	Auth             *AuthOverrides    `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // PubsubOverrides is the pubsub block as pointers, so an app can override one key and keep the
@@ -90,6 +92,53 @@ func (o *PubsubOverrides) applyOverride(target reflect.Value) {
 	}
 	if o.Test != nil {
 		pubsub.Test = *o.Test
+	}
+}
+
+// AlertsOverrides is the alerts block as pointers, merged key by key like pubsub.
+type AlertsOverrides struct {
+	Window      *Duration `yaml:"window,omitempty" json:"window,omitempty"`
+	MinRequests *int      `yaml:"min_requests,omitempty" json:"min_requests,omitempty"`
+	ErrorRate   *int      `yaml:"error_rate,omitempty" json:"error_rate,omitempty"`
+	SlowP95     *Duration `yaml:"slow_p95,omitempty" json:"slow_p95,omitempty"`
+}
+
+func (o *AlertsOverrides) applyOverride(target reflect.Value) {
+	alerts, ok := target.Addr().Interface().(*Alerts)
+	if !ok {
+		return
+	}
+	if o.Window != nil {
+		alerts.Window = *o.Window
+	}
+	if o.MinRequests != nil {
+		alerts.MinRequests = *o.MinRequests
+	}
+	if o.ErrorRate != nil {
+		alerts.ErrorRate = *o.ErrorRate
+	}
+	if o.SlowP95 != nil {
+		alerts.SlowP95 = *o.SlowP95
+	}
+}
+
+// AuthOverrides is the auth block as pointers. allow_emails replaces the host list, like every
+// other list.
+type AuthOverrides struct {
+	AllowEmails List      `yaml:"allow_emails,omitempty" json:"allow_emails,omitempty"`
+	SessionTTL  *Duration `yaml:"session_ttl,omitempty" json:"session_ttl,omitempty"`
+}
+
+func (o *AuthOverrides) applyOverride(target reflect.Value) {
+	auth, ok := target.Addr().Interface().(*Auth)
+	if !ok {
+		return
+	}
+	if o.AllowEmails != nil {
+		auth.AllowEmails = o.AllowEmails
+	}
+	if o.SessionTTL != nil {
+		auth.SessionTTL = *o.SessionTTL
 	}
 }
 

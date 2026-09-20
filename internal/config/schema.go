@@ -38,6 +38,8 @@ var blocks = []Block{
 	{ID: "runtime", Title: "Runtime", Summary: "How a process is checked, restarted, limited and logged.", Scope: ScopeBoth},
 	{ID: "web", Title: "Web", Summary: "Proxy behaviour in front of the app.", Scope: ScopeBoth},
 	{ID: "pubsub", Title: "PubSub", Summary: "Realtime channels served on the app's hosts.", Scope: ScopeBoth},
+	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, for the listed emails only.", Scope: ScopeBoth},
+	{ID: "alerts", Title: "Alerts", Summary: "Request log checks that post error-rate and slow events.", Scope: ScopeBoth},
 }
 
 func blockScope(id string) Scope {

@@ -29,6 +29,7 @@
     viewFromHash() {
       if (location.hash === '#config') return 'config'
       if (location.hash === '#logs') return 'logs'
+      if (location.hash === '#traffic') return 'traffic'
       if (location.hash === '#audit') return 'audit'
       if (location.hash === '#sys') return 'sys'
       if (location.hash === '#pg') return 'pg'
@@ -186,6 +187,7 @@
     <ul class="nav-tabs">
       <li><a class="nav-link" class:active={state.view === 'overview'} href="#overview"><svg class="icon"><use href="#i-home"></use></svg>Overview</a></li>
       <li><a class="nav-link" class:active={state.view === 'logs'} href="#logs"><svg class="icon"><use href="#i-list"></use></svg>Logs</a></li>
+      <li><a class="nav-link" class:active={state.view === 'traffic'} href="#traffic"><svg class="icon"><use href="#i-activity"></use></svg>Traffic</a></li>
       <li><a class="nav-link" class:active={state.view === 'audit'} href="#audit"><svg class="icon"><use href="#i-file-text"></use></svg>Audit</a></li>
       <li><a class="nav-link" class:active={state.view === 'sys'} href="#sys"><svg class="icon"><use href="#i-server"></use></svg>Sys</a></li>
       {#if globalState.pgAvailable}
@@ -207,6 +209,9 @@
     </section>
     <section class="view" class:d-none={state.view !== 'logs'}>
       <db-logs />
+    </section>
+    <section class="view" class:d-none={state.view !== 'traffic'}>
+      <db-traffic />
     </section>
     <section class="view" class:d-none={state.view !== 'audit'}>
       <db-audit />

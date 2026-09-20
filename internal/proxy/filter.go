@@ -27,7 +27,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, app super.Snapsh
 // initFilters assembles the pipeline: built-ins, then extra module filters, then the forward
 // stage that ends every request.
 func (h *Handler) initFilters(extra ...Filter) {
-	h.filters = append(h.filters[:0], h.canonical, h.allow, h.publicHealth, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
+	h.filters = append(h.filters[:0], h.canonical, h.allow, h.publicHealth, h.signIn, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
 	h.filters = append(h.filters, extra...)
 	h.filters = append(h.filters, func(w http.ResponseWriter, r *http.Request, app super.Snapshot, _ func()) {
 		h.forward(w, r, app)

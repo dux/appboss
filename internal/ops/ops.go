@@ -106,6 +106,12 @@ type LatencyStore interface {
 	Latency(app string, since time.Time) (logstore.Latency, error)
 }
 
+// TrafficStore aggregates the request log for the console's Traffic tab; logstore.Store
+// implements it.
+type TrafficStore interface {
+	Traffic(app string, since time.Time) (logstore.Traffic, error)
+}
+
 // PG is the PostgreSQL inspection and backup surface. pg.Service implements it; a nil value
 // disables the feature and every PG action answers with a clear error.
 type PG interface {
@@ -437,6 +443,15 @@ func (s *Service) Latency(name string) (logstore.Latency, error) {
 		return logstore.Latency{}, errors.New("latency is not available")
 	}
 	return store.Latency(name, time.Now().Add(-time.Hour))
+}
+
+// Traffic returns the aggregated request log of one app for requests newer than since.
+func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error) {
+	store, ok := s.store.(TrafficStore)
+	if !ok {
+		return logstore.Traffic{}, errors.New("traffic is not available")
+	}
+	return store.Traffic(name, since)
 }
 
 // PGSnapshot returns the PostgreSQL inspection, refreshing it first when asked.

@@ -9,17 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 )
 
 func TestCLILoginLinkSignsInOnce(t *testing.T) {
-	auth := &authenticator{
-		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		hosts:      map[string]bool{"dboss.lvh.me": true},
-		key:        []byte("01234567890123456789012345678901"),
-		admins:     map[string]bool{"admin@example.com": true},
-		challenges: map[string]authChallenge{},
-	}
+	auth := testAuthenticator("", "dboss.lvh.me")
 	handler := &Handler{auth: auth, managementPort: "3100", publicHost: "dboss.lvh.me"}
 	link, public, err := handler.LoginURL()
 	if err != nil {
@@ -111,15 +106,9 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 }
 
 func TestAuthCogRejectsCLIEmail(t *testing.T) {
-	auth := &authenticator{
-		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		hosts:      map[string]bool{"dboss.lvh.me": true},
-		key:        []byte("01234567890123456789012345678901"),
-		admins:     map[string]bool{"admin@example.com": true},
-		challenges: map[string]authChallenge{},
-	}
-	auth.exchange = func(_ context.Context, _, _ string) (authProfile, error) {
-		return authProfile{Email: cliEmail}, nil
+	auth := testAuthenticator("", "dboss.lvh.me")
+	auth.flow.Exchange = func(_ context.Context, _, _ string) (authcog.Profile, error) {
+		return authcog.Profile{Email: cliEmail}, nil
 	}
 	response := httptest.NewRecorder()
 	auth.authenticate(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/", nil))
@@ -137,18 +126,12 @@ func TestAuthCogRejectsCLIEmail(t *testing.T) {
 }
 
 func TestAuthCogLoginAndSession(t *testing.T) {
-	auth := &authenticator{
-		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		hosts:      map[string]bool{"dboss.lvh.me": true},
-		key:        []byte("01234567890123456789012345678901"),
-		admins:     map[string]bool{"admin@example.com": true},
-		challenges: map[string]authChallenge{},
-	}
-	auth.exchange = func(_ context.Context, destination, callback string) (authProfile, error) {
+	auth := testAuthenticator("", "dboss.lvh.me")
+	auth.flow.Exchange = func(_ context.Context, destination, callback string) (authcog.Profile, error) {
 		if destination != "/d:dboss.lvh.me/p:8081" || callback != "verified-callback" {
 			t.Fatalf("unexpected exchange: %s %s", destination, callback)
 		}
-		return authProfile{Email: "admin@example.com"}, nil
+		return authcog.Profile{Email: "admin@example.com"}, nil
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/?view=fleet", nil)
@@ -197,7 +180,7 @@ func TestAuthCogLoginAndSession(t *testing.T) {
 }
 
 func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
-	auth := &authenticator{hosts: map[string]bool{"dboss.lvh.me": true}, admins: map[string]bool{}}
+	auth := testAuthenticator("", "dboss.lvh.me")
 	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/apps", nil)
 	response := httptest.NewRecorder()
 	if _, ok := auth.authenticate(response, request); ok {
@@ -208,32 +191,11 @@ func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
 	}
 }
 
-func TestSafeRedirectRejectsAuthorityAndCallbackPaths(t *testing.T) {
-	for _, target := range []string{"https://example.com", "//example.com", `/\\example.com`, "/authcog?callback=value"} {
-		if got := safeRedirect(target); got != "/" {
-			t.Fatalf("safeRedirect(%q) = %q", target, got)
-		}
-	}
-	if got := safeRedirect("/apps?state=running"); got != "/apps?state=running" {
-		t.Fatalf("safe path changed to %q", got)
-	}
-}
-
-func TestSecureRequestFollowsAuthCogLocalRules(t *testing.T) {
-	for _, target := range []string{"http://dboss.lvh.me/", "http://dboss.lvh.me:8081/", "http://127.0.0.1:3100/"} {
-		if secureRequest(httptest.NewRequest(http.MethodGet, target, nil)) {
-			t.Fatalf("%s should use an HTTP callback", target)
-		}
-	}
-	forwarded := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)
-	forwarded.Header.Set("X-Forwarded-Proto", "https")
-	if !secureRequest(forwarded) {
-		t.Fatal("forwarded HTTPS should use an HTTPS callback")
-	}
-	production := httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil)
-	if !secureRequest(production) {
-		t.Fatal("non-local AuthCog destination should use an HTTPS callback")
-	}
+// testAuthenticator is the console gate for the given management hosts with one admin and a
+// fixed signing key, so no test touches the disk.
+func testAuthenticator(localPort string, hosts ...string) *authenticator {
+	management := config.Management{Host: hosts, Auth: config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)}}
+	return consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901"), "auth.authcog.com"), management, localPort)
 }
 
 func cookieNamed(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
@@ -264,16 +226,9 @@ func TestSessionCookieIsLaxForCrossSiteCallback(t *testing.T) {
 // AuthCog returns over http only to a local port above 999, so a port 80 sign-in is routed
 // through the console port and then sent back to the address it started on.
 func TestAuthCogLocalHTTPUsesConsolePort(t *testing.T) {
-	auth := &authenticator{
-		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
-		hosts:      map[string]bool{"dboss.lvh.me": true, "dboss.example.com": true},
-		key:        []byte("01234567890123456789012345678901"),
-		admins:     map[string]bool{"admin@example.com": true},
-		challenges: map[string]authChallenge{},
-		localPort:  "3100",
-	}
-	auth.exchange = func(context.Context, string, string) (authProfile, error) {
-		return authProfile{Email: "admin@example.com"}, nil
+	auth := testAuthenticator("3100", "dboss.lvh.me", "dboss.example.com")
+	auth.flow.Exchange = func(context.Context, string, string) (authcog.Profile, error) {
+		return authcog.Profile{Email: "admin@example.com"}, nil
 	}
 
 	response := httptest.NewRecorder()
