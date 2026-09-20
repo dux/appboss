@@ -17,3 +17,4 @@ dboss.local.yaml
 .appboss/
 /demo/log/
 /demo/state/
+/demo/pg_backup/

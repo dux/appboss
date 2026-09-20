@@ -4,6 +4,7 @@
       this.state.snapshot = null
       this.state.backups = []
       this.state.rotations = {}
+      this.state.db = ''
       this.state.selected = null
       this.state.loading = false
       this.state.busy = false
@@ -14,7 +15,33 @@
     }
 
     onMount() {
+      this.on('hashchange', () => this.syncFromHash())
+      this.syncFromHash()
       this.load()
+    }
+
+    // The rotation select is a fez:this ref: its value must be written after each render, since a
+    // selected attribute alone does not move the live selection once the user has changed it.
+    afterRender() {
+      const node = this.state.rotationNode
+      if (!node || node === document.activeElement) return
+      const value = this.state.selected ? (this.state.rotations[this.state.selected.name] || 'week') : 'week'
+      if (node.value !== value) node.value = value
+    }
+
+    // The selected database lives in the hash (#pg/<name>), so the page survives a reload and the
+    // browser back button returns to the list.
+    syncFromHash() {
+      const hash = location.hash || ''
+      const name = hash.startsWith('#pg/') ? decodeURIComponent(hash.slice(4)) : ''
+      if (name === this.state.db) return
+      this.state.db = name
+      this.resolveSelected()
+    }
+
+    resolveSelected() {
+      const rows = (this.state.snapshot && this.state.snapshot.databases) || []
+      this.state.selected = rows.find((row) => row.name === this.state.db) || null
     }
 
     async load(refresh = false) {
@@ -53,9 +80,7 @@
         }
       }
       this.state.rotations = rotations
-      if (this.state.selected) {
-        this.state.selected = ((snapshot && snapshot.databases) || []).find((row) => row.name === this.state.selected.name) || null
-      }
+      this.resolveSelected()
     }
 
     setFilter(value) {
@@ -70,13 +95,17 @@
     }
 
     openDatabase(name) {
-      this.state.selected = ((this.state.snapshot && this.state.snapshot.databases) || []).find((row) => row.name === name) || null
+      this.state.db = name
+      this.resolveSelected()
       this.state.message = ''
       this.state.messageError = false
+      location.hash = '#pg/' + encodeURIComponent(name)
     }
 
     closeDatabase() {
+      this.state.db = ''
       this.state.selected = null
+      location.hash = '#pg'
     }
 
     rotationLabel(name) {
@@ -167,7 +196,7 @@
       try {
         this.state.busy = true
         await Dboss.api('/api/pg/drop', { method: 'POST', body: JSON.stringify({ database: name, confirm: name }) })
-        this.state.selected = null
+        this.closeDatabase()
         Toast.show(`${name} dropped`)
         await this.load(true)
         this.message(`${name} dropped.`)
@@ -246,25 +275,45 @@
   }
 </script>
 
-<div class="page-header">
-  <div>
-    <p class="page-pretitle">PG SQL</p>
-    <h1 class="page-title">{state.snapshot && state.snapshot.available ? state.snapshot.server.version : 'Server &amp; backups'}</h1>
+{#if state.selected}
+  <div class="page-header">
+    <div>
+      <p class="page-pretitle"><a href="#pg" onclick="fez.closeDatabase()">&larr; Databases</a></p>
+      <h1 class="page-title">{state.selected.name}</h1>
+    </div>
+    <div class="page-actions">
+      <button class="btn" type="button" onclick="fez.load(true)" disabled={state.loading}>
+        <svg class="icon"><use href="#i-refresh"></use></svg>
+        {state.loading ? 'Inspecting' : 'Re-inspect'}
+      </button>
+      <button class="btn btn-primary" type="button" onclick="fez.backupNow('{state.selected.name}')" disabled={state.busy}>
+        <svg class="icon"><use href="#i-save"></use></svg>
+        Back up now
+      </button>
+      <button class="btn btn-danger" type="button" onclick="fez.dropDatabase('{state.selected.name}')" disabled={state.busy}>Drop database</button>
+    </div>
   </div>
-  <div class="page-actions">
-    {#if state.snapshot}
-      <span class="refresh-status">Collected {stamp(state.snapshot.collected_at)}</span>
-    {/if}
-    <button class="btn" type="button" onclick="fez.load(true)" disabled={state.loading}>
-      <svg class="icon"><use href="#i-refresh"></use></svg>
-      {state.loading ? 'Inspecting' : 'Re-inspect'}
-    </button>
-    <button class="btn btn-primary" type="button" onclick="fez.backupNow()" disabled={state.busy}>
-      <svg class="icon"><use href="#i-save"></use></svg>
-      Back up all
-    </button>
+{:else}
+  <div class="page-header">
+    <div>
+      <p class="page-pretitle">PG SQL</p>
+      <h1 class="page-title">{state.snapshot && state.snapshot.available ? state.snapshot.server.version : 'Server &amp; backups'}</h1>
+    </div>
+    <div class="page-actions">
+      {#if state.snapshot}
+        <span class="refresh-status">Collected {stamp(state.snapshot.collected_at)}</span>
+      {/if}
+      <button class="btn" type="button" onclick="fez.load(true)" disabled={state.loading}>
+        <svg class="icon"><use href="#i-refresh"></use></svg>
+        {state.loading ? 'Inspecting' : 'Re-inspect'}
+      </button>
+      <button class="btn btn-primary" type="button" onclick="fez.backupNow()" disabled={state.busy}>
+        <svg class="icon"><use href="#i-save"></use></svg>
+        Back up all
+      </button>
+    </div>
   </div>
-</div>
+{/if}
 
 {#if state.error}
   <div class="alert alert-danger">{state.error}</div>
@@ -276,6 +325,73 @@
     <strong>Reading PostgreSQL facts</strong>
     <span>Connecting to the local server and listing its databases.</span>
   </div>
+{:else if state.selected}
+  <div class="section-head">
+    <h2>Overview</h2>
+  </div>
+  <section class="card">
+    <div class="datagrid pg-detail-stats">
+      <div class="datagrid-item"><span class="subheader">Owner</span><span class="datagrid-content">{state.selected.owner || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Size</span><span class="datagrid-content">{bytes(state.selected.size_bytes)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Encoding</span><span class="datagrid-content">{state.selected.encoding || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Collate</span><span class="datagrid-content">{state.selected.collate || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">Connections</span><span class="datagrid-content">{state.selected.connections}</span></div>
+      <div class="datagrid-item"><span class="subheader">Commits</span><span class="datagrid-content">{number(state.selected.xact_commit)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Rollbacks</span><span class="datagrid-content">{number(state.selected.xact_rollback)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Deadlocks</span><span class="datagrid-content">{number(state.selected.deadlocks)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Temp bytes</span><span class="datagrid-content">{bytes(state.selected.temp_bytes)}</span></div>
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Backup rotation</h2>
+  </div>
+  <section class="card">
+    <div class="pg-detail-actions">
+      <label class="pg-check">
+        Rotation
+        <select fez:this="rotationNode" onchange="fez.setRotation('{state.selected.name}', this.value)" disabled={state.busy}>
+          <option value="week" selected={state.rotations[state.selected.name] === 'week'}>Week</option>
+          <option value="month" selected={state.rotations[state.selected.name] === 'month'}>Month</option>
+          <option value="off" selected={state.rotations[state.selected.name] === 'off'}>Off</option>
+        </select>
+      </label>
+      <span class="text-muted">Scheduled dumps run daily; week keeps 7 days, month keeps 30. A manual backup is never rotated away.</span>
+    </div>
+    {#if state.message}
+      <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
+    {/if}
+  </section>
+
+  <div class="section-head">
+    <h2>Backups</h2>
+    <span class="text-muted">{backupsFor(state.selected.name).length} recorded</span>
+  </div>
+  <section class="card">
+    <div class="pg-backups">
+      {#each backupsFor(state.selected.name) as entry}
+        <div class="pg-backup-line">
+          <span class="pg-backup-when">{stamp(entry.time)}</span>
+          <span class="text-muted">{ago(entry.time) || '-'}</span>
+          <span class="text-muted">·</span>
+          <span class="service-value">{bytes(entry.bytes)}</span>
+          {#if entry.manual}
+            <span class="badge">manual</span>
+          {/if}
+          <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
+          <span class="pg-backup-action">
+            {#if entry.status === 'ok'}
+              <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
+            {:else}
+              <span class="text-muted">{entry.error || '-'}</span>
+            {/if}
+          </span>
+        </div>
+      {:else}
+        <div class="pg-backup-line text-muted">No backups for this database yet.</div>
+      {/each}
+    </div>
+  </section>
 {:else}
   <section class="stat-row" aria-label="PostgreSQL summary">
     <article class="card stat-card">
@@ -400,70 +516,4 @@
       {/each}
     </div>
   </section>
-
-  {#if state.selected}
-    <div class="section-head">
-      <h2>{state.selected.name}</h2>
-      <button class="btn btn-sm" type="button" onclick="fez.closeDatabase()">Close</button>
-    </div>
-    <section class="card">
-      <div class="datagrid pg-detail-stats">
-        <div class="datagrid-item"><span class="subheader">Owner</span><span class="datagrid-content">{state.selected.owner || '-'}</span></div>
-        <div class="datagrid-item"><span class="subheader">Size</span><span class="datagrid-content">{bytes(state.selected.size_bytes)}</span></div>
-        <div class="datagrid-item"><span class="subheader">Encoding</span><span class="datagrid-content">{state.selected.encoding || '-'}</span></div>
-        <div class="datagrid-item"><span class="subheader">Collate</span><span class="datagrid-content">{state.selected.collate || '-'}</span></div>
-        <div class="datagrid-item"><span class="subheader">Connections</span><span class="datagrid-content">{state.selected.connections}</span></div>
-        <div class="datagrid-item"><span class="subheader">Commits</span><span class="datagrid-content">{number(state.selected.xact_commit)}</span></div>
-        <div class="datagrid-item"><span class="subheader">Rollbacks</span><span class="datagrid-content">{number(state.selected.xact_rollback)}</span></div>
-        <div class="datagrid-item"><span class="subheader">Deadlocks</span><span class="datagrid-content">{number(state.selected.deadlocks)}</span></div>
-        <div class="datagrid-item"><span class="subheader">Temp bytes</span><span class="datagrid-content">{bytes(state.selected.temp_bytes)}</span></div>
-      </div>
-      <div class="pg-detail-actions">
-        <label class="pg-check">
-          Rotation
-          <select onchange="fez.setRotation('{state.selected.name}', this.value)" disabled={state.busy}>
-            <option value="week" selected={state.rotations[state.selected.name] === 'week'}>Week</option>
-            <option value="month" selected={state.rotations[state.selected.name] === 'month'}>Month</option>
-            <option value="off" selected={state.rotations[state.selected.name] === 'off'}>Off</option>
-          </select>
-        </label>
-        <button class="btn btn-sm btn-primary" type="button" onclick="fez.backupNow('{state.selected.name}')" disabled={state.busy}>
-          <svg class="icon"><use href="#i-save"></use></svg>
-          Back up now
-        </button>
-        <button class="btn btn-sm btn-danger" type="button" onclick="fez.dropDatabase('{state.selected.name}')" disabled={state.busy}>Drop database</button>
-      </div>
-      <div class="sys-tools">
-        <div class="sys-row sys-head pg-backup-row">
-          <span class="subheader">Time</span>
-          <span class="subheader">Ago</span>
-          <span class="subheader">Size</span>
-          <span class="subheader">Manual</span>
-          <span class="subheader">Status</span>
-          <span class="subheader"></span>
-        </div>
-        {#each backupsFor(state.selected.name) as entry}
-          <div class="sys-row pg-backup-row">
-            <span class="sys-version">{stamp(entry.time)}</span>
-            <span class="sys-version">{ago(entry.time) || '-'}</span>
-            <span class="service-value">{bytes(entry.bytes)}</span>
-            <span class="sys-version">{entry.manual ? 'yes' : 'no'}</span>
-            <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
-            <span>
-              {#if entry.status === 'ok'}
-                <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
-              {:else}
-                <span class="text-muted">{entry.error || '-'}</span>
-              {/if}
-            </span>
-          </div>
-        {:else}
-          <div class="sys-row sys-empty text-muted">No backups for this database yet.</div>
-        {/each}
-      </div>
-      {#if state.message}
-        <div class="config-message" class:error={state.messageError} role="status">{state.message}</div>
-      {/if}
-    </section>
-  {/if}
 {/if}

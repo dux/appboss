@@ -134,12 +134,21 @@ func (s *Service) dumpDir(opts options, database string) (string, error) {
 	return dir, nil
 }
 
-// execDump runs pg_dump as plain SQL into path. The connection password travels in the
-// environment, never argv.
+// execDump runs pg_dump as plain SQL into path. The dump keeps schema, data, functions, triggers
+// and core objects, without the ownership, ACLs, comments, tablespace or replication metadata that
+// would not restore on another box. The connection password travels in the environment, never
+// argv.
 func (s *Service) execDump(ctx context.Context, connConfig *pgx.ConnConfig, database, path string) error {
 	runCtx, cancel := context.WithTimeout(ctx, backupTimeout)
 	defer cancel()
-	command := exec.CommandContext(runCtx, "pg_dump", "--format=plain", "--no-owner", "--no-privileges", "--file="+path, "--dbname="+databaseConnString(connConfig, database))
+	command := exec.CommandContext(runCtx, "pg_dump",
+		"--format=plain",
+		"--no-owner", "--no-privileges",
+		"--no-comments", "--no-tablespaces", "--no-security-labels",
+		"--no-publications", "--no-subscriptions", "--no-table-access-method",
+		"--file="+path,
+		"--dbname="+databaseConnString(connConfig, database),
+	)
 	command.Env = processEnv(connConfig)
 	output, err := command.CombinedOutput()
 	if err != nil {

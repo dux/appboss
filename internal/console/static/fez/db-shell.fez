@@ -32,7 +32,7 @@
       if (location.hash === '#traffic') return 'traffic'
       if (location.hash === '#audit') return 'audit'
       if (location.hash === '#sys') return 'sys'
-      if (location.hash === '#pg') return 'pg'
+      if (location.hash === '#pg' || location.hash.startsWith('#pg/')) return 'pg'
       if (location.hash === '#pubsub') return 'pubsub'
       if (location.hash === '#help') return 'help'
       return 'overview'
