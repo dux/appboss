@@ -94,11 +94,10 @@ var keySpecs = map[string]KeySpec{
 	"s3.sse":        {Block: "s3", Name: "Server-side encryption", Description: "server-side encryption algorithm for uploads; empty uses the bucket default", Example: "AES256"},
 
 	// --- App ---
-	"procfile":       {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*", Example: "{web: bundle exec puma -C config/puma.rb}", Required: true},
-	"hosts":          {Block: "app", Name: "Hostnames", Description: "hostnames routed to the web process; a leading *. matches subdomains, a leading . matches the domain and its subdomains", Example: "[\".myapp.com\"]"},
-	"web_process":    {Block: "app", Name: "Web process", Description: "process that receives proxied traffic"},
-	"canonical_host": {Block: "app", Name: "Canonical host", Description: "301 every other host of this app to this one; must be in hosts", Example: "myapp.com"},
+	"procfile":       {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; the one mapping that adds domains is the web process", Example: "{web: {command: bundle exec puma -C config/puma.rb, domains: [\".myapp.com\"]}, worker: bundle exec lux jobs:work}", Required: true},
+	"canonical_host": {Block: "app", Name: "Canonical host", Description: "301 every other host of this app to this one; must be one of the web process domains", Example: "myapp.com"},
 	"autostart":      {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
+	"deletable":      {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
 	"processes":      {Block: "app", Name: "Per-process overrides", Description: "per-process overrides of the process keys, by process name", Example: "{worker: {stop_timeout: 120s}}"},
 
 	// --- Cron ---
@@ -155,6 +154,11 @@ var keySpecs = map[string]KeySpec{
 	// --- Sign-in ---
 	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},
 	"auth.session_ttl":  {Block: "auth", Name: "Session lifetime", Description: "how long an app sign-in lasts before AuthCog is asked again", Example: "8h"},
+
+	// --- AuthCog login service ---
+	"authcog.login": {Block: "authcog", Name: "Login", Description: "run the AuthCog sign-in for the app and hand it the profile once as X-Dboss-User"},
+	"authcog.path":  {Block: "authcog", Name: "Login path", Description: "app URL dboss captures for the sign-in and hands the profile back to", Example: "/authcog"},
+	"authcog.realm": {Block: "authcog", Name: "Realm", Description: "AuthCog subdomain, so auth means auth.authcog.com", Example: "auth"},
 
 	// --- Alerts ---
 	"alerts.window":       {Block: "alerts", Name: "Window", Description: "sliding window of the request log the checks look at", Example: "10m"},

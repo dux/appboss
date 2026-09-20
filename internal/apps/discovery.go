@@ -283,10 +283,10 @@ func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
 	return result, nil
 }
 
-func ParseProcfile(procfile map[string]string) (map[string]Command, error) {
+func ParseProcfile(procfile map[string]config.ProcessSpec) (map[string]Command, error) {
 	commands := map[string]Command{}
-	for name, line := range procfile {
-		line = strings.TrimSpace(line)
+	for name, process := range procfile {
+		line := strings.TrimSpace(process.Command)
 		if !processName.MatchString(name) {
 			return nil, fmt.Errorf("procfile has invalid process name %q", name)
 		}

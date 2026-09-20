@@ -14,6 +14,8 @@ type Filter func(w http.ResponseWriter, r *http.Request, app super.Snapshot, nex
 
 // serve runs the pipeline for an app ResolveHost already picked.
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request, app super.Snapshot) {
+	// Only dboss may hand an app identity, so a client-supplied header never survives.
+	r.Header.Del(userHeader)
 	var step func(int)
 	step = func(index int) {
 		if index >= len(h.filters) {
@@ -27,7 +29,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, app super.Snapsh
 // initFilters assembles the pipeline: built-ins, then extra module filters, then the forward
 // stage that ends every request.
 func (h *Handler) initFilters(extra ...Filter) {
-	h.filters = append(h.filters[:0], h.canonical, h.allow, h.publicHealth, h.signIn, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
+	h.filters = append(h.filters[:0], h.canonical, h.allow, h.publicHealth, h.authCog, h.signIn, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
 	h.filters = append(h.filters, extra...)
 	h.filters = append(h.filters, func(w http.ResponseWriter, r *http.Request, app super.Snapshot, _ func()) {
 		h.forward(w, r, app)
@@ -59,6 +61,11 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, app super.Sn
 	// A module can vouch for a request, e.g. a pubsub publisher presenting its own secret instead
 	// of the app's basic-auth credentials.
 	if h.pubsub != nil && h.pubsub.AuthorizesPublish(r, app) {
+		next()
+		return
+	}
+	// The app owns its authcog login namespace; dboss hands the identity to it there.
+	if app.Web.AuthCog.Enabled() && withinPath(app.Web.AuthCog.Path, r.URL.Path) {
 		next()
 		return
 	}

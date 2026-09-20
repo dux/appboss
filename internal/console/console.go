@@ -655,7 +655,7 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 // only action with a second argument, so it gets its own names on the wire.
 func actionMethod(action string) (string, bool, error) {
 	switch action {
-	case ops.ActionStart, ops.ActionStop, ops.ActionRestart:
+	case ops.ActionStart, ops.ActionStop, ops.ActionRestart, ops.ActionDestroy:
 		return action, false, nil
 	case "maintenance-on":
 		return ops.ActionMaintenance, true, nil
@@ -664,7 +664,7 @@ func actionMethod(action string) (string, bool, error) {
 	case ops.ActionCronRun:
 		return ops.ActionCronRun, false, nil
 	default:
-		return "", false, errors.New("action must be start, stop, restart, maintenance-on, maintenance-off, or cron-run")
+		return "", false, errors.New("action must be start, stop, restart, destroy, maintenance-on, maintenance-off, or cron-run")
 	}
 }
 

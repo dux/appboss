@@ -39,7 +39,7 @@ func (c CLI) remote(command string, args []string) error {
 		if len(opts.rest) != 0 {
 			return fmt.Errorf("usage: dboss %s", command)
 		}
-	case "run", "stop", "restart", "status":
+	case "run", "stop", "restart", "destroy", "status":
 		if len(opts.rest) > 1 {
 			return fmt.Errorf("usage: dboss %s [app]", command)
 		}

@@ -21,6 +21,17 @@ func (m *Manager) setDesired(name string, running bool) error {
 	return saveNames(filepath.Join(m.cfg.StateDir, "running.json"), m.desired)
 }
 
+func (m *Manager) clearAppState(name string) error {
+	m.desiredMu.Lock()
+	defer m.desiredMu.Unlock()
+	delete(m.desired, name)
+	if err := saveNames(filepath.Join(m.cfg.StateDir, "running.json"), m.desired); err != nil {
+		return err
+	}
+	delete(m.maintenance, name)
+	return saveNames(filepath.Join(m.cfg.StateDir, "maintenance.json"), m.maintenance)
+}
+
 // saveNames writes the sorted keys of set to path as a JSON list.
 func saveNames(path string, set map[string]bool) error {
 	return writeStateFile(path, slices.Sorted(maps.Keys(set)))

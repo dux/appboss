@@ -1,8 +1,8 @@
 procfile:
-  web: ./start.sh
-
-hosts:
-  - bun.lvh.me
+  web:
+    command: ./start.sh
+    domains:
+      - bun.lvh.me
 
 health: http:/up
 
@@ -18,4 +18,3 @@ hooks:
   deploy:
     command: ./deploy.sh
     timeout: 1m
-

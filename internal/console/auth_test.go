@@ -107,7 +107,7 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 
 func TestAuthCogRejectsCLIEmail(t *testing.T) {
 	auth := testAuthenticator("", "dboss.lvh.me")
-	auth.flow.Exchange = func(_ context.Context, _, _ string) (authcog.Profile, error) {
+	auth.flow.Exchange = func(_ context.Context, _, _, _ string) (authcog.Profile, error) {
 		return authcog.Profile{Email: cliEmail}, nil
 	}
 	response := httptest.NewRecorder()
@@ -127,7 +127,7 @@ func TestAuthCogRejectsCLIEmail(t *testing.T) {
 
 func TestAuthCogLoginAndSession(t *testing.T) {
 	auth := testAuthenticator("", "dboss.lvh.me")
-	auth.flow.Exchange = func(_ context.Context, destination, callback string) (authcog.Profile, error) {
+	auth.flow.Exchange = func(_ context.Context, _, destination, callback string) (authcog.Profile, error) {
 		if destination != "/d:dboss.lvh.me/p:8081" || callback != "verified-callback" {
 			t.Fatalf("unexpected exchange: %s %s", destination, callback)
 		}
@@ -195,7 +195,7 @@ func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
 // fixed signing key, so no test touches the disk.
 func testAuthenticator(localPort string, hosts ...string) *authenticator {
 	management := config.Management{Host: hosts, Auth: config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)}}
-	return consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901"), "auth.authcog.com"), management, localPort)
+	return consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, localPort)
 }
 
 func cookieNamed(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
@@ -227,7 +227,7 @@ func TestSessionCookieIsLaxForCrossSiteCallback(t *testing.T) {
 // through the console port and then sent back to the address it started on.
 func TestAuthCogLocalHTTPUsesConsolePort(t *testing.T) {
 	auth := testAuthenticator("3100", "dboss.lvh.me", "dboss.example.com")
-	auth.flow.Exchange = func(context.Context, string, string) (authcog.Profile, error) {
+	auth.flow.Exchange = func(context.Context, string, string, string) (authcog.Profile, error) {
 		return authcog.Profile{Email: "admin@example.com"}, nil
 	}
 

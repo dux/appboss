@@ -41,11 +41,11 @@ func TestCanonicalHostAcceptsAShorthandPattern(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 	defaults := Default().Defaults
-	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [\".demo.test\"]\ncanonical_host: demo.test\n"), path, defaults); err != nil {
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [\".demo.test\"]\ncanonical_host: demo.test\n"), path, defaults); err != nil {
 		t.Fatalf("canonical host covered by shorthand: %v", err)
 	}
-	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [\".demo.test\"]\ncanonical_host: other.test\n"), path, defaults); err == nil {
-		t.Fatal("canonical host outside hosts was accepted")
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [\".demo.test\"]\ncanonical_host: other.test\n"), path, defaults); err == nil {
+		t.Fatal("canonical host outside domains was accepted")
 	}
 }
 
@@ -72,12 +72,12 @@ func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 func TestLoadSingleAppRoot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	writeConfigFile(t, path, "procfile:\n  web: ./server\nhosts: [demo.test]\nidle_stop: 0s\nproxy:\n  listen: 127.0.0.1:9090\n")
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nidle_stop: 0s\nproxy:\n  listen: 127.0.0.1:9090\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.App == nil || cfg.App.Procfile["web"] != "./server" || cfg.App.IdleStop != 0 || strings.Join(cfg.Proxy.Listen, ",") != "127.0.0.1:9090" {
+	if cfg.App == nil || cfg.App.Procfile["web"].Command != "./server" || cfg.App.IdleStop != 0 || strings.Join(cfg.Proxy.Listen, ",") != "127.0.0.1:9090" {
 		t.Fatalf("unexpected single-app config: %+v app=%+v", cfg, cfg.App)
 	}
 	if cfg.Apps != "" {
@@ -156,12 +156,12 @@ func TestLoadAppRequiresProcfileAndRejectsHostKeys(t *testing.T) {
 	if _, err := LoadApp(path, Default().Defaults); err == nil {
 		t.Fatal("expected missing procfile error")
 	}
-	writeConfigFile(t, path, "procfile:\n  web: ./server\nhosts: [demo.test]\n")
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n")
 	app, err := LoadApp(path, Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.Procfile["web"] != "./server" {
+	if app.Procfile["web"].Command != "./server" {
 		t.Fatalf("unexpected procfile: %#v", app.Procfile)
 	}
 	writeConfigFile(t, path, "procfile:\n  web: ./server\nproxy:\n  listen: 127.0.0.1:9090\n")
@@ -207,14 +207,33 @@ func TestParseAppAutostart(t *testing.T) {
 	}
 }
 
-func TestListKeysAcceptScalarOrSequence(t *testing.T) {
+func TestParseAppDeletableDefaultsToFalse(t *testing.T) {
 	dir := t.TempDir()
-	defaults := Default().Defaults
-	scalar, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: demo.test\nstatic_immutable: /packs/\nallow_ips: 10.0.0.0/8\n"), filepath.Join(dir, FileName), defaults)
+	path := filepath.Join(dir, FileName)
+	omitted, err := ParseApp([]byte("procfile:\n  web: ./server\n"), path, Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sequence, err := ParseApp([]byte("procfile:\n  web: ./server\nhosts: [demo.test]\nstatic_immutable: [/packs/]\nallow_ips: [10.0.0.0/8]\n"), filepath.Join(dir, FileName), defaults)
+	if omitted.Deletable {
+		t.Fatal("omitted deletable should be false")
+	}
+	enabled, err := ParseApp([]byte("procfile:\n  web: ./server\ndeletable: true\n"), path, Default().Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.Deletable {
+		t.Fatal("deletable: true did not load")
+	}
+}
+
+func TestListKeysAcceptScalarOrSequence(t *testing.T) {
+	dir := t.TempDir()
+	defaults := Default().Defaults
+	scalar, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: demo.test\nstatic_immutable: /packs/\nallow_ips: 10.0.0.0/8\n"), filepath.Join(dir, FileName), defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nstatic_immutable: [/packs/]\nallow_ips: [10.0.0.0/8]\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +411,7 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	defaults.Env = map[string]string{"A": "host", "B": "host"}
 	defaults.Headers = map[string]string{"X-Frame-Options": "DENY"}
 	defaults.BasicAuth = map[string]string{"ops": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}
-	data := "procfile:\n  web: ./server\nhosts: [demo.test, www.demo.test]\ncanonical_host: demo.test\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic: ./public\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
+	data := "procfile:\n  web:\n    command: ./server\n    domains: [demo.test, www.demo.test]\ncanonical_host: demo.test\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic: ./public\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
 	app, err := ParseApp([]byte(data), "app/dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
@@ -440,7 +459,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 	defaults := Default().Defaults
 	for _, test := range []struct{ name, data, want string }{
 		{"web key under process", "procfile:\n  web: ./server\nprocesses:\n  web:\n    static: ./public\n", "processes.web.static: unknown key"},
-		{"canonical host", "procfile:\n  web: ./server\nhosts: [demo.test]\ncanonical_host: www.demo.test\n", "canonical_host"},
+		{"canonical host", "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\ncanonical_host: www.demo.test\n", "canonical_host"},
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
@@ -448,6 +467,10 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"auth domain pattern", "procfile:\n  web: ./server\nauth:\n  allow_emails: [\"*@bad domain\"]\n", "auth.allow_emails"},
 		{"auth duplicate", "procfile:\n  web: ./server\nauth:\n  allow_emails: [a@b.com, A@B.com]\n", "duplicate"},
 		{"auth session ttl", "procfile:\n  web: ./server\nauth:\n  session_ttl: 0s\n", "auth.session_ttl"},
+		{"authcog empty path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: \"\"\n", "authcog.path"},
+		{"authcog bad path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: bad\n", "authcog.path"},
+		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: /authcog\nauthcog:\n  login: true\n", "authcog.path"},
+		{"authcog bad realm", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  realm: a.b\n", "authcog.realm"},
 		{"alerts window", "procfile:\n  web: ./server\nalerts:\n  window: 0s\n", "alerts.window"},
 		{"alerts error rate", "procfile:\n  web: ./server\nalerts:\n  error_rate: 101\n", "alerts.error_rate"},
 		{"alerts slow p95", "procfile:\n  web: ./server\nalerts:\n  slow_p95: -1s\n", "alerts.slow_p95"},
@@ -477,6 +500,22 @@ func TestAuthAllowsEmailsAndDomains(t *testing.T) {
 		if got := app.Auth.Allows(email); got != want {
 			t.Errorf("Allows(%q) = %v, want %v", email, got, want)
 		}
+	}
+}
+
+func TestAuthCogOverrideKeyByKey(t *testing.T) {
+	defaults := Default().Defaults
+	defaults.AuthCog.Login = true
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauthcog:\n  realm: shop\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := AuthCog{Login: true, Path: "/authcog", Realm: "shop"}
+	if app.AuthCog != want || !app.AuthCog.Enabled() || app.AuthCog.RealmHost() != "shop.authcog.com" {
+		t.Fatalf("authcog = %+v, want %+v", app.AuthCog, want)
+	}
+	if got := Default().Defaults.AuthCog; got != (AuthCog{Path: "/authcog", Realm: "auth"}) {
+		t.Fatalf("unexpected authcog defaults: %+v", got)
 	}
 }
 
@@ -571,8 +610,8 @@ cron:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.Procfile["web"] != "run --port $DBOSS_TEST_PORT" {
-		t.Errorf("procfile expanded: %q", app.Procfile["web"])
+	if app.Procfile["web"].Command != "run --port $DBOSS_TEST_PORT" {
+		t.Errorf("procfile expanded: %q", app.Procfile["web"].Command)
 	}
 	if app.Cron["tick"].Command != "run $DBOSS_TEST_PORT" {
 		t.Errorf("cron command expanded: %q", app.Cron["tick"].Command)
@@ -620,12 +659,12 @@ func TestErrorsPointAtLineAndKey(t *testing.T) {
 			t.Errorf("%s: got %v, want %q with hint %q", test.name, err, test.want, test.hint)
 		}
 	}
-	_, err := ParseApp([]byte("procfile:\n  web: ./x\nhost: [a.test]\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
-	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: host: unknown key`) || !strings.Contains(err.Error(), `did you mean "hosts"?`) {
+	_, err := ParseApp([]byte("procfile:\n  web: ./x\ncanonical: a.test\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
+	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: canonical: unknown key`) || !strings.Contains(err.Error(), `did you mean "canonical_host"?`) {
 		t.Errorf("app typo: got %v", err)
 	}
 	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "host" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
+	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "canonical" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
 		t.Errorf("structured error = %+v", cfgErr)
 	}
 }
@@ -636,28 +675,41 @@ func TestPubsubConfig(t *testing.T) {
 		t.Fatalf("unexpected pubsub defaults: %+v", defaults.Pubsub)
 	}
 
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\npubsub:\n  path: /socketio\n  replay: 0\n"), "dboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub:\n      path: /socketio\n      replay: 0\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if app.Pubsub.Path != "/socketio" || app.Pubsub.Replay != 0 {
 		t.Fatalf("unexpected pubsub: %+v", app.Pubsub)
 	}
-	// An absent key in the app block keeps the value from defaults:.
+	// An absent key in the process block keeps the value from defaults.
 	if app.Pubsub.MaxClients != 500 || !app.Pubsub.ClientEvents || app.Pubsub.MaxMessageSize != Size(64<<10) {
 		t.Fatalf("override did not merge with defaults: %+v", app.Pubsub)
 	}
 
-	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  pubsub:\n    path: /events\n    client_events: false\n"), "/srv/dboss.yaml")
-	if err != nil {
-		t.Fatal(err)
+	// `pubsub: true` is the default path; a bare string sets a custom one.
+	shorthand, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: true\n"), "dboss.yaml", defaults)
+	if err != nil || shorthand.Pubsub.Path != DefaultPubsubPath {
+		t.Fatalf("pubsub: true = %+v, %v", shorthand.Pubsub, err)
 	}
-	if cfg.Defaults.Pubsub.Path != "/events" || cfg.Defaults.Pubsub.ClientEvents || cfg.Defaults.Pubsub.Replay != 10 {
-		t.Fatalf("unexpected host defaults: %+v", cfg.Defaults.Pubsub)
+	custom, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: /events\n"), "dboss.yaml", defaults)
+	if err != nil || custom.Pubsub.Path != "/events" || custom.Pubsub.Replay != 10 {
+		t.Fatalf("pubsub: /events = %+v, %v", custom.Pubsub, err)
+	}
+
+	// The top-level block is gone, and pubsub is web-process-only.
+	for _, data := range []string{
+		"procfile:\n  web: ./server\npubsub:\n  path: /socketio\n",
+		"procfile:\n  worker:\n    command: ./jobs\n    domains: [demo.test]\n    pubsub: true\n  web: ./server\n",
+		"procfile:\n  web:\n    command: ./server\n    pubsub: true\n",
+	} {
+		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
+			t.Errorf("expected an error for:\n%s", data)
+		}
 	}
 
 	for _, path := range []string{"/", "socketio", "/socketio/", "/socket io", "/a//b", "/a$b"} {
-		data := "procfile:\n  web: ./server\npubsub:\n  path: \"" + path + "\"\n"
+		data := "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: \"" + path + "\"\n"
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("path %q should be invalid", path)
 		}

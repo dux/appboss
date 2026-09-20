@@ -13,6 +13,7 @@ import (
 func testGate(audience string, allowed ...string) Gate {
 	return Gate{
 		Audience:      audience,
+		Realm:         "auth.authcog.com",
 		Hosts:         func(host string) bool { return host == "shop.lvh.me" },
 		CallbackPath:  "/.well-known/dboss/auth",
 		StateCookie:   "state",
@@ -26,13 +27,12 @@ func testGate(audience string, allowed ...string) Gate {
 			}
 			return false
 		},
-		Denied: "not on the list",
 	}
 }
 
 func testFlow(email string) *Flow {
-	flow := NewWithKey([]byte("01234567890123456789012345678901"), "auth.authcog.com")
-	flow.Exchange = func(context.Context, string, string) (Profile, error) { return Profile{Email: email}, nil }
+	flow := NewWithKey([]byte("01234567890123456789012345678901"))
+	flow.Exchange = func(context.Context, string, string, string) (Profile, error) { return Profile{Email: email}, nil }
 	return flow
 }
 
@@ -106,9 +106,30 @@ func TestSignInIssuesASessionForItsGateOnly(t *testing.T) {
 	}
 }
 
+func TestAuthenticateReturnsTheProfileWithoutASession(t *testing.T) {
+	flow := testFlow("Ana@Example.com")
+	gate := testGate("app:shop", "ana@example.com")
+	request := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080/", nil)
+	start := httptest.NewRecorder()
+	flow.Start(start, request, gate, request.Host)
+	login, _ := url.Parse(start.Header().Get("Location"))
+	callback := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080"+gate.CallbackPath+"?callback=verified&state="+url.QueryEscape(login.Query().Get("state")), nil)
+	callback.AddCookie(cookieNamed(t, start, gate.StateCookie))
+	response := httptest.NewRecorder()
+	profile, ok := flow.Authenticate(response, callback, gate)
+	if !ok || profile.Email != "ana@example.com" {
+		t.Fatalf("Authenticate = %+v %v", profile, ok)
+	}
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == gate.SessionCookie {
+			t.Fatal("Authenticate must not set a session cookie")
+		}
+	}
+}
+
 func TestCallbackRejectsAnEmailTheGateDenies(t *testing.T) {
 	response := signIn(t, testFlow("eve@example.com"), testGate("app:shop", "ana@example.com"))
-	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "not on the list") {
+	if response.Code != http.StatusForbidden || response.Body.String() != "User with eve@example.com is not permitted to login to dboss.\n" {
 		t.Fatalf("callback: %d %s", response.Code, response.Body.String())
 	}
 }

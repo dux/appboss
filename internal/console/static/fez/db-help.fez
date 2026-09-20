@@ -369,21 +369,23 @@
     {#if state.topic === 'access'}
       <section>
         <h2>Access control</h2>
-        <p>Three app-level gates, <code>auth</code>, <code>basic_auth</code> and <code>allow_ips</code>, run in the proxy before the app sees a request. Three host-level keys make sure the origin only talks to Cloudflare and reads the real client IP from it.</p>
+        <p>Three app-level gates, <code>auth</code>, <code>basic_auth</code> and <code>allow_ips</code>, run in the proxy before the app sees a request. Three host-level keys make sure the origin only talks to Cloudflare and reads the real client IP from it. A fourth app-level feature, <code>authcog</code>, runs the AuthCog sign-in for an app that has no auth code of its own.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Letting only named people into an app: <code>auth</code> asks for an AuthCog sign-in and admits the listed emails, the way Cloudflare Access does.</li>
+          <li>Giving an app a sign-in it does not implement: <code>authcog</code> runs the whole AuthCog round trip and hands the app the profile once.</li>
           <li>Putting a password in front of a whole staging box with one <code>basic_auth</code> block under <code>defaults:</code>.</li>
           <li>Limiting an admin or internal app to office and VPN addresses.</li>
           <li>Making sure nobody bypasses Cloudflare's WAF and rate limits by hitting the origin directly.</li>
           <li>Keeping protected sleeping apps asleep: a request without valid credentials never wakes them.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-access"><db-config-keys paths="auth.allow_emails,auth.session_ttl,basic_auth,allow_ips,proxy.trusted_cidrs,proxy.client_ip_headers,proxy.cloudflare_only" /></div>
+        <div fez:keep="keys-access"><db-config-keys paths="auth.allow_emails,auth.session_ttl,authcog.login,authcog.path,authcog.realm,basic_auth,allow_ips,proxy.trusted_cidrs,proxy.client_ip_headers,proxy.cloudflare_only" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.access" />
         <h3>Details</h3>
         <p><code>auth</code> sends a visitor without a session to AuthCog (the realm is <code>management.auth.realm</code>). They return to <code>/.well-known/dboss/auth</code> and get a signed, host-only cookie; <code>/.well-known/dboss/logout</code> signs out. <code>allow_emails</code> takes exact addresses and <code>*@domain</code> patterns, and is checked on every request, so removing an entry ends that session on the next rescan.</p>
+        <p><code>authcog</code> is a login service, not a gate: the app links to <code>authcog.path</code> (default <code>/authcog</code>), dboss signs the visitor in to <code>authcog.realm</code> and then forwards one request to that path with the profile in <code>X-Dboss-User</code>, and the app reads it and creates its own session. Any AuthCog account is admitted, logout is the app's job, and the login path is never gated by <code>auth</code>.</p>
         <ul>
           <li>The app receives the signed-in email as <code>X-Dboss-User</code>. dboss removes that header from every inbound request, so the app can trust it.</li>
           <li>A request that does not accept <code>text/html</code> gets <code>401</code> instead of a redirect.</li>
@@ -560,7 +562,7 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.audit" />
         <h3>Details</h3>
-        <p>Audited actions: start, stop, restart, maintenance, rescan, cron and hook runs, <code>exec</code>, and config writes and restores, each with how it turned out.</p>
+        <p>Audited actions: start, stop, restart, destroy, maintenance, rescan, cron and hook runs, <code>exec</code>, and config writes and restores, each with how it turned out.</p>
         <p>Rows live in the reserved <code>_dboss</code> database, are kept for <code>daemon.audit_retention</code> (default one year, <code>0</code> forever) and are pruned with the daily log prune. The Audit tab filters by app, actor and action; <code>dboss audit</code> prints the same rows.</p>
         <p>Every config save first copies the current file to <code>state_dir/config-history</code>, keeping the last 50 revisions per file. The Configuration view's History button lists them and can restore one, revision-checked; <code>dboss config history|restore</code> does the same from the CLI.</p>
       </section>
@@ -680,13 +682,14 @@
         <div class="help-cmd"><code>run</code><span>start an app, rescanning first when it is not known yet</span></div>
         <div class="help-cmd"><code>stop</code><span>stop an app and keep it stopped until run or the next request</span></div>
         <div class="help-cmd"><code>restart</code><span>stop and start an app on the same ports</span></div>
+        <div class="help-cmd"><code>destroy</code><span>stop and permanently remove an app with <code>deletable: true</code></span></div>
         <div class="help-cmd"><code>status</code><span>processes, restarts, resources and request rates for one app</span></div>
         <div class="help-cmd"><code>logs</code><span>print or follow the process logs; <code>-f</code> follows</span></div>
         <div class="help-cmd"><code>maintenance</code><span>serve the maintenance page while the app keeps running</span></div>
         <div class="help-cmd"><code>cron</code><span>list an app's scheduled jobs, or run one now</span></div>
         <div class="help-cmd"><code>hooks</code><span>list an app's deploy hooks, run one, or rotate its secret</span></div>
         <div class="help-cmd"><code>exec</code><span>run a one-off command in the app's environment</span></div>
-        <div class="help-cmd"><code>audit</code><span>list operator actions: start, stop, restart, hook runs and config writes</span></div>
+        <div class="help-cmd"><code>audit</code><span>list operator actions: start, stop, restart, destroy, hook runs and config writes</span></div>
         <h3>Config</h3>
         <div class="help-cmd"><code>config</code><span>validate and print a config, the resolved config, keys, or saved revisions</span></div>
         <div class="help-cmd"><code>check</code><span>validate the config and every app without starting anything</span></div>

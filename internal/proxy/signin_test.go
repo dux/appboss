@@ -19,8 +19,8 @@ const gated = "auth:\n  allow_emails: [ana@example.com, \"*@team.test\"]\n"
 // signInHandler is the feature handler with a flow whose AuthCog exchange answers email.
 func signInHandler(email string) *Handler {
 	handler := featureHandler()
-	handler.signin = authcog.NewWithKey([]byte("01234567890123456789012345678901"), "auth.authcog.com")
-	handler.signin.Exchange = func(context.Context, string, string) (authcog.Profile, error) {
+	handler.signin = authcog.NewWithKey([]byte("01234567890123456789012345678901"))
+	handler.signin.Exchange = func(context.Context, string, string, string) (authcog.Profile, error) {
 		return authcog.Profile{Email: email}, nil
 	}
 	return handler

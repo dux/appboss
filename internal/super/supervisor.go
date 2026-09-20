@@ -70,6 +70,7 @@ type Snapshot struct {
 	CanonicalHost   string            `json:"canonical_host,omitempty"`
 	WebProcess      string            `json:"web_process"`
 	Autostart       bool              `json:"autostart"`
+	Deletable       bool              `json:"deletable"`
 	WakeButton      bool              `json:"wake_button,omitempty"`
 	Web             config.Web        `json:"web"`
 	Processes       []ProcessSnapshot `json:"processes"`
@@ -291,6 +292,51 @@ func (m *Manager) Restart(name string) error {
 		return err
 	}
 	return m.setDesired(name, true)
+}
+
+// Destroy permanently removes an opted-in app from the host. It shuts down every process and
+// job before removing the apps-directory entry, then drops generated state tied to the app.
+func (m *Manager) Destroy(name string) error {
+	m.rescanMu.Lock()
+	defer m.rescanMu.Unlock()
+	if m.cfg.App != nil {
+		return errors.New("cannot destroy an app in single-app mode")
+	}
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	snapshot := runtime.query(request{kind: requestSnapshot}).snapshot
+	if !snapshot.Deletable {
+		return fmt.Errorf("app %q is not deletable; set deletable: true in its config", name)
+	}
+	m.drain(runtime, name)
+	if err := runtime.call(request{kind: requestStop}); err != nil {
+		return err
+	}
+	if err := m.clearAppState(name); err != nil {
+		return err
+	}
+
+	var remaining []*apps.App
+	m.mu.Lock()
+	delete(m.apps, name)
+	delete(m.activities, name)
+	for _, live := range m.apps {
+		remaining = append(remaining, live.spec)
+	}
+	m.mu.Unlock()
+	m.inflightMu.Lock()
+	delete(m.inflight, name)
+	m.inflightMu.Unlock()
+	runtime.cancel()
+	<-runtime.closed
+	_ = os.Remove(filepath.Join(m.cfg.StateDir, name))
+	if err := apps.Destroy(m.cfg.Apps, name); err != nil {
+		return fmt.Errorf("destroy %s: %w", name, err)
+	}
+	m.syncHookSecrets(remaining)
+	return nil
 }
 
 // drain marks the app as draining so the proxy stops sending new requests, then waits for the

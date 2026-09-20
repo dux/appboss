@@ -41,7 +41,7 @@ type authenticator struct {
 }
 
 func newAuthenticator(cfg config.Config) (*authenticator, error) {
-	flow, err := authcog.New(cfg.StateDir, cfg.Management.Auth.Realm)
+	flow, err := authcog.New(cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -59,13 +59,13 @@ func consoleAuthenticator(flow *authcog.Flow, management config.Management, loca
 	}
 	auth.gate = authcog.Gate{
 		Audience:      authAudience,
+		Realm:         management.Auth.Realm,
 		Hosts:         func(host string) bool { return hosts[host] },
 		CallbackPath:  authCallbackPath,
 		StateCookie:   authStateCookie,
 		SessionCookie: authSessionCookie,
 		TTL:           management.Auth.SessionTTL.Value(),
 		Allow:         func(email string) bool { return auth.admins[email] },
-		Denied:        "email is not an administrator",
 	}
 	return auth
 }

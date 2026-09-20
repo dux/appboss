@@ -1,9 +1,9 @@
 procfile:
-  web: ./start.sh
+  web:
+    command: ./start.sh
+    domains:
+      - .sinatra.lvh.me
   job: ./job.sh
-
-hosts:
-  - .sinatra.lvh.me
 
 canonical_host: sinatra.lvh.me
 static: ./public

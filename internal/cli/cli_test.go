@@ -226,7 +226,7 @@ func TestHelpOutput(t *testing.T) {
 	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"nope"}); code != 2 || !strings.Contains(errOut.String(), `unknown command "nope"`) {
 		t.Fatalf("unknown command: exit %d %s", code, errOut.String())
 	}
-	for _, name := range []string{"start", "systemd", "config", "check", "kill", "run", "stop", "restart", "status", "logs", "ls", "ports", "rescan", "maintenance", "password"} {
+	for _, name := range []string{"start", "systemd", "config", "check", "kill", "run", "stop", "restart", "destroy", "status", "logs", "ls", "ports", "rescan", "maintenance", "password"} {
 		if findCommand(name) == nil {
 			t.Errorf("%s has no help entry", name)
 		}

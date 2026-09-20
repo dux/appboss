@@ -78,6 +78,17 @@ var recipeSpecs = []recipeSpec{
 		},
 	},
 	{
+		id:          "authcog",
+		title:       "AuthCog login",
+		description: "Run the AuthCog sign-in for the app and hand it the profile once; the app creates its own session.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "authcog.login"},
+			{path: "authcog.path"},
+			{path: "authcog.realm"},
+		},
+	},
+	{
 		id:          "alerts",
 		title:       "Alerts",
 		description: "Post to the notify webhook when the app answers with too many errors or too slowly.",
@@ -92,13 +103,12 @@ var recipeSpecs = []recipeSpec{
 	{
 		id:          "web",
 		title:       "Web",
-		description: "Hostnames, static files and the proxy behaviour in front of the app.",
+		description: "Canonical host, static files and the proxy behaviour in front of the app. Domains are declared on the web process in the YAML editor.",
 		scope:       RecipeApp,
 		fields: []recipeField{
-			{path: "hosts"},
 			{path: "canonical_host"},
-			{path: "web_process"},
 			{path: "autostart"},
+			{path: "deletable"},
 			{path: "static"},
 			{path: "static_immutable"},
 			{path: "static_extensions"},

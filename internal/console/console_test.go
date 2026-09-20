@@ -84,6 +84,11 @@ func (m *fakeManager) Restart(app string) error {
 	return nil
 }
 
+func (m *fakeManager) Destroy(app string) error {
+	m.actions = append(m.actions, "destroy "+app)
+	return nil
+}
+
 func (m *fakeManager) SetMaintenance(app string, on bool) error {
 	m.actions = append(m.actions, fmt.Sprintf("maintenance %s %v", app, on))
 	return nil
@@ -319,6 +324,17 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	handler.ServeHTTP(actionResponse, actionRequest)
 	if actionResponse.Code != http.StatusOK || len(manager.actions) != 1 || manager.actions[0] != "restart sinatra" {
 		t.Fatalf("unexpected action response: %d %v %s", actionResponse.Code, manager.actions, actionResponse.Body.String())
+	}
+
+	destroyRequest := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"destroy"}`))
+	destroyRequest.Header.Set("Content-Type", "application/json")
+	destroyRequest.Header.Set("Origin", "http://dboss.lvh.me:8081")
+	destroyRequest.Header.Set("X-CSRF-Token", session.CSRF)
+	destroyRequest.AddCookie(cookie)
+	destroyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(destroyResponse, destroyRequest)
+	if destroyResponse.Code != http.StatusOK || len(manager.actions) != 2 || manager.actions[1] != "destroy sinatra" {
+		t.Fatalf("unexpected destroy response: %d %v %s", destroyResponse.Code, manager.actions, destroyResponse.Body.String())
 	}
 }
 

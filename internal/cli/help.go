@@ -59,6 +59,9 @@ var commands = []command{
 	{name: "restart", args: "[app]", group: "Apps", summary: "stop and start an app on the same ports",
 		details: []string{appArgumentNote, "This is what lux-deploy runs after a release symlink swap."},
 		options: []option{socketOption, configOption, jsonOption}},
+	{name: "destroy", args: "[app]", group: "Apps", summary: "stop and permanently remove an app with deletable: true",
+		details: []string{appArgumentNote, "Removes a plain app folder recursively or unlinks an app symlink without following its target. The app must set deletable: true."},
+		options: []option{socketOption, configOption, jsonOption}},
 	{name: "status", args: "[app]", group: "Apps", summary: "full detail for one app: processes, restarts, resources, request rates",
 		details: []string{appArgumentNote},
 		options: []option{socketOption, configOption, jsonOption}},
@@ -80,7 +83,7 @@ var commands = []command{
 	{name: "exec", args: "[options] [app] <command> [args...]", group: "Apps", summary: "run a one-off command in the app's environment",
 		details: []string{"Runs the command in the app folder with the app environment and prints its combined output. The app argument is optional inside an app folder or when the config there is an app.", "Options must come before the command, so the command's own flags (including -c) pass through untouched. The command is killed after --timeout (default 1m) and its exit code becomes dboss's exit code."},
 		options: []option{{"--timeout <duration>", "kill the command after this long (default 1m)"}, socketOption, configOption, jsonOption}},
-	{name: "audit", args: "[--app name] [--actor who] [--action name] [-n rows]", group: "Apps", summary: "list operator actions: start, stop, restart, hook runs and config writes",
+	{name: "audit", args: "[--app name] [--actor who] [--action name] [-n rows]", group: "Apps", summary: "list operator actions: start, stop, restart, destroy, hook runs and config writes",
 		details: []string{"Every mutating action records who did what to which app and the result. Console actions carry the signed-in email, hook pings the hook that fired, and control-socket actions are attributed to `cli`.", "Rows are kept for daemon.audit_retention (default 8760h, 0 forever) and pruned with the daily log prune."},
 		options: []option{{"--app <name>", "only one app"}, {"--actor <who>", "only one actor"}, {"--action <name>", "only one action"}, {"-n <rows>", "maximum rows (default 200)"}, socketOption, configOption, jsonOption}},
 

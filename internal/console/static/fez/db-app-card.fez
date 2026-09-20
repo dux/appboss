@@ -179,6 +179,12 @@
         <svg class="icon"><use href="#i-stop"></use></svg>
         Stop
       </button>
+      {#if props.app.deletable}
+        <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.act('destroy')" disabled={state.changing} title="Permanently remove this app from dboss and disk">
+          <svg class="icon"><use href="#i-trash"></use></svg>
+          Destroy
+        </button>
+      {/if}
     </div>
   </div>
 

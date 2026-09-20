@@ -85,7 +85,7 @@ func New(cfg config.Config, manager *super.Manager, recorder Recorder, authorize
 	if err != nil {
 		return nil, err
 	}
-	signin, err := authcog.New(cfg.StateDir, cfg.Management.Auth.Realm)
+	signin, err := authcog.New(cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}

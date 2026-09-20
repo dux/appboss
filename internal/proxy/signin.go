@@ -22,24 +22,28 @@ const signedOutPage = `<!doctype html><html lang="en"><meta charset="utf-8"><met
 
 // signInGate describes one app to the shared AuthCog flow. ResolveHost already matched the
 // request host to this app, so every host that gets here is one of its own.
-func signInGate(app super.Snapshot) authcog.Gate {
+func signInGate(app super.Snapshot, realm string) authcog.Gate {
 	return authcog.Gate{
 		Audience:      "app:" + app.Name,
+		Realm:         realm,
 		Hosts:         func(string) bool { return true },
 		CallbackPath:  signInCallbackPath,
 		StateCookie:   signInStateCookie,
 		SessionCookie: signInCookie,
 		TTL:           app.Web.Auth.SessionTTL.Value(),
 		Allow:         app.Web.Auth.Allows,
-		Denied:        "this email may not open " + app.Name,
 	}
 }
 
 // signIn is the AuthCog gate of an app with auth.allow_emails. The email list is checked on
 // every request, so removing an entry ends that session with the next rescan.
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
-	r.Header.Del(userHeader)
 	if !app.Web.Auth.Enabled() {
+		next()
+		return
+	}
+	// The authcog login service owns its own path and is independent of this gate.
+	if app.Web.AuthCog.Enabled() && withinPath(app.Web.AuthCog.Path, r.URL.Path) {
 		next()
 		return
 	}
@@ -47,7 +51,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app super.Snaps
 		http.Error(w, "sign-in is not available", http.StatusServiceUnavailable)
 		return
 	}
-	gate := signInGate(app)
+	gate := signInGate(app, h.cfg.Management.Auth.Realm)
 	switch r.URL.Path {
 	case signInCallbackPath:
 		if r.Method != http.MethodGet {

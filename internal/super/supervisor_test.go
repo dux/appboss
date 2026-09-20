@@ -335,6 +335,89 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 	}
 }
 
+func TestDestroyRequiresOptIn(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{32650, 32670}, "autostart: false\n")
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil || len(invalid) != 0 {
+		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
+	}
+	defer manager.Close()
+	if err := manager.Destroy("demo"); err == nil || !strings.Contains(err.Error(), "deletable: true") {
+		t.Fatalf("destroy without opt-in = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Apps, "demo", config.FileName)); err != nil {
+		t.Fatalf("app config was removed without opt-in: %v", err)
+	}
+}
+
+func TestDestroyRejectsSingleAppMode(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, config.FileName)
+	if err := os.WriteFile(configPath, []byte("procfile:\n  worker: /usr/bin/true\nautostart: false\ndeletable: true\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil || len(invalid) != 0 {
+		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
+	}
+	defer manager.Close()
+	name := filepath.Base(root)
+	snapshot, err := manager.Snapshot(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Deletable {
+		t.Fatal("single-app snapshot must not advertise destroy")
+	}
+	if err := manager.Destroy(name); err == nil || !strings.Contains(err.Error(), "single-app mode") {
+		t.Fatalf("destroy in single-app mode = %v", err)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("single-app config was removed: %v", err)
+	}
+}
+
+func TestDestroyStopsAndRemovesOptedInApp(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{32675, 32695}, "autostart: false\ndeletable: true\n")
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	if err != nil || len(invalid) != 0 {
+		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	if err := manager.SetMaintenance("demo", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Destroy("demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Snapshot("demo"); err == nil {
+		t.Fatal("destroyed app remains in the live table")
+	}
+	if _, err := os.Lstat(filepath.Join(cfg.Apps, "demo")); !os.IsNotExist(err) {
+		t.Fatalf("app directory still exists: %v", err)
+	}
+	for _, stateFile := range []string{"running.json", "maintenance.json"} {
+		names, err := loadNames(filepath.Join(cfg.StateDir, stateFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names["demo"] {
+			t.Fatalf("%s still contains demo", stateFile)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cfg.LogDir, "demo")); err != nil {
+		t.Fatalf("destroy should preserve app logs: %v", err)
+	}
+}
+
 func TestSupervisorSkipsAutostartFalseOnFirstStart(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32700, 32720}, "autostart: false\n")
 	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)

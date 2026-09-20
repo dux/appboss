@@ -32,8 +32,8 @@ func TestKeysDocumentEveryConfigKey(t *testing.T) {
 		"health_interval": {Block: "runtime", Scope: ScopeBoth, Type: "duration", Default: "500ms", Example: "1s", PerProcess: true},
 		"restart_backoff": {Block: "runtime", Scope: ScopeBoth, Type: "list", Default: "[1s, 2, 60s]", Example: "[500ms, 2.0, 30s]", PerProcess: true},
 		"ports.range":     {Block: "ports", Scope: ScopeService, Type: "[from, to]", Default: "[3100, 3990]"},
-		"web_process":     {Block: "app", Scope: ScopeApp, Type: "string", Default: "web"},
 		"autostart":       {Block: "app", Scope: ScopeApp, Type: "bool | button", Default: "true"},
+		"deletable":       {Block: "app", Scope: ScopeApp, Type: "bool", Default: "false"},
 		"management.host": {Block: "management", Scope: ScopeService, Type: "string | list", Example: "dboss.example.com"},
 		"log_max_size":    {Block: "runtime", Scope: ScopeBoth, Type: "size", Default: "10m", Example: "50m", PerProcess: true},
 	} {

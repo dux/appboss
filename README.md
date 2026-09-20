@@ -123,13 +123,14 @@ Apps
   run           start an app; rescans first when it is not known yet
   stop          stop an app and keep it stopped until run or the next request
   restart       stop and start an app on the same ports
+  destroy       stop and permanently remove an app with deletable: true
   status        full detail for one app: processes, restarts, resources, request rates
   logs          print or follow the process logs of an app
   maintenance   answer every request with the maintenance page while the app keeps running
   cron          list an app's scheduled jobs, or run one now
   hooks         list an app's deploy hooks, run one, or rotate its secret
   exec          run a one-off command in the app's environment
-  audit         list operator actions: start, stop, restart, hook runs and config writes
+  audit         list operator actions: start, stop, restart, destroy, hook runs and config writes
 
 Config
   init          print a fully commented starter config for a service or an app
@@ -407,7 +408,18 @@ A request that does not accept `text/html` gets `401` instead of a redirect.
 AuthCog returns over plain http only to a local host on a port above 999, so local testing needs a `proxy.listen` port such as `:8080`.
 `basic_auth` and `auth` are independent: when both are set, both must pass.
 
-Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
+`authcog` is the app-level login service: dboss runs the whole AuthCog round trip so the app needs no AuthCog code of its own.
+
+```yaml
+authcog:
+  login: true      # dboss runs the sign-in for this app
+  path: /authcog   # app URL dboss captures; must match the AuthCog realm redirect_path
+  realm: auth      # auth.authcog.com
+```
+
+The app links to `path`. dboss mints the challenge, sends the browser to `https://<realm>.authcog.com/d:<host>`, and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own `path` route with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
+
+Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `authcog` login, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
 
 * A request with no or wrong credentials gets `401` at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.
 * With no `basic_auth` any request wakes a stopped app, except an `autostart: button` app, which only its start button's POST wakes.
@@ -433,13 +445,18 @@ It is sent as it is on disk and read on every request, and only a GET that accep
 
 `dboss stop` and `dboss restart` (and the console buttons) first mark the app **draining**: the proxy answers new requests with `503` and `Retry-After`, while requests already in flight finish, bounded by `stop_timeout`. Only then does the supervisor send `stop_signal` to the process group. The app card shows a `draining` badge and `dboss ls` prints it in the state.
 
+`deletable: true` opts an app into permanent removal through `dboss destroy <app>` or the console's **Destroy** button; the default is false.
+Destroy drains and stops the app, clears its running and maintenance state, removes its entry from the apps directory and drops it from the live host.
+A plain app folder is removed recursively; an app symlink is unlinked without following its target, which remains owned by lux-deploy.
+Single-app mode cannot destroy itself, and retained logs, audit rows and config history continue through their normal retention.
+
 On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Real-IP` when they are missing; whatever Cloudflare sent is left untouched. `X-Forwarded-For` is appended by the reverse proxy.
 
 An app's processes start with the `web_process` first, then the rest in name order, so a web process that expects other services to be up still gets that.
 
 ## Audit log
 
-Every mutating action records who did what to which app and how it turned out: start, stop, restart, maintenance, rescan, cron runs, hook runs and rotations, `exec`, and config file writes and restores. Console actions carry the signed-in email, a hook ping carries `hook:<app>/<hook>`, and control-socket actions are attributed to `cli`.
+Every mutating action records who did what to which app and how it turned out: start, stop, restart, destroy, maintenance, rescan, cron runs, hook runs and rotations, `exec`, and config file writes and restores. Console actions carry the signed-in email, a hook ping carries `hook:<app>/<hook>`, and control-socket actions are attributed to `cli`.
 
 Rows live in an `audit` table in the reserved `_dboss` database, are kept for `daemon.audit_retention` (default `8760h`, `0` keeps them forever), and are pruned with the daily log prune. The console has an **Audit** tab with app, actor and action filters; `dboss audit [--app name] [--actor who] [--action name] [-n rows]` prints the same rows.
 
@@ -464,7 +481,8 @@ management console: http://127.0.0.1:3100 (run `dboss login` for a one-time sign
 management console: https://dboss.example.com (AuthCog sign-in)
 ```
 `dboss start --login` also prints a one-time loopback sign-in link on stdout (never in the daemon log); `make demo` uses it.
-It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, links to the process logs, and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
+It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, and adds a typed-confirmation destroy action when the app sets `deletable: true`.
+It links to the process logs and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
 The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; S3, Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
 A form save is written to the server-only `dboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.

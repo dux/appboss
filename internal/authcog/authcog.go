@@ -34,9 +34,13 @@ const (
 	keyFile         = "management-auth.key"
 )
 
-// Profile is what AuthCog answers for a verified callback.
+// Profile is what AuthCog answers for a verified callback. dboss forwards it to an app as the
+// JSON X-Dboss-User header, so the JSON tags are the wire contract.
 type Profile struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+	Avatar   string `json:"avatar"`
+	Provider string `json:"provider"`
 }
 
 // Session is the signed cookie payload. Audience names the gate it was issued for, so a console
@@ -48,16 +52,17 @@ type Session struct {
 	ExpiresAt int64  `json:"expires_at"`
 }
 
-// Gate is one protected surface: the console, or one app behind the proxy.
+// Gate is one protected surface: the console, or one app behind the proxy. Realm is the AuthCog
+// realm host (e.g. auth.authcog.com) this gate signs in against.
 type Gate struct {
 	Audience      string
+	Realm         string
 	Hosts         func(host string) bool // lowercase hostname without port
 	CallbackPath  string
 	StateCookie   string
 	SessionCookie string
 	TTL           time.Duration
 	Allow         func(email string) bool // lowercase email
-	Denied        string                  // 403 body for an email Allow rejects
 }
 
 type challenge struct {
@@ -71,9 +76,8 @@ type challenge struct {
 // Flow holds the signing key and the pending sign-ins. Exchange is the AuthCog round trip and
 // is a field so tests can replace it.
 type Flow struct {
-	Exchange func(ctx context.Context, destination, callback string) (Profile, error)
+	Exchange func(ctx context.Context, realm, destination, callback string) (Profile, error)
 
-	realm      string
 	key        []byte
 	client     *http.Client
 	mu         sync.Mutex
@@ -81,19 +85,18 @@ type Flow struct {
 }
 
 // New loads, or creates on first use, the signing key under stateDir.
-func New(stateDir, realm string) (*Flow, error) {
+func New(stateDir string) (*Flow, error) {
 	key, err := loadKey(stateDir)
 	if err != nil {
 		return nil, err
 	}
-	return NewWithKey(key, realm), nil
+	return NewWithKey(key), nil
 }
 
 // NewWithKey builds a flow around a given 32-byte key.
-func NewWithKey(key []byte, realm string) *Flow {
+func NewWithKey(key []byte) *Flow {
 	flow := &Flow{
-		realm: realm,
-		key:   key,
+		key: key,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -139,7 +142,7 @@ func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate, host str
 	f.challenges[state] = challenge{audience: gate.Audience, destination: destination, returnBase: returnBase, redirectTo: redirectTo, expiresAt: now.Add(stateTTL)}
 	f.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: gate.StateCookie, Value: state, Path: "/", MaxAge: int(stateTTL.Seconds()), HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
-	login := url.URL{Scheme: "https", Host: f.realm, Path: destination}
+	login := url.URL{Scheme: "https", Host: gate.Realm, Path: destination}
 	query := login.Query()
 	query.Set("state", state)
 	query.Set("redirect_to", redirectTo)
@@ -150,11 +153,33 @@ func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate, host str
 // Callback finishes a sign-in: it verifies the state, exchanges the callback for the profile,
 // asks the gate whether the email may enter and sets the session cookie.
 func (f *Flow) Callback(w http.ResponseWriter, r *http.Request, gate Gate) {
+	pending, profile, ok := f.verify(w, r, gate)
+	if !ok {
+		return
+	}
+	if err := f.SetSession(w, r, gate, profile.Email); err != nil {
+		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, pending.returnBase+pending.redirectTo, http.StatusSeeOther)
+}
+
+// Authenticate finishes a sign-in without issuing a session: it verifies the state, exchanges
+// the callback for the profile and asks the gate whether the email may enter. It is the proxy's
+// path, where the app owns the session and dboss only forwards the identity once.
+func (f *Flow) Authenticate(w http.ResponseWriter, r *http.Request, gate Gate) (Profile, bool) {
+	_, profile, ok := f.verify(w, r, gate)
+	return profile, ok
+}
+
+// verify consumes the pending challenge and exchanges the callback for an allowed profile. It
+// writes the error response itself and returns ok=false when the callback is not valid.
+func (f *Flow) verify(w http.ResponseWriter, r *http.Request, gate Gate) (challenge, Profile, bool) {
 	state, callback := r.URL.Query().Get("state"), r.URL.Query().Get("callback")
 	cookie, err := r.Cookie(gate.StateCookie)
 	if err != nil || state == "" || callback == "" || subtle.ConstantTimeCompare([]byte(state), []byte(cookie.Value)) != 1 {
 		http.Error(w, "invalid authentication callback", http.StatusBadRequest)
-		return
+		return challenge{}, Profile{}, false
 	}
 	f.mu.Lock()
 	pending, ok := f.challenges[state]
@@ -163,33 +188,29 @@ func (f *Flow) Callback(w http.ResponseWriter, r *http.Request, gate Gate) {
 	clearCookie(w, r, gate.StateCookie)
 	if !ok || !pending.expiresAt.After(time.Now()) {
 		http.Error(w, "expired authentication callback", http.StatusBadRequest)
-		return
+		return challenge{}, Profile{}, false
 	}
 	destination, err := Destination(r.Host, gate.Hosts)
 	if err != nil || destination != pending.destination || pending.audience != gate.Audience {
 		http.Error(w, "authentication destination changed", http.StatusBadRequest)
-		return
+		return challenge{}, Profile{}, false
 	}
-	profile, err := f.Exchange(r.Context(), pending.destination, callback)
+	profile, err := f.Exchange(r.Context(), gate.Realm, pending.destination, callback)
 	if err != nil {
 		logx.Errorf("AuthCog exchange for %s: %v", gate.Audience, err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
-		return
+		return challenge{}, Profile{}, false
 	}
-	email := strings.ToLower(strings.TrimSpace(profile.Email))
-	if !gate.Allow(email) {
-		http.Error(w, gate.Denied, http.StatusForbidden)
-		return
+	profile.Email = strings.ToLower(strings.TrimSpace(profile.Email))
+	if !gate.Allow(profile.Email) {
+		http.Error(w, fmt.Sprintf("User with %s is not permitted to login to dboss.", profile.Email), http.StatusForbidden)
+		return challenge{}, Profile{}, false
 	}
-	if err := f.SetSession(w, r, gate, email); err != nil {
-		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
-		return
-	}
-	http.Redirect(w, r, pending.returnBase+pending.redirectTo, http.StatusSeeOther)
+	return pending, profile, true
 }
 
-func (f *Flow) exchangeProfile(ctx context.Context, destination, callback string) (Profile, error) {
-	exchangeURL := url.URL{Scheme: "https", Host: f.realm, Path: destination}
+func (f *Flow) exchangeProfile(ctx context.Context, realm, destination, callback string) (Profile, error) {
+	exchangeURL := url.URL{Scheme: "https", Host: realm, Path: destination}
 	query := exchangeURL.Query()
 	query.Set("user", callback)
 	exchangeURL.RawQuery = query.Encode()

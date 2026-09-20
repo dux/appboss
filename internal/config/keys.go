@@ -41,7 +41,7 @@ func Keys() []Key {
 		}
 		keys = append(keys, key)
 	})
-	app := App{WebProcess: "web", Autostart: AutostartOn}
+	app := App{Autostart: AutostartOn}
 	walk(reflect.ValueOf(app), "", false, func(key Key) {
 		if key.Scope == ScopeBoth {
 			return

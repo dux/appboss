@@ -31,6 +31,7 @@ const (
 	ActionStart         = "start"
 	ActionStop          = "stop"
 	ActionRestart       = "restart"
+	ActionDestroy       = "destroy"
 	ActionMaintenance   = "maintenance"
 	ActionRescan        = "rescan"
 	ActionLogs          = "logs"
@@ -55,7 +56,7 @@ const (
 
 // auditActions are the methods that write an audit row when they run.
 var auditActions = map[string]bool{
-	ActionStart: true, ActionStop: true, ActionRestart: true, ActionMaintenance: true,
+	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
 	ActionPGBackup: true, ActionPGRestore: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
@@ -68,6 +69,7 @@ type Runtime interface {
 	Start(name string) error
 	Stop(name string) error
 	Restart(name string) error
+	Destroy(name string) error
 	SetMaintenance(name string, on bool) error
 	RunCron(name, job string) error
 	RunHook(name, hook string) error
@@ -255,6 +257,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return nil, s.Stop(request.App)
 	case ActionRestart:
 		return nil, s.Restart(request.App)
+	case ActionDestroy:
+		return nil, s.Destroy(request.App)
 	case ActionMaintenance:
 		return nil, s.Maintenance(request.App, request.On)
 	case ActionRescan:
@@ -392,6 +396,16 @@ func (s *Service) App(name string) (super.Snapshot, error) {
 func (s *Service) Start(name string) error   { return s.runtime.Start(name) }
 func (s *Service) Stop(name string) error    { return s.runtime.Stop(name) }
 func (s *Service) Restart(name string) error { return s.runtime.Restart(name) }
+
+func (s *Service) Destroy(name string) error {
+	if err := s.runtime.Destroy(name); err != nil {
+		return err
+	}
+	if s.pubsub != nil {
+		s.pubsub.Reconcile(s.runtime.Snapshots())
+	}
+	return nil
+}
 
 func (s *Service) Maintenance(name string, on bool) error {
 	return s.runtime.SetMaintenance(name, on)

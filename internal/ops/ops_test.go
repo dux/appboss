@@ -13,11 +13,12 @@ import (
 )
 
 type fakeRuntime struct {
-	snapshots []super.Snapshot
-	actions   []string
-	invalid   []error
-	restart   []string
-	startErr  error
+	snapshots  []super.Snapshot
+	actions    []string
+	invalid    []error
+	restart    []string
+	startErr   error
+	destroyErr error
 }
 
 func (f *fakeRuntime) Snapshots() []super.Snapshot {
@@ -46,6 +47,11 @@ func (f *fakeRuntime) Stop(name string) error {
 func (f *fakeRuntime) Restart(name string) error {
 	f.actions = append(f.actions, "restart "+name)
 	return nil
+}
+
+func (f *fakeRuntime) Destroy(name string) error {
+	f.actions = append(f.actions, "destroy "+name)
+	return f.destroyErr
 }
 
 func (f *fakeRuntime) SetMaintenance(name string, on bool) error {
@@ -116,6 +122,7 @@ func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 		{Request{Method: ActionStart, App: "sinatra"}, "start sinatra"},
 		{Request{Method: ActionStop, App: "sinatra"}, "stop sinatra"},
 		{Request{Method: ActionRestart, App: "sinatra"}, "restart sinatra"},
+		{Request{Method: ActionDestroy, App: "sinatra"}, "destroy sinatra"},
 		{Request{Method: ActionMaintenance, App: "sinatra", On: true}, "maintenance sinatra"},
 		{Request{Method: ActionRescan}, "rescan"},
 		{Request{Method: ActionLogs, App: "sinatra"}, "logs sinatra"},
@@ -272,6 +279,14 @@ func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
 		t.Fatalf("explicit actor = %q", got)
 	}
 
+	if _, err := service.Do(Request{Method: ActionDestroy, App: "sinatra", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	entry = store.audits[2]
+	if entry.Actor != "bob" || entry.Action != ActionDestroy || entry.Result != "ok" {
+		t.Fatalf("destroy audit = %+v", entry)
+	}
+
 	failing := New(&fakeRuntime{startErr: errors.New("port busy")}, nil, store, nil, nil)
 	if _, err := failing.Do(Request{Method: ActionStart, App: "sinatra"}); err == nil {
 		t.Fatal("expected start error")
@@ -279,6 +294,15 @@ func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
 	last := store.audits[len(store.audits)-1]
 	if last.Result != "error" || last.Error != "port busy" {
 		t.Fatalf("failed audit = %+v", last)
+	}
+
+	failing = New(&fakeRuntime{destroyErr: errors.New("not deletable")}, nil, store, nil, nil)
+	if _, err := failing.Do(Request{Method: ActionDestroy, App: "sinatra"}); err == nil {
+		t.Fatal("expected destroy error")
+	}
+	last = store.audits[len(store.audits)-1]
+	if last.Action != ActionDestroy || last.Result != "error" || last.Error != "not deletable" {
+		t.Fatalf("failed destroy audit = %+v", last)
 	}
 }
 

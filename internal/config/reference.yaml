@@ -211,7 +211,7 @@ defaults:
   # After the web process is ready it keeps being polled at health_interval. This many
   # consecutive failures restart it (kill, then the restart policy, backoff and max_restarts
   # apply); one success resets the count. 0 disables the ongoing check, so only readiness runs.
-  # Applies to web_process only; workers are covered by their exit and restart policy.
+  # Applies to the web process only; workers are covered by their exit and restart policy.
   unhealthy_threshold: 3
 
   # Graceful stop: SIGTERM to the process group, wait, then SIGKILL.
@@ -455,27 +455,32 @@ s3:
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
 # Command strings are not env-expanded; $VAR is passed to the shell at run time.
+# A scalar value is a background process. A mapping adds domains; the single process that
+# declares domains is the web process that receives proxied traffic, and its command must not
+# be empty. An app with no domains anywhere is background-only. Domains are matched against the
+# request Host header, case-insensitive, port stripped. A leading "*." matches subdomains only;
+# a leading "." matches the bare domain and every subdomain, so ".myapp.com" means "myapp.com"
+# and "*.myapp.com". Longest match wins.
+# In single mode (no domains declared) the first process is bound to .lvh.me for local dev.
 procfile:
-  web: bundle exec puma -C config/puma.rb
+  web:
+    command: bundle exec puma -C config/puma.rb
+    domains:
+      - ".myapp.com"
   worker: bundle exec lux jobs:work
   cron: bundle exec lux jobs:cron
-
-# Hostnames the proxy routes to this app's `web` process. Required for any app
-# that should receive HTTP. An app without hosts is background-only.
-# Exact match on the Host header, case-insensitive, port stripped.
-# A leading "*." matches subdomains only; a leading "." matches the bare domain and every
-# subdomain, so ".myapp.com" means "myapp.com" and "*.myapp.com". Longest match wins.
-hosts:
-  - ".myapp.com"
-
-# Which proctype receives proxied traffic. Only one. Default: web.
-web_process: web
 
 # Start policy. true starts the app with the host and brings it back on resume. false leaves
 # it stopped until `dboss run`, the console, or any proxied request starts it; a host restart
 # does not bring it back. button is like false, but a request answers a page with a start button
 # and only its POST starts the app, so a crawler or favicon GET never does.
 autostart: true
+
+# Permit operators to permanently stop and remove this app through the console or
+# `dboss destroy`. False hides the console action and rejects every destroy request.
+# In a host's apps directory, a plain app folder is removed recursively; a symlink entry is
+# unlinked without following its target. Single-app mode can never destroy itself.
+deletable: false
 
 # Optional. Must be one of hosts. Requests for any other host of this app answer 301 to
 # <scheme>://<canonical_host><path?query>; the scheme follows X-Forwarded-Proto, default https.
@@ -623,6 +628,28 @@ auth:
   #   - "*@example.com"
   # How long a sign-in lasts.
   session_ttl: 24h
+
+# --- AuthCog login: dboss runs the sign-in for the app --------------------------------------
+# With login on, dboss owns the whole AuthCog round trip on the app's behalf, so the app needs
+# no AuthCog code. The app links to `path`; dboss mints the challenge, sends the browser to the
+# realm, exchanges the callback server-side and then forwards one request to the app's own
+# `path` route with the profile in X-Dboss-User. The app reads what it needs and creates its
+# own session; dboss keeps no app session. X-Dboss-User is removed from every inbound request,
+# so only dboss can set it, and it is set only on that one post-login request.
+#
+#   - Any AuthCog account is admitted; there is no email allowlist here.
+#   - The app must answer its own `path` route: read X-Dboss-User, create the session, respond.
+#     dboss relays that response, Set-Cookie included, to the browser.
+#   - The AuthCog realm's redirect_path must match `path` (authcog.com defaults to /authcog).
+#   - Independent of `auth`: an app can use both, and the login path is never gated by `auth`.
+# Valid at the app top level and under host `defaults:`.
+authcog:
+  # Run the AuthCog sign-in for this app.
+  login: false
+  # App URL dboss captures, default /authcog (AuthCog's own default landing).
+  path: /authcog
+  # AuthCog subdomain: auth means auth.authcog.com.
+  realm: auth
 
 # --- Alerts: request log checks ------------------------------------------------------------
 # Once a minute dboss looks at the app's request log over `window` and posts to the notify

@@ -63,7 +63,7 @@ func initLines(role string) ([]initLine, error) {
 	case TemplateService:
 		value = reflect.ValueOf(Default())
 	case TemplateApp:
-		value = reflect.ValueOf(App{WebProcess: "web", Autostart: AutostartOn, Defaults: Default().Defaults})
+		value = reflect.ValueOf(App{Autostart: AutostartOn, Defaults: Default().Defaults})
 	default:
 		return nil, fmt.Errorf("unknown config type %q (use service or app)", role)
 	}

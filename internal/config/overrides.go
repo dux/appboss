@@ -50,9 +50,9 @@ type WebOverrides struct {
 	Headers          map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	MaintenancePage  *string           `yaml:"maintenance_page,omitempty" json:"maintenance_page,omitempty"`
 	ErrorPagePath    *string           `yaml:"error_page_path,omitempty" json:"error_page_path,omitempty"`
-	Pubsub           *PubsubOverrides  `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
 	Alerts           *AlertsOverrides  `yaml:"alerts,omitempty" json:"alerts,omitempty"`
 	Auth             *AuthOverrides    `yaml:"auth,omitempty" json:"auth,omitempty"`
+	AuthCog          *AuthCogOverrides `yaml:"authcog,omitempty" json:"authcog,omitempty"`
 }
 
 // PubsubOverrides is the pubsub block as pointers, so an app can override one key and keep the
@@ -139,6 +139,29 @@ func (o *AuthOverrides) applyOverride(target reflect.Value) {
 	}
 	if o.SessionTTL != nil {
 		auth.SessionTTL = *o.SessionTTL
+	}
+}
+
+// AuthCogOverrides is the authcog block as pointers, merged key by key like pubsub.
+type AuthCogOverrides struct {
+	Login *bool   `yaml:"login,omitempty" json:"login,omitempty"`
+	Path  *string `yaml:"path,omitempty" json:"path,omitempty"`
+	Realm *string `yaml:"realm,omitempty" json:"realm,omitempty"`
+}
+
+func (o *AuthCogOverrides) applyOverride(target reflect.Value) {
+	authcog, ok := target.Addr().Interface().(*AuthCog)
+	if !ok {
+		return
+	}
+	if o.Login != nil {
+		authcog.Login = *o.Login
+	}
+	if o.Path != nil {
+		authcog.Path = *o.Path
+	}
+	if o.Realm != nil {
+		authcog.Realm = *o.Realm
 	}
 }
 

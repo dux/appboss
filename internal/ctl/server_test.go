@@ -25,6 +25,7 @@ func (f *fakeRuntime) Snapshot(string) (super.Snapshot, error) {
 func (f *fakeRuntime) Start(name string) error { f.started = append(f.started, name); return nil }
 func (f *fakeRuntime) Stop(string) error       { return nil }
 func (f *fakeRuntime) Restart(string) error    { return nil }
+func (f *fakeRuntime) Destroy(string) error    { return nil }
 func (f *fakeRuntime) SetMaintenance(string, bool) error {
 	return nil
 }
