@@ -160,4 +160,13 @@ func TestSSHKeyNewCommand(t *testing.T) {
 	if !strings.Contains(errOut.String(), "already exists") {
 		t.Errorf("missing overwrite warning: %s", errOut.String())
 	}
+
+	// the documented order puts the name before the flags
+	errOut.Reset()
+	if code := cli.Run([]string{"sshkey", "new", "mykey2", "--dir", dir, "--no-passphrase"}); code != 0 {
+		t.Fatalf("name-first exit = %d, stderr = %s", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mykey2.pub")); err != nil {
+		t.Fatal("name-first key was not created in --dir")
+	}
 }
