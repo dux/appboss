@@ -116,5 +116,6 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 
 * `./internal/console/auth.go` holds both sign-in paths: AuthCog (admins only) and `dboss login` (`/login?token=`, 3 minutes, single use, signs in as `cli@localhost`).
 * `cli@localhost` is accepted only for sessions created by a token. The AuthCog callback must keep rejecting it.
+* AuthCog releases over `http` only to a local host with a port above 999. `authenticator.loginHost` therefore names the console port (`ports.range[0]`) when a sign-in starts over plain local http without a port, and the challenge's `ReturnBase` sends the browser back to the origin it started on. A secure or public request is never rewritten.
 * The console answers for `management.host` and for loopback names (`127.0.0.1`, `localhost`). A loopback request without a session gets a "run dboss login" page, never an AuthCog redirect. `dboss login` prints both URLs from `Handler.LoginURL`: `http://127.0.0.1:<first port of ports.range>` and `https://<first management.host>`, sharing the one-time token.
 * The login link is minted through the control socket (`login` method in `./internal/ctl/server.go`), never over HTTP.

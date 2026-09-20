@@ -51,6 +51,7 @@ type authSession struct {
 
 type authChallenge struct {
 	Destination string
+	ReturnBase  string // origin the sign-in started on, when the callback lands elsewhere
 	RedirectTo  string
 	ExpiresAt   time.Time
 }
@@ -65,6 +66,7 @@ type authenticator struct {
 	mu         sync.Mutex
 	challenges map[string]authChallenge
 	cliTokens  map[string]time.Time
+	localPort  string // console's own loopback port
 }
 
 func newAuthenticator(cfg config.Config) (*authenticator, error) {
@@ -88,6 +90,7 @@ func newAuthenticator(cfg config.Config) (*authenticator, error) {
 			},
 		},
 		challenges: map[string]authChallenge{},
+		localPort:  strconv.Itoa(cfg.Ports.Range[0]),
 	}
 	for _, email := range cfg.Management.Auth.AdminEmails {
 		auth.admins[strings.ToLower(email)] = true
@@ -148,8 +151,22 @@ func loopbackHost(rawHost string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// loginHost is the host AuthCog is asked to return to. AuthCog releases over http only to a
+// local host with a port above 999, so a plain-http sign-in on port 80 goes through the
+// console's own port.
+func (a *authenticator) loginHost(r *http.Request) string {
+	if secureRequest(r) || strings.Contains(r.Host, ":") {
+		return r.Host
+	}
+	if port, _ := strconv.Atoi(a.localPort); port <= 999 {
+		return r.Host
+	}
+	return r.Host + ":" + a.localPort
+}
+
 func (a *authenticator) startLogin(w http.ResponseWriter, r *http.Request) {
-	destination, err := authDestination(r.Host, a.hosts)
+	host := a.loginHost(r)
+	destination, err := authDestination(host, a.hosts)
 	if err != nil {
 		http.Error(w, "invalid authentication destination", http.StatusBadRequest)
 		return
@@ -172,7 +189,11 @@ func (a *authenticator) startLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication is busy", http.StatusServiceUnavailable)
 		return
 	}
-	a.challenges[state] = authChallenge{Destination: destination, RedirectTo: redirectTo, ExpiresAt: now.Add(authStateTTL)}
+	returnBase := ""
+	if host != r.Host {
+		returnBase = "http://" + r.Host
+	}
+	a.challenges[state] = authChallenge{Destination: destination, ReturnBase: returnBase, RedirectTo: redirectTo, ExpiresAt: now.Add(authStateTTL)}
 	a.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: authStateCookie, Value: state, Path: "/", MaxAge: int(authStateTTL.Seconds()), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
 	login := url.URL{Scheme: "https", Host: a.cfg.Realm, Path: destination}
@@ -219,7 +240,7 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, challenge.RedirectTo, http.StatusSeeOther)
+	http.Redirect(w, r, challenge.ReturnBase+challenge.RedirectTo, http.StatusSeeOther)
 }
 
 // issueCLIToken returns a fresh single-use login token that expires after cliTokenTTL.

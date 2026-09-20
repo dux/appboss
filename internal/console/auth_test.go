@@ -260,3 +260,56 @@ func TestSessionCookieIsLaxForCrossSiteCallback(t *testing.T) {
 		t.Fatalf("session cookie = %+v", cookie)
 	}
 }
+
+// AuthCog returns over http only to a local port above 999, so a port 80 sign-in is routed
+// through the console port and then sent back to the address it started on.
+func TestAuthCogLocalHTTPUsesConsolePort(t *testing.T) {
+	auth := &authenticator{
+		cfg:        config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)},
+		hosts:      map[string]bool{"dboss.lvh.me": true, "dboss.example.com": true},
+		key:        []byte("01234567890123456789012345678901"),
+		admins:     map[string]bool{"admin@example.com": true},
+		challenges: map[string]authChallenge{},
+		localPort:  "3100",
+	}
+	auth.exchange = func(context.Context, string, string) (authProfile, error) {
+		return authProfile{Email: "admin@example.com"}, nil
+	}
+
+	response := httptest.NewRecorder()
+	auth.authenticate(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/?view=fleet", nil))
+	login, err := url.Parse(response.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login.Path != "/d:dboss.lvh.me/p:3100" {
+		t.Fatalf("local http destination = %s", login.Path)
+	}
+	callbackRequest := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:3100/authcog?callback=verified&state="+url.QueryEscape(login.Query().Get("state")), nil)
+	callbackRequest.AddCookie(cookieNamed(t, response.Result().Cookies(), authStateCookie))
+	callbackResponse := httptest.NewRecorder()
+	auth.authenticate(callbackResponse, callbackRequest)
+	if callbackResponse.Code != http.StatusSeeOther || callbackResponse.Header().Get("Location") != "http://dboss.lvh.me/?view=fleet" {
+		t.Fatalf("unexpected callback response: %d %s", callbackResponse.Code, callbackResponse.Header().Get("Location"))
+	}
+
+	for name, request := range map[string]*http.Request{
+		"public host":     httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil),
+		"forwarded https": forwardedHTTPS(httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)),
+	} {
+		response := httptest.NewRecorder()
+		auth.authenticate(response, request)
+		login, err := url.Parse(response.Header().Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(login.Path, "/p:") {
+			t.Fatalf("%s: destination = %s", name, login.Path)
+		}
+	}
+}
+
+func forwardedHTTPS(r *http.Request) *http.Request {
+	r.Header.Set("X-Forwarded-Proto", "https")
+	return r
+}

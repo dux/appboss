@@ -458,6 +458,7 @@ It never starts, stops or changes anything; the `sysinfo` module keeps the snaps
 ### Signing in
 
 Production sign-in goes through AuthCog: the console redirects to `management.auth.realm`, and only the addresses in `admin_emails` are admitted.
+AuthCog returns over `http` only to a local host (`localhost`, `*.lvh.me`, an IP) on a port above 999, so a plain-http sign-in started on port 80 is routed through the console's own port (the first of `ports.range`) and then sent back to the address it started on.
 
 For local work there is `dboss login`:
 
