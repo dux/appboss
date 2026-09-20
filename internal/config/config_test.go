@@ -401,6 +401,9 @@ func yamlFields(typ reflect.Type) map[string]reflect.StructField {
 			continue
 		}
 		key, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if key == "" || key == "-" {
+			continue
+		}
 		result[key] = field
 	}
 	return result
@@ -659,12 +662,12 @@ func TestErrorsPointAtLineAndKey(t *testing.T) {
 			t.Errorf("%s: got %v, want %q with hint %q", test.name, err, test.want, test.hint)
 		}
 	}
-	_, err := ParseApp([]byte("procfile:\n  web: ./x\ncanonical: a.test\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
-	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: canonical: unknown key`) || !strings.Contains(err.Error(), `did you mean "canonical_host"?`) {
+	_, err := ParseApp([]byte("procfile:\n  web: ./x\ncanonical_hst: a.test\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
+	if err == nil || !strings.Contains(err.Error(), `dboss.yaml:3: canonical_hst: unknown key`) || !strings.Contains(err.Error(), `did you mean "canonical_host"?`) {
 		t.Errorf("app typo: got %v", err)
 	}
 	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "canonical" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
+	if !errors.As(err, &cfgErr) || cfgErr.Line != 3 || cfgErr.Key != "canonical_hst" || cfgErr.Path != "/srv/apps/demo/dboss.yaml" {
 		t.Errorf("structured error = %+v", cfgErr)
 	}
 }
@@ -700,7 +703,7 @@ func TestPubsubConfig(t *testing.T) {
 	// The top-level block is gone, and pubsub is web-process-only.
 	for _, data := range []string{
 		"procfile:\n  web: ./server\npubsub:\n  path: /socketio\n",
-		"procfile:\n  worker:\n    command: ./jobs\n    domains: [demo.test]\n    pubsub: true\n  web: ./server\n",
+		"procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: true\n",
 		"procfile:\n  web:\n    command: ./server\n    pubsub: true\n",
 	} {
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
@@ -713,5 +716,58 @@ func TestPubsubConfig(t *testing.T) {
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("path %q should be invalid", path)
 		}
+	}
+}
+
+func TestProcessSpecShapesAndKeys(t *testing.T) {
+	defaults := Default().Defaults
+	// A scalar is a background process and does not make the app a web app.
+	app, err := ParseApp([]byte("procfile:\n  worker: ./jobs\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.WebProcess != "" || len(app.Hosts) != 0 {
+		t.Fatalf("a scalar process must not be the web process: %+v", app)
+	}
+	// An unknown process key and an unknown pubsub key are both rejected.
+	for _, data := range []string{
+		"procfile:\n  web:\n    command: ./server\n    ports: [80]\n",
+		"procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub:\n      route: /socketio\n",
+		"procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  api:\n    command: ./api\n    domains: [api.demo.test]\n",
+	} {
+		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
+			t.Errorf("expected an error for:\n%s", data)
+		}
+	}
+	// pubsub: false is off and may sit on any process.
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: false\n"), "dboss.yaml", defaults); err != nil {
+		t.Fatalf("pubsub: false should be off: %v", err)
+	}
+}
+
+func TestSingleAppModeBindsDevDomain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	writeConfigFile(t, path, "procfile:\n  web: ./server\n  worker: ./jobs\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App == nil || cfg.App.WebProcess != "web" || !reflect.DeepEqual(cfg.App.Hosts, List{DevDomain}) {
+		t.Fatalf("single app should bind %s to web: %+v", DevDomain, cfg.App)
+	}
+	// An explicit domain is kept and no dev domain is added.
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [my.test]\n")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.App.Hosts, List{"my.test"}) {
+		t.Fatalf("explicit domains must win: %+v", cfg.App.Hosts)
+	}
+	// pubsub with no domains is fine in single mode: the dev domain serves it.
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    pubsub: true\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("single-mode pubsub without domains: %v", err)
 	}
 }

@@ -95,11 +95,10 @@ Blocks shared by service and app:
 
 * `runtime` - the process keys, the per-process ones marked as such
 * `web` - proxy behaviour in front of the app
-* `pubsub` - realtime channels
 
 App-only blocks:
 
-* `app` - procfile, hosts, web_process, canonical_host, autostart
+* `app` - procfile (command, domains and pubsub per process), canonical_host, autostart
 * `cron` - scheduled one-shot commands
 * `hooks` - signed one-shot commands
 

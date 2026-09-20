@@ -171,7 +171,7 @@
   {#if !state.loading}
     <div class="card empty-state">
       <strong>No app serves PubSub channels</strong>
-      <span>Set <code>pubsub.path</code> in an app's dboss.yaml, then rescan.</span>
+      <span>Set <code>pubsub: true</code> (or a path) on an app's web process, then rescan.</span>
     </div>
   {/if}
 {/each}

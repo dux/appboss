@@ -51,8 +51,9 @@
     `,
     configApp: `
     procfile:
-      web: ./start.sh
-    hosts: [shop.example.com]
+      web:
+        command: ./start.sh
+        domains: [shop.example.com]
     health: http:/up
     `,
     supervision: `
@@ -75,9 +76,12 @@
     idle_stop: 0s
     `,
     routing: `
-    hosts:
-      - shop.example.com
-      - www.shop.example.com
+    procfile:
+      web:
+        command: ./start.sh
+        domains:
+          - shop.example.com
+          - www.shop.example.com
     canonical_host: shop.example.com
     max_body: 50m
     headers:
@@ -132,11 +136,15 @@
         overlap: false
     `,
     pubsub: `
-    pubsub:
-      path: /socketio
-      replay: 10
-      client_events: true
-      test: false
+    procfile:
+      web:
+        command: ./start.sh
+        domains: [shop.example.com]
+        pubsub:
+          path: /socketio
+          replay: 10
+          client_events: true
+          test: false
     `,
     pubsubSubscribe: `
     <script src="/socketio/client.js"><\/script>
@@ -305,11 +313,11 @@
           <li>Capping one app's memory and CPU on a shared box (cgroup v2; process groups elsewhere ignore the limits).</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,web_process,autostart,processes,health,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,shell,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
+        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,shell,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
-        <p>All process types run at once; only <code>web_process</code> (default <code>web</code>) gets proxied traffic. It starts first, then the rest by name. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
+        <p>All process types run at once; the one process that declares <code>domains</code> is the web process and gets proxied traffic. It starts first, then the rest by name. A process with no <code>domains</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
           <li><code>health</code> is the readiness check: <code>tcp</code>, or <code>http:&#60;path&#62;</code> expecting a 2xx. A process that never passes it within <code>health_timeout</code> is restarted.</li>
@@ -346,7 +354,7 @@
     {#if state.topic === 'routing'}
       <section>
         <h2>Routing</h2>
-        <p>Every app lists the hostnames it answers in <code>hosts</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to its <code>web</code> process. Non-web processes never get traffic.</p>
+        <p>The web process lists the hostnames it answers in <code>domains</code>. The proxy reads the request <code>Host</code>, picks the app, and forwards to that process. Background processes never get traffic.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Hosting many sites on one port 80 without writing an nginx vhost per app.</li>
@@ -356,11 +364,11 @@
           <li>Adding or removing response headers and limiting the request body for every response, without touching the app.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-routing"><db-config-keys paths="hosts,canonical_host,web_process,headers,max_body,proxy.listen,proxy.wake.unknown_page,proxy.upstream.dial_timeout,proxy.upstream.response_header_timeout,proxy.upstream.idle_conn_timeout,proxy.upstream.max_idle_conns_per_app" /></div>
+        <div fez:keep="keys-routing"><db-config-keys paths="canonical_host,headers,max_body,proxy.listen,proxy.wake.unknown_page,proxy.upstream.dial_timeout,proxy.upstream.response_header_timeout,proxy.upstream.idle_conn_timeout,proxy.upstream.max_idle_conns_per_app" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.routing" />
         <h3>Details</h3>
-        <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list.</p>
+        <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>domains: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list, and in single-app dev mode a process with no domains is bound to <code>.lvh.me</code>.</p>
         <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy. A host no app matches gets <code>proxy.wake.unknown_page</code>.</p>
         <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, health endpoint, <code>auth</code> sign-in, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward. Forwarded headers (<code>X-Forwarded-Proto</code>, <code>X-Forwarded-Host</code>, <code>X-Real-IP</code>) are added only when missing, so Cloudflare's values win.</p>
       </section>
@@ -525,7 +533,7 @@
     {#if state.topic === 'pubsub'}
       <section>
         <h2>PubSub</h2>
-        <p><code>pubsub.path</code> turns a URL prefix on the app's own hosts into a pub/sub hub. It is served by dboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
+        <p>The web process's <code>pubsub</code> option turns a URL prefix on the app's own hosts into a pub/sub hub. Use <code>pubsub: true</code> for <code>/socketio</code>, <code>pubsub: /path</code> for a custom prefix, or a mapping for the full settings. It is served by dboss, not the app process, so subscribers connect while the app is stopped and realtime traffic never wakes it.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Live updates, notifications and chat without running a WebSocket server or Redis next to the app: the app publishes with one HTTP POST.</li>
@@ -534,7 +542,9 @@
           <li>No frontend dependency: the bundled <code>&#60;path&#62;/client.js</code> picks WebSocket or SSE and reconnects.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-pubsub"><db-config-keys paths="pubsub.path,pubsub.secret,pubsub.replay,pubsub.max_clients,pubsub.max_message_size,pubsub.client_events,pubsub.test" /></div>
+        <ul>
+          <li><code>pubsub</code> - <code>true</code>, a path, or a mapping with <code>path</code>, <code>secret</code>, <code>replay</code>, <code>max_clients</code>, <code>max_message_size</code>, <code>client_events</code> and <code>test</code>. Only the web process may set it.</li>
+        </ul>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.pubsub" />
         <h3>Details</h3>

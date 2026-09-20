@@ -281,7 +281,7 @@ func (c CLI) printHuman(method string, data any) error {
 	case ops.ActionPubsub:
 		apps := data.([]pubsub.App)
 		if len(apps) == 0 {
-			fmt.Fprintln(c.Out, "no app serves realtime channels (set pubsub.path in dboss.yaml)")
+			fmt.Fprintln(c.Out, "no app serves realtime channels (set pubsub on an app's web process)")
 			return nil
 		}
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)

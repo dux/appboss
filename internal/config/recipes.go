@@ -53,21 +53,6 @@ type recipeSpec struct {
 // field names a documented key, so a new key is offered in the form by naming it here.
 var recipeSpecs = []recipeSpec{
 	{
-		id:          "pubsub",
-		title:       "PubSub channels",
-		description: "Serve WebSocket channels on the app's hosts and choose who may publish.",
-		scope:       RecipeApp,
-		fields: []recipeField{
-			{path: "pubsub.path"},
-			{path: "pubsub.secret"},
-			{path: "pubsub.replay"},
-			{path: "pubsub.max_clients"},
-			{path: "pubsub.max_message_size"},
-			{path: "pubsub.client_events"},
-			{path: "pubsub.test"},
-		},
-	},
-	{
 		id:          "auth",
 		title:       "Sign-in",
 		description: "Ask visitors to sign in through AuthCog and let only the listed emails reach the app.",

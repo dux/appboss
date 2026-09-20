@@ -3,11 +3,10 @@ procfile:
     command: ./start.sh
     domains:
       - button.lvh.me
+    # Serves a realtime hub at http://button.lvh.me/socketio; open /socketio/_test for the live test.
+    pubsub:
+      path: /socketio
+      test: true
 
 health: http:/up
 autostart: button
-
-# Serves a realtime hub at http://button.lvh.me/socketio; open /socketio/_test for the live test.
-pubsub:
-  path: /socketio
-  test: true

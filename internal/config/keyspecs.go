@@ -143,13 +143,6 @@ var keySpecs = map[string]KeySpec{
 	"error_page_path":   {Block: "web", Name: "Error page", Description: "static HTML served for proxy errors and app 5xx answers, relative to the app", Example: "public/error_500.html"},
 
 	// --- PubSub ---
-	"pubsub.path":             {Block: "pubsub", Name: "Path prefix", Description: "URL prefix that serves realtime channels on the app hosts; empty disables the feature", Example: "/socketio"},
-	"pubsub.secret":           {Block: "pubsub", Name: "Publish secret", Description: "bearer token HTTP publishers must present; empty generates one per app under state_dir", Example: "$PUBSUB_SECRET", Secret: true},
-	"pubsub.replay":           {Block: "pubsub", Name: "Replay buffer", Description: "messages kept per channel and replayed to a subscriber that connects late", Example: "50"},
-	"pubsub.max_clients":      {Block: "pubsub", Name: "Max subscribers", Description: "subscriber limit per app; further connections are refused with 503", Example: "1000"},
-	"pubsub.max_message_size": {Block: "pubsub", Name: "Max message size", Description: "largest accepted publish body; 0 means unlimited"},
-	"pubsub.client_events":    {Block: "pubsub", Name: "Client publishing", Description: "allow a subscribed WebSocket client to publish back to its channel"},
-	"pubsub.test":             {Block: "pubsub", Name: "Self-test page", Description: "serve an interactive self-test page at <path>/_test"},
 
 	// --- Sign-in ---
 	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},

@@ -9,7 +9,7 @@ import (
 )
 
 func TestParseProcfile(t *testing.T) {
-	commands, err := ParseProcfile(map[string]string{"web": "./server --port x", "worker": "./jobs"})
+	commands, err := ParseProcfile(map[string]config.ProcessSpec{"web": {Command: "./server --port x"}, "worker": {Command: "./jobs"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestLoadEnv(t *testing.T) {
 }
 
 func TestValidateAppAcceptsShorthandHost(t *testing.T) {
-	app := config.App{Procfile: map[string]string{"web": "./server"}, WebProcess: "web", Hosts: []string{".demo.test"}}
+	app := config.App{Procfile: map[string]config.ProcessSpec{"web": {Command: "./server"}}, WebProcess: "web", Hosts: []string{".demo.test"}}
 	if _, err := validateApp(app); err != nil {
 		t.Fatalf("shorthand host rejected: %v", err)
 	}

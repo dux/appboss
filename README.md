@@ -79,17 +79,17 @@ App file (`./demo/apps/bun/dboss.yaml`):
 
 ```yaml
 procfile:
-  web: ./start.sh
-
-hosts:
-  - bun.lvh.me
+  web:
+    command: ./start.sh
+    domains: [bun.lvh.me]
 
 health: http:/up
 ```
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
-Every key that takes a list also accepts a single value, so `hosts: myapp.com` equals `hosts: [myapp.com]`.
-A leading `*.` in a host matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `hosts: .myapp.com` covers `myapp.com` and `*.myapp.com`.
+The process that declares `domains` is the web process; a process with only a command is a background worker. Running dboss inside an app folder with no domains binds the first process to `.lvh.me`.
+Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` equals `allow_ips: [10.0.0.0/8]`.
+A leading `*.` in a domain matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `domains: .myapp.com` covers `myapp.com` and `*.myapp.com`.
 `proxy.listen` and `management.host` are such lists: several listen addresses each get a listener with the same routing, and several console hostnames are all accepted.
 A `$NAME` in a value is replaced with that variable from the daemon's environment at load time, so `url: $ALERT_WEBHOOK_URL` keeps a secret out of the file; only all-uppercase names expand, an unset name stays as written, and `procfile` and cron commands are never expanded because they are runtime shell lines.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
@@ -242,20 +242,25 @@ With no `secret` in the config, dboss generates a 64-character secret under `sta
 
 ## PubSub channels
 
-An app can serve a pub/sub hub on its own hosts. Set a path and dboss answers it instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it:
+A web process can serve a pub/sub hub on its domains. Set `pubsub` and dboss answers the path instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it. `pubsub: true` uses `/socketio`, `pubsub: /path` sets a custom prefix, and a mapping sets the full options:
 
 ```yaml
-pubsub:
-  path: /socketio        # empty disables the feature
-  # secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per app under state_dir
-  replay: 10             # messages kept per channel and replayed to a late subscriber
-  max_clients: 500       # subscriber cap per app; 0 means unlimited
-  max_message_size: 64k  # largest publish body; 0 means unlimited
-  client_events: true    # a WebSocket client may publish to its own channel
-  test: false            # serve the browser self-test at <path>/_test
+procfile:
+  web:
+    command: ./start.sh
+    domains: [myapp.com]
+    pubsub: true            # or /socketio, or a mapping
+    # pubsub:
+    #   path: /socketio
+    #   secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per app under state_dir
+    #   replay: 10               # messages kept per channel and replayed to a late subscriber
+    #   max_clients: 500         # subscriber cap per app; 0 means unlimited
+    #   max_message_size: 64k    # largest publish body; 0 means unlimited
+    #   client_events: true      # a WebSocket client may publish to its own channel
+    #   test: false              # serve the browser self-test at <path>/_test
 ```
 
-`pubsub` is a shared key: put it under `defaults:` in the host file to turn it on for every app, or in one app's `dboss.yaml` to override key by key.
+`pubsub` lives on the web process only, because the hub is served on that process's domains.
 
 **Subscribe.** A `GET <path>/<channel>` upgrades to a WebSocket, or streams SSE when the request carries no `Upgrade` header. Messages are `{"event","data","ts"}`; the last `replay` are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher.
 
@@ -285,7 +290,7 @@ The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`
 
 **Self-test.** With `test: true`, `GET <path>/_test` serves a page that opens a WebSocket and an SSE connection and reports PASS or FAIL in the browser.
 
-`dboss pubsub [app]` lists channels and subscriber counts, `dboss pubsub secret [app]` prints the credential and example URLs, `dboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `dboss pubsub help` prints the integration guide. The console's **PubSub** tab (when any app sets a path) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `dboss_pubsub_clients`, `dboss_pubsub_channels` and `dboss_pubsub_messages_total`, each labeled by app.
+`dboss pubsub [app]` lists channels and subscriber counts, `dboss pubsub secret [app]` prints the credential and example URLs, `dboss pubsub publish [app] <channel> [--event name] [--data json|-]` sends a message through the control socket, and `dboss pubsub help` prints the integration guide. The console's **PubSub** tab (when any web process sets `pubsub`) shows the same and can publish a test message. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved. Metrics are `dboss_pubsub_clients`, `dboss_pubsub_channels` and `dboss_pubsub_messages_total`, each labeled by app.
 
 ## Health and metrics
 
@@ -452,7 +457,7 @@ Single-app mode cannot destroy itself, and retained logs, audit rows and config 
 
 On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Real-IP` when they are missing; whatever Cloudflare sent is left untouched. `X-Forwarded-For` is appended by the reverse proxy.
 
-An app's processes start with the `web_process` first, then the rest in name order, so a web process that expects other services to be up still gets that.
+An app's processes start with the web process (the one with `domains`) first, then the rest in name order, so a web process that expects other services to be up still gets that.
 
 ## Audit log
 

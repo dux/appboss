@@ -16,8 +16,8 @@
 #   - Durations are Go duration strings: 30s, 20m, 6h, 72h. No days suffix; use 72h.
 #   - Sizes are 10m, 512k, 1g (lowercase, powers of 1024).
 #   - Every key shown has the default value shown. Omit a key to get the default.
-#   - Every key that takes a list also accepts a single value: `hosts: myapp.com` is
-#     `hosts: [myapp.com]`.
+#   - Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` is
+#     short for `allow_ips: [10.0.0.0/8]`.
 #   - Unknown keys are an error at load time, not a warning. Typos must not pass silently.
 #   - Per-app values in an app's dboss.yaml override global defaults.* one key at a time.
 #     Process keys can be overridden once more under processes.<name>; web keys cannot.
@@ -462,11 +462,36 @@ s3:
 # a leading "." matches the bare domain and every subdomain, so ".myapp.com" means "myapp.com"
 # and "*.myapp.com". Longest match wins.
 # In single mode (no domains declared) the first process is bound to .lvh.me for local dev.
+#
+# The web process may also set `pubsub`, a realtime hub dboss serves on its domains. It accepts
+# true (the /socketio default), a path, or a mapping:
+#   pubsub: true                    -> path /socketio
+#   pubsub: /realtime               -> that path
+#   pubsub:                         -> full settings
+#     path: /socketio
+#     # Bearer token a publisher presents. Empty generates a 64-character secret per app under
+#     # state_dir on first use; `dboss pubsub` prints it and `dboss pubsub rotate` replaces it.
+#     secret: $PUBSUB_SECRET
+#     # Messages kept per channel and replayed to a late subscriber, oldest first.
+#     replay: 10
+#     # Subscriber limit per app across all channels. 0 means unlimited; further connects get 503.
+#     max_clients: 500
+#     # Largest accepted publish body. 0 means unlimited.
+#     max_message_size: 64k
+#     # A subscribed WebSocket client may publish to its own channel. SSE is one-way.
+#     client_events: true
+#     # Serve the interactive self-test page at <path>/_test.
+#     test: false
+# The hub is independent of the app process: a subscriber can connect while the app is stopped,
+# and realtime traffic never wakes it. Subscribe GET <path>/<channel> (WebSocket or SSE);
+# publish POST with the secret. Channels are one path segment; client.js, _test and _selftest are
+# reserved. `dboss pubsub help` prints a copy-paste guide.
 procfile:
   web:
     command: bundle exec puma -C config/puma.rb
     domains:
       - ".myapp.com"
+    pubsub: true
   worker: bundle exec lux jobs:work
   cron: bundle exec lux jobs:cron
 
@@ -482,7 +507,7 @@ autostart: true
 # unlinked without following its target. Single-app mode can never destroy itself.
 deletable: false
 
-# Optional. Must be one of hosts. Requests for any other host of this app answer 301 to
+# Optional. Must be one of the web process domains. Requests for any other host answer 301 to
 # <scheme>://<canonical_host><path?query>; the scheme follows X-Forwarded-Proto, default https.
 # Runs before auth and static files, so www never serves content.
 canonical_host: myapp.com
@@ -567,43 +592,6 @@ hooks:
     # leave it empty and let dboss generate one under state_dir (rotate it with
     # `dboss hooks rotate`). A secret set here wins over the generated one.
     secret: $DEPLOY_SECRET
-
-# Realtime channels (pub/sub). When path is set, dboss serves a small hub on this app's own
-# hosts. It is independent of the app process: a subscriber can connect while the app is
-# stopped, and realtime traffic never wakes it.
-#
-#   Subscribe   GET <path>/<channel>            Upgrade: websocket  -> WebSocket
-#                                               Accept: text/event-stream -> SSE
-#   Publish     POST <path>/<channel>           Authorization: Bearer <secret>
-#                                               body {"event": "...", "data": ...}
-#   Client lib  GET <path>/client.js
-#   Self-test   GET <path>/_test                only when test: true
-#
-# Messages are fanned out to every subscriber of the same app and channel. The last `replay`
-# are replayed to a subscriber that joins late. A slow client is dropped, never blocking the
-# publisher. Channels are one path segment; `client.js`, `_test` and `_selftest` are reserved.
-# `dboss pubsub help` prints the same guide with copy-paste examples.
-pubsub:
-  # URL prefix on the app's hosts. Empty disables the whole feature. Must start with /.
-  path: ""
-  #   /socketio
-  # Bearer token a publisher presents. Empty generates a 64-character secret per app under
-  # state_dir on first use; `dboss pubsub` prints it and `dboss pubsub rotate` replaces it.
-  # A secret set here wins and cannot be rotated from the console.
-  secret: ""
-  #   $PUBSUB_SECRET
-  # Messages kept per channel and replayed to a late subscriber, oldest first.
-  replay: 10
-  # Subscriber limit per app across all channels. 0 means unlimited. Further connects get 503.
-  max_clients: 500
-  # Largest accepted publish body. 0 means unlimited.
-  max_message_size: 64k
-  # When true, a subscribed WebSocket client may publish to its own channel by sending the
-  # same {"event","data"} envelope. SSE is one-way, so client events are WebSocket only.
-  client_events: true
-  # Serve the interactive self-test page at <path>/_test. It opens a WebSocket and an SSE
-  # connection and reports PASS/FAIL, so a browser can confirm the hub end to end.
-  test: false
 
 # --- Sign-in: AuthCog in front of the app ---------------------------------------------------
 # With allow_emails set, a visitor without a session is sent to AuthCog (the realm is

@@ -87,7 +87,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nmax_body: 1k\nerror_page_path: public/error_500.html\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web:\n    command: %s -test.run=TestProxyHelperProcess\n    domains: [demo.test]\nmax_body: 1k\nerror_page_path: public/error_500.html\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
 	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
 	writeProxyFixture(t, filepath.Join(appDir, "public", "error_500.html"), "<h1>custom error {{APP_NAME}}</h1>")
@@ -188,7 +188,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web: %s -test.run=TestProxyHelperProcess\nhosts: [demo.test]\nautostart: button\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web:\n    command: %s -test.run=TestProxyHelperProcess\n    domains: [demo.test]\nautostart: button\n", os.Args[0])
 	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
 	cfg := config.Default()

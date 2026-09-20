@@ -40,7 +40,7 @@ func (s *recordingSink) waitFor(t *testing.T, eventType string) notify.Event {
 
 func TestCrashEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
-	cfg := hookConfig(t, [2]int{32900, 32920}, "procfile:\n  web: /usr/bin/false\nautostart: true\nrestart: on-failure\nmax_restarts: 1\nrestart_backoff: [1ms, 1.0, 1ms]\n")
+	cfg := hookConfig(t, [2]int{32900, 32920}, "procfile:\n  web:\n    command: /usr/bin/false\n    domains: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 1\nrestart_backoff: [1ms, 1.0, 1ms]\n")
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestCrashEmitsNotification(t *testing.T) {
 
 func TestRestartLoopEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
-	cfg := hookConfig(t, [2]int{32920, 32940}, "procfile:\n  web: /usr/bin/false\nautostart: true\nrestart: on-failure\nmax_restarts: 5\nrestart_backoff: [1ms, 1.0, 1ms]\n")
+	cfg := hookConfig(t, [2]int{32920, 32940}, "procfile:\n  web:\n    command: /usr/bin/false\n    domains: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 5\nrestart_backoff: [1ms, 1.0, 1ms]\n")
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
 	if err != nil {
 		t.Fatal(err)

@@ -630,7 +630,7 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyBody := `{"id":"app:sinatra","revision":"` + file.Revision + `","recipe":"pubsub","values":{"pubsub.path":"/socketio","pubsub.replay":25},"reset":["pubsub.secret"]}`
+	applyBody := `{"id":"app:sinatra","revision":"` + file.Revision + `","recipe":"web","values":{"static":"./dist"},"reset":["deletable"]}`
 	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", applyBody)
 	if applied.Code != http.StatusOK {
 		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
@@ -639,7 +639,7 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 		t.Error("apply did not create the server override")
 	}
 	contents := store.files["app:sinatra"].Contents
-	if !strings.Contains(contents, "/socketio") || !strings.Contains(contents, "replay: 25") {
+	if !strings.Contains(contents, "./dist") {
 		t.Errorf("apply did not write the recipe values:\n%s", contents)
 	}
 	if manager.actions[len(manager.actions)-1] != "rescan" {
@@ -651,7 +651,7 @@ func TestConsoleConfigFormRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"pubsub","values":{"s3.endpoint":"https://evil"},"reset":[]}`
+	foreign := `{"id":"app:sinatra","revision":"` + current.Revision + `","recipe":"web","values":{"s3.endpoint":"https://evil"},"reset":[]}`
 	if got := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", foreign); got.Code != http.StatusOK {
 		t.Fatalf("foreign apply: %d %s", got.Code, got.Body.String())
 	}
@@ -716,7 +716,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 		}
 	}
 
-	apply := `{"id":"app:sinatra","revision":"` + payload.File.Revision + `","recipe":"pubsub","values":{"pubsub.path":"/socketio","pubsub.replay":25},"reset":[]}`
+	apply := `{"id":"app:sinatra","revision":"` + payload.File.Revision + `","recipe":"web","values":{"static":"./dist"},"reset":[]}`
 	applied := call(t, handler, cookie, session, http.MethodPost, "/api/config/apply", apply)
 	if applied.Code != http.StatusOK {
 		t.Fatalf("apply: %d %s", applied.Code, applied.Body.String())
@@ -725,14 +725,14 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("override was not written: %v", err)
 	}
-	if !strings.Contains(string(override), "/socketio") || !strings.Contains(string(override), "replay: 25") {
+	if !strings.Contains(string(override), "./dist") {
 		t.Fatalf("override is missing the values:\n%s", override)
 	}
 	base, err := os.ReadFile(appPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(base), "socketio") {
+	if strings.Contains(string(base), "./dist") {
 		t.Fatal("the base dboss.yaml was modified")
 	}
 	if manager.actions[len(manager.actions)-1] != "rescan" {

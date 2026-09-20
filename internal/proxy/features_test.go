@@ -24,7 +24,7 @@ func featureHandler() *Handler {
 func featureSnapshot(t *testing.T, data string) super.Snapshot {
 	t.Helper()
 	dir := t.TempDir()
-	app, err := config.ParseApp([]byte("procfile:\n  web: ./server\nhosts: [demo.test, www.demo.test]\n"+data), filepath.Join(dir, config.FileName), config.Default().Defaults)
+	app, err := config.ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test, www.demo.test]\n"+data), filepath.Join(dir, config.FileName), config.Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
 	}

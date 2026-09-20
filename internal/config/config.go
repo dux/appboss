@@ -117,8 +117,8 @@ func (s Size) String() string {
 	return strconv.FormatInt(value, 10)
 }
 
-// List is a []string that also accepts a single scalar in YAML, so `hosts: myapp.com` and
-// `hosts: [myapp.com]` mean the same thing. It marshals as a sequence.
+// List is a []string that also accepts a single scalar in YAML, so `allow_ips: 10.0.0.0/8` and
+// `allow_ips: [10.0.0.0/8]` mean the same thing. It marshals as a sequence.
 type List []string
 
 func (l *List) UnmarshalYAML(node *yaml.Node) error {
@@ -351,11 +351,11 @@ type Web struct {
 	MaintenancePage  string            `yaml:"maintenance_page" json:"maintenance_page"`
 	ErrorPagePath    string            `yaml:"error_page_path" json:"error_page_path"`
 	// Pubsub is resolved from the web process's pubsub option; it is not a settable key of its own.
-	Pubsub           Pubsub            `yaml:"-" json:"-"`
-	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
-	Auth             Auth              `yaml:"auth" json:"auth"`
-	AuthCog          AuthCog           `yaml:"authcog" json:"authcog"`
-	allowPrefixes    []netip.Prefix
+	Pubsub        Pubsub  `yaml:"-" json:"-"`
+	Alerts        Alerts  `yaml:"alerts" json:"alerts"`
+	Auth          Auth    `yaml:"auth" json:"auth"`
+	AuthCog       AuthCog `yaml:"authcog" json:"authcog"`
+	allowPrefixes []netip.Prefix
 }
 
 // AuthCog is the app-only login service: dboss runs the AuthCog round trip on the app's behalf
@@ -1070,7 +1070,7 @@ func validateAuthCog(w Web) error {
 	return nil
 }
 
-// validateURLPath checks the URL prefix shape shared by pubsub.path and authcog.path.
+// validateURLPath checks the URL prefix shape shared by the pubsub and authcog paths.
 func validateURLPath(key, value string) error {
 	if value == "" {
 		return nil
@@ -1335,7 +1335,7 @@ func processNames(procfile map[string]ProcessSpec) []string {
 func (a *App) deriveWeb() error {
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
-		if len(spec.Domains) == 0 && spec.Pubsub == nil {
+		if len(spec.Domains) == 0 && (spec.Pubsub == nil || !spec.Pubsub.enabled()) {
 			continue
 		}
 		if a.WebProcess != "" {
@@ -1352,14 +1352,11 @@ func (a *App) deriveWeb() error {
 func (a *App) resolvePubsub() error {
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
-		if spec.Pubsub == nil {
+		if spec.Pubsub == nil || !spec.Pubsub.enabled() {
 			continue
 		}
 		if name != a.WebProcess {
 			return &Error{Key: "procfile." + name + ".pubsub", Message: "pubsub is only valid on the web process"}
-		}
-		if !spec.Pubsub.enabled() {
-			continue
 		}
 		pubsub := a.Defaults.Web.Pubsub
 		if spec.Pubsub.Path != "" {
@@ -1419,10 +1416,10 @@ type Hook struct {
 type appFile struct {
 	Procfile      map[string]ProcessSpec `yaml:"procfile"`
 	CanonicalHost string                 `yaml:"canonical_host"`
-	Autostart     Autostart          `yaml:"autostart"`
-	Deletable     bool               `yaml:"deletable"`
-	Cron          map[string]CronJob `yaml:"cron"`
-	Hooks         map[string]Hook    `yaml:"hooks"`
+	Autostart     Autostart              `yaml:"autostart"`
+	Deletable     bool                   `yaml:"deletable"`
+	Cron          map[string]CronJob     `yaml:"cron"`
+	Hooks         map[string]Hook        `yaml:"hooks"`
 	Overrides     `yaml:",inline"`
 	Processes     map[string]ProcessOverrides `yaml:"processes"`
 }

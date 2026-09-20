@@ -55,11 +55,11 @@ type WebOverrides struct {
 	AuthCog          *AuthCogOverrides `yaml:"authcog,omitempty" json:"authcog,omitempty"`
 }
 
-// PubsubOverrides is the pubsub block as pointers, so an app can override one key and keep the
-// host defaults for the rest.
+// PubsubOverrides is the web process's pubsub mapping as pointers, so an app can set one key and
+// keep the default for the rest. Secret never leaves the process as JSON, like basic_auth.
 type PubsubOverrides struct {
 	Path           *string `yaml:"path,omitempty" json:"path,omitempty"`
-	Secret         *string `yaml:"secret,omitempty" json:"secret,omitempty"`
+	Secret         *string `yaml:"secret,omitempty" json:"-"`
 	Replay         *int    `yaml:"replay,omitempty" json:"replay,omitempty"`
 	MaxClients     *int    `yaml:"max_clients,omitempty" json:"max_clients,omitempty"`
 	MaxMessageSize *Size   `yaml:"max_message_size,omitempty" json:"max_message_size,omitempty"`

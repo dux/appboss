@@ -37,7 +37,6 @@ var blocks = []Block{
 	{ID: "hooks", Title: "Hooks", Summary: "Signed one-shot commands triggered over HTTP.", Scope: ScopeApp},
 	{ID: "runtime", Title: "Runtime", Summary: "How a process is checked, restarted, limited and logged.", Scope: ScopeBoth},
 	{ID: "web", Title: "Web", Summary: "Proxy behaviour in front of the app.", Scope: ScopeBoth},
-	{ID: "pubsub", Title: "PubSub", Summary: "Realtime channels served on the app's hosts.", Scope: ScopeBoth},
 	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, for the listed emails only.", Scope: ScopeBoth},
 	{ID: "authcog", Title: "AuthCog login", Summary: "AuthCog sign-in dboss runs for the app, handing it the profile once.", Scope: ScopeBoth},
 	{ID: "alerts", Title: "Alerts", Summary: "Request log checks that post error-rate and slow events.", Scope: ScopeBoth},
