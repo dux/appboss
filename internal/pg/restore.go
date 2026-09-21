@@ -128,9 +128,7 @@ func (s *Service) AppDatabases(ctx context.Context, app string, databases map[st
 	if len(databases) == 0 {
 		return nil, nil
 	}
-	s.mu.RLock()
-	connConfig := s.connConfig
-	s.mu.RUnlock()
+	connConfig := s.connection(ctx)
 	if connConfig == nil {
 		return nil, errors.New("no reachable PostgreSQL server")
 	}

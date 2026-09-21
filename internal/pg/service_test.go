@@ -402,3 +402,31 @@ func TestAppDatabasesMissingTemplate(t *testing.T) {
 		t.Error("a failed template create must not leave the database behind")
 	}
 }
+
+// TestAppDatabasesDetectsOnDemand is the regression for a daemon restart taking every pg_db app
+// down with it: detection runs off the start path, but super.New spawns autostart apps before the
+// module manager runs, so the first caller has to be able to resolve the server itself.
+func TestAppDatabasesDetectsOnDemand(t *testing.T) {
+	service := New(config.Config{StateDir: t.TempDir(), Postgres: config.Postgres{Enabled: true}}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Deliberately no detect() and no Start(): this is the state the supervisor finds at boot.
+	if service.connConfig != nil {
+		t.Fatal("a fresh service should hold no connection")
+	}
+	probe := New(config.Config{StateDir: t.TempDir(), Postgres: config.Postgres{Enabled: true}}, nil)
+	probe.detect(ctx)
+	if probe.connConfig == nil {
+		t.Skip("no reachable PostgreSQL server")
+	}
+
+	database := fmt.Sprintf("dboss_ondemand_%d", time.Now().UnixNano())
+	defer func() { _ = service.dropDatabase(context.Background(), probe.connConfig, database) }()
+	env, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: database}})
+	if err != nil {
+		t.Fatalf("a never-started service should still resolve: %v", err)
+	}
+	if !strings.Contains(env["DB_MAIN"], database) {
+		t.Fatalf("DB_MAIN = %q, want the database in it", env["DB_MAIN"])
+	}
+}
