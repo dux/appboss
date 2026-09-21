@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version is a commit count, so the whole history has to be here
 
       - uses: actions/setup-go@v5
         with:
@@ -23,10 +25,11 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p dist
+          version="v$(git rev-list --count HEAD)"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}
             arch=${target#*/}
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X dboss/internal/version.Version=${GITHUB_REF_NAME}" -o "dist/dboss_${os}_${arch}" ./cmd/dboss
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X dboss/internal/version.Version=$version" -o "dist/dboss_${os}_${arch}" ./cmd/dboss
           done
           (cd dist && sha256sum dboss_* > checksums.txt)
 

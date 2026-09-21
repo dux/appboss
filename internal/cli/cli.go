@@ -25,6 +25,7 @@ import (
 	"dboss/internal/daemon"
 	"dboss/internal/ops"
 	"dboss/internal/super"
+	"dboss/internal/version"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -81,6 +82,10 @@ func (c CLI) Run(args []string) int {
 		err = c.init(args[1:])
 	case "sshkey":
 		err = c.sshkey(args[1:])
+	case "version":
+		fmt.Fprintln(c.Out, version.String())
+	case "update":
+		err = c.update(args[1:])
 	case "config", "check", "kill", "doctor":
 		err = c.local(command, args[1:])
 	default:

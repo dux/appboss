@@ -104,6 +104,33 @@ ps -o user= -p $(systemctl show -p MainPID --value dboss)   # the deploy user, n
 dboss doctor
 ```
 
+### Updating
+
+```sh
+dboss update --check        # is there a newer release?
+sudo dboss update           # download it, verify it, replace the binary
+sudo systemctl restart dboss
+```
+
+`dboss update` does what the install script does, without the host setup: it asks GitHub for the latest release, downloads the asset for this platform, verifies its sha256 against the release `checksums.txt` and renames it over the running executable.
+A failed download or a checksum mismatch leaves the old binary exactly where it was.
+It follows a symlink to the real file, so `~/bin/dboss` updates what it points at, and it stops with a `sudo dboss update` hint rather than elevating itself when the binary directory is not writable.
+`--version <tag>` installs a named release instead of the latest.
+
+The running daemon keeps the old binary in memory until it is restarted, which is why the restart is a separate step.
+
+### Versions
+
+The version is the number of commits in `main` when the binary was built, printed as `v<count>`:
+
+```sh
+$ dboss version
+v81
+```
+
+There is nothing else to it - no `major.minor.patch`, and the release tag carries the same number, so `dboss update` compares two integers.
+`make build` and `.github/workflows/release.yml` both inject it; a binary built straight from source with `go build` reports `dev`, and `dboss update` refuses to replace one without `--force`.
+
 Releases are built by `.github/workflows/release.yml` on every `v*` tag push; building from source is still the option below and needs Go 1.25+.
 
 ## Build and run the demo
@@ -216,6 +243,10 @@ Config
   ports         show the live port table, one fixed port per app process
   password      print a bcrypt hash for basic_auth
   sshkey        list the local SSH public keys, or create a new key
+
+Binary
+  version       print the dboss version
+  update        download and install the latest dboss release
 ```
 
 `dboss start` always runs in the foreground; systemd is the daemonizer and `dboss systemd --install` writes and enables the unit.
@@ -722,7 +753,7 @@ internal/sysinfo/     read-only host inspection: OS, load, memory, disks and ins
 internal/pg/          PostgreSQL inspection, scheduled dumps, retention and restore
 internal/metrics/     Prometheus text rendered from the app snapshots
 internal/notify/      debounced operator webhook for crash and failure events
-internal/version/     release version, overridden at build time
+internal/version/     build version: the commit count in main, injected at build time
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console

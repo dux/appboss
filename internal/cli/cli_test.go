@@ -11,6 +11,7 @@ import (
 
 	"dboss/internal/config"
 	"dboss/internal/res"
+	"dboss/internal/version"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -261,10 +262,17 @@ func TestHelpOutput(t *testing.T) {
 	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"nope"}); code != 2 || !strings.Contains(errOut.String(), `unknown command "nope"`) {
 		t.Fatalf("unknown command: exit %d %s", code, errOut.String())
 	}
-	for _, name := range []string{"start", "systemd", "config", "check", "kill", "run", "stop", "restart", "destroy", "status", "logs", "ls", "ports", "rescan", "maintenance", "password"} {
+	for _, name := range []string{"start", "systemd", "config", "check", "kill", "run", "stop", "restart", "destroy", "status", "logs", "ls", "ports", "rescan", "maintenance", "password", "version", "update"} {
 		if findCommand(name) == nil {
 			t.Errorf("%s has no help entry", name)
 		}
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"version"}); code != 0 || strings.TrimSpace(out.String()) != version.String() {
+		t.Fatalf("version: exit %d %q", code, out.String())
 	}
 }
 

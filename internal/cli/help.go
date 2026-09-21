@@ -112,6 +112,12 @@ var commands = []command{
 	{name: "sshkey", args: "[list [--dir path] [--json]] | new [name] [-t type] [-b bits] [-C comment] [-f path] [--no-passphrase] [--force]", group: "Config", summary: "list the local SSH public keys, or create a new key",
 		details: []string{"list prints every *.pub in ~/.ssh as name plus the public key value, ready to paste into GitHub or GitLab. --json adds the type, bits, fingerprint, comment and whether the private key exists next to it.", "new runs ssh-keygen, ed25519 by default, then prints the public value and the GitHub and GitLab add pages. It refuses to overwrite an existing key without --force."},
 		options: []option{{"--dir <path>", "key directory (default ~/.ssh)"}, {"-t <type>", "ed25519 (default), rsa or ecdsa"}, {"-b <bits>", "key bits (default 4096 rsa, 521 ecdsa)"}, {"-C <comment>", "key comment (default user@host)"}, {"-f <path>", "target path (default <dir>/<name>)"}, {"--no-passphrase", "create without a passphrase"}, {"--force", "overwrite an existing key"}, jsonOption}},
+
+	{name: "version", args: "", group: "Binary", summary: "print the dboss version",
+		details: []string{"The version is the number of commits in main when the binary was built, printed as v<count>. There is nothing else to it: no major.minor.patch, and the release tag carries the same number.", "A binary built straight from source with `go build` reports dev, since only `make build` and the release workflow inject the count."}},
+	{name: "update", args: "[--check] [--version tag] [--force]", group: "Binary", summary: "download and install the latest dboss release",
+		details: []string{"Resolves the latest release on GitHub, compares it with this binary, downloads the asset for this platform, verifies its sha256 against the release checksums and replaces the running executable. A failed check leaves the old binary untouched.", "It follows a symlink to the real file, so `~/bin/dboss` updates what it points at. When the binary directory is not writable it stops and asks for `sudo dboss update`; it never elevates itself.", "The running host keeps the old binary in memory until it is restarted."},
+		options: []option{{"--check", "report whether a newer release exists, then exit"}, {"--version <tag>", "install a named release instead of the latest"}, {"--force", "install over a from-source build or the same version"}, jsonOption}},
 }
 
 func findCommand(name string) *command {

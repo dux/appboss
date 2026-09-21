@@ -4,6 +4,11 @@ BIN_DIR := ./bin
 BINARY := $(BIN_DIR)/dboss
 CMD := ./cmd/dboss
 
+# The version is the number of commits in main. HEAD and 0 only cover a checkout without a
+# main branch, so a build outside a normal clone still succeeds.
+VERSION := v$(shell git rev-list --count main 2>/dev/null || git rev-list --count HEAD 2>/dev/null || echo 0)
+LDFLAGS := -X dboss/internal/version.Version=$(VERSION)
+
 .DEFAULT_GOAL := help
 
 .PHONY: help build test fmt vet lint check demo demo-watch kill clean
@@ -13,7 +18,7 @@ help: ## List available targets
 
 build: ## Build dboss into ./bin/dboss
 	@mkdir -p $(BIN_DIR)
-	$(GO) build -o $(BINARY) $(CMD)
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
 
 test: ## Run the test suite
 	$(GO) test ./...
