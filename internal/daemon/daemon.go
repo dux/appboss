@@ -76,7 +76,10 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	}
 	allocator, managementPort := newAllocator(cfg)
 	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: cfg.Notify.Format, Events: cfg.Notify.Events, MinInterval: cfg.Notify.MinInterval.Value(), Headers: cfg.Notify.Headers})
-	manager, invalid, err := super.New(cfg, allocator, echo, notifier)
+	// The supervisor resolves an app's pg_db block through this service before it spawns, so it
+	// is built ahead of the manager. It is still the one value registered as a module below.
+	postgres := pg.New(cfg, notifier)
+	manager, invalid, err := super.New(cfg, allocator, echo, postgres, notifier)
 	if err != nil {
 		notifier.Close()
 		return nil, err
@@ -95,7 +98,6 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		{Name: "log_dir", Path: cfg.LogDir},
 		{Name: "socket", Path: filepath.Dir(cfg.Socket)},
 	})
-	postgres := pg.New(cfg, notifier)
 	channels, err := pubsub.New(cfg.StateDir)
 	if err != nil {
 		notifier.Close()

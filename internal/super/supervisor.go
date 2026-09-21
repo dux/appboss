@@ -133,6 +133,13 @@ func WebProcessSnapshots(webs []config.WebProcess) []WebProcessSnapshot {
 
 const failureLogLines = 1000
 
+// Databases turns an app's pg_db block into the connection URLs its processes are spawned with,
+// creating a database that is missing. It is the supervisor's only view of PostgreSQL; a nil
+// value disables the feature, and an app that asks for databases then fails to start.
+type Databases interface {
+	AppDatabases(ctx context.Context, app string, databases map[string]string) (map[string]string, error)
+}
+
 type Manager struct {
 	cfg             config.Config
 	hostConfig      config.Config
@@ -141,6 +148,7 @@ type Manager struct {
 	cgroup          res.Backend
 	echo            *Echo
 	secrets         *hook.Store
+	databases       Databases
 	sink            notify.Sink
 	closeOnce       sync.Once
 	rescanMu        sync.Mutex
@@ -159,8 +167,9 @@ type Manager struct {
 
 // New discovers the apps and starts the ones that were running before, skipping autostart: false.
 // A non-nil echo mirrors every process's output to it, which the foreground session uses when
-// attached to a terminal. An optional sink receives crash and failure events.
-func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...notify.Sink) (*Manager, []error, error) {
+// attached to a terminal. A non-nil databases resolves pg_db blocks. An optional sink receives
+// crash and failure events.
+func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, databases Databases, sinks ...notify.Sink) (*Manager, []error, error) {
 	discovered, invalid, err := apps.Discover(cfg)
 	if err != nil {
 		return nil, invalid, err
@@ -197,7 +206,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, databases: databases, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -270,7 +279,7 @@ func selectCgroup(cfg config.Config) res.Backend {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, sink: m.sink, restart: m.Restart, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, databases: m.databases, sink: m.sink, restart: m.Restart, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	runtime.syncCron(time.Now())
@@ -528,6 +537,19 @@ func (m *Manager) RotateHook(name, hookName string) (HookInfo, error) {
 // Exec runs one command in the app's environment and returns its combined output. It resolves
 // the executable against the app PATH, captures both streams and kills the process group on
 // timeout. It runs off the app's goroutine so a slow command cannot stall the supervisor.
+// appDatabases is appRuntime.appDatabases for the paths that hold a spec but no runtime, namely
+// Exec. It runs off the app goroutine, like the rest of Exec.
+func (m *Manager) appDatabases(spec *apps.App) (map[string]string, error) {
+	wanted := spec.Config.PgDatabases()
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	if m.databases == nil {
+		return nil, errors.New("pg_db needs the PostgreSQL service, which is not available")
+	}
+	return m.databases.AppDatabases(m.ctx, spec.Name, wanted)
+}
+
 func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecResult, error) {
 	if len(argv) == 0 {
 		return ExecResult{}, errors.New("no command given")
@@ -541,7 +563,11 @@ func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecR
 		return ExecResult{}, response.err
 	}
 	spec := response.app
-	env := processEnv(spec, "exec", 0, m.cfg.Socket, spec.Config.Env)
+	generated, err := m.appDatabases(spec)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	env := processEnv(spec, "exec", 0, m.cfg.Socket, spec.Config.Env, generated)
 	resolved, err := resolveExecutable(argv[0], spec.Dir, env["PATH"])
 	if err != nil {
 		return ExecResult{}, err
@@ -892,6 +918,7 @@ type appRuntime struct {
 	cron             map[string]*jobState
 	hooks            map[string]*jobState
 	secrets          *hook.Store
+	databases        Databases
 	sink             notify.Sink
 	restart          func(string) error
 	failures         map[string]int

@@ -9,7 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"time"
+
+	"dboss/internal/config"
+	"dboss/internal/logx"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -111,6 +115,91 @@ func (s *Service) DropDatabase(ctx context.Context, database, confirm string) er
 		return errors.New("no reachable PostgreSQL server")
 	}
 	return s.dropDatabase(ctx, connConfig, database)
+}
+
+// AppDatabases resolves one app's pg_db block into the environment values its processes are
+// spawned with, creating a database that does not exist yet. Entries are keyed by the variable
+// name they are exported as; a value is either a database name on the host's own server or a
+// full connection URL, which is created on the server it names and passed through unchanged.
+// An unreachable host server is an error whatever the entries look like, so the supervisor
+// refuses the start instead of running the app without its connection URLs.
+func (s *Service) AppDatabases(ctx context.Context, app string, databases map[string]string) (map[string]string, error) {
+	if len(databases) == 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	connConfig := s.connConfig
+	s.mu.RUnlock()
+	if connConfig == nil {
+		return nil, errors.New("no reachable PostgreSQL server")
+	}
+	names := make([]string, 0, len(databases))
+	for name := range databases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	env := make(map[string]string, len(databases))
+	for _, name := range names {
+		value := databases[name]
+		// A full URL owns its server, so it is created there and handed to the app exactly as
+		// written; only a bare database name is resolved against the host's own connection.
+		if config.PgDBIsURL(value) {
+			target, err := pgx.ParseConfig(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			database, err := config.PgDBDatabase(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			if err := s.ensureDatabase(ctx, target, app, database); err != nil {
+				return nil, err
+			}
+			env[name] = value
+			continue
+		}
+		if err := s.ensureDatabase(ctx, connConfig, app, value); err != nil {
+			return nil, err
+		}
+		env[name] = databaseURL(connConfig, value)
+	}
+	return env, nil
+}
+
+// ensureDatabase creates database when the server does not have it yet. The lookup runs on the
+// maintenance connection, so it costs one indexed read on an app that is already set up.
+func (s *Service) ensureDatabase(ctx context.Context, connConfig *pgx.ConnConfig, app, database string) error {
+	exists, err := s.databaseExists(ctx, connConfig, database)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if err := s.createDatabase(ctx, connConfig, database); err != nil {
+		return err
+	}
+	logx.Infof("postgres: created database %s for app %s", database, app)
+	return nil
+}
+
+func (s *Service) databaseExists(ctx context.Context, connConfig *pgx.ConnConfig, database string) (bool, error) {
+	var lastErr error
+	for _, maintenance := range []string{"postgres", "template1"} {
+		conn, err := pgx.ConnectConfig(ctx, mustConfig(connConfig, maintenance))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		var found bool
+		err = conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", database).Scan(&found)
+		_ = conn.Close(ctx)
+		if err == nil {
+			return found, nil
+		}
+		lastErr = err
+	}
+	return false, fmt.Errorf("look up database %s: %w", database, lastErr)
 }
 
 // fetch returns the dump's path on disk, or an error when the file is gone.

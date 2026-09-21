@@ -723,6 +723,81 @@ func validatePostgres(p Postgres) error {
 	return nil
 }
 
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// injectedEnv is the set dboss writes into every process itself; see processEnv in
+// ./internal/super. A pg_db entry may not claim one of these names.
+var injectedEnv = map[string]bool{"PORT": true, "APP_NAME": true, "PROC_TYPE": true, "DBOSS_SOCKET": true}
+
+// PgDatabases returns the app's pg_db block keyed by the environment variable each database is
+// exported as, which is the YAML key uppercased.
+func (a App) PgDatabases() map[string]string {
+	if len(a.PgDB) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(a.PgDB))
+	for key, database := range a.PgDB {
+		out[strings.ToUpper(key)] = database
+	}
+	return out
+}
+
+func validatePgDB(pgdb map[string]string) error {
+	keys := make([]string, 0, len(pgdb))
+	for key := range pgdb {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	seen := make(map[string]string, len(pgdb))
+	for _, key := range keys {
+		if !envName.MatchString(key) {
+			return &Error{Key: "pg_db", Message: fmt.Sprintf("invalid environment variable name %q", key), Hint: "names match [A-Za-z_][A-Za-z0-9_]*, e.g. db_main"}
+		}
+		name := strings.ToUpper(key)
+		if injectedEnv[name] {
+			return keyErr("pg_db."+key, "%s is set by dboss itself", name)
+		}
+		if other, ok := seen[name]; ok {
+			return keyErr("pg_db."+key, "collides with %q; both export %s", other, name)
+		}
+		seen[name] = key
+		value := pgdb[key]
+		if PgDBIsURL(value) {
+			if _, err := PgDBDatabase(value); err != nil {
+				return &Error{Key: "pg_db." + key, Message: err.Error(), Hint: "a URL names its database in the path, e.g. postgres://user:pass@db.example.com/myapp_production"}
+			}
+			continue
+		}
+		if !databaseName.MatchString(value) {
+			return &Error{Key: "pg_db." + key, Message: fmt.Sprintf("invalid database name %q", value), Hint: "give a database name like myapp_production, or a full postgres:// URL"}
+		}
+	}
+	return nil
+}
+
+// PgDBIsURL reports whether a pg_db value is a full connection URL rather than a database name on
+// the host's own server. The two can never be confused: a database name has no scheme.
+func PgDBIsURL(value string) bool {
+	return strings.HasPrefix(value, "postgres://") || strings.HasPrefix(value, "postgresql://")
+}
+
+// PgDBDatabase returns the database a pg_db URL names. It is the one field dboss needs from a
+// URL it otherwise passes through untouched.
+func PgDBDatabase(value string) (string, error) {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid connection URL %q", value)
+	}
+	database := strings.TrimPrefix(parsed.Path, "/")
+	if database == "" {
+		return "", fmt.Errorf("connection URL %q names no database", value)
+	}
+	if !databaseName.MatchString(database) {
+		return "", fmt.Errorf("invalid database name %q in connection URL", database)
+	}
+	return database, nil
+}
+
 var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
 var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true, "backup-failed": true, "error-rate": true, "slow": true}
 
@@ -1319,8 +1394,11 @@ type App struct {
 	Deletable    bool               `yaml:"deletable" json:"deletable"`
 	Cron         map[string]CronJob `yaml:"cron" json:"cron"`
 	Hooks        map[string]Hook    `yaml:"hooks" json:"hooks"`
-	Defaults     `yaml:",inline"`
-	Processes    map[string]ProcessOverrides `yaml:"processes" json:"processes"`
+	// PgDB maps an environment variable name to the PostgreSQL database the app owns. Each one
+	// is created when missing and handed to every process as a connection URL.
+	PgDB      map[string]string `yaml:"pg_db" json:"pg_db,omitempty"`
+	Defaults  `yaml:",inline"`
+	Processes map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
 
 // processNames lists procfile names sorted, so every derived choice and error is deterministic.
@@ -1482,6 +1560,7 @@ type appFile struct {
 	Deletable bool                   `yaml:"deletable"`
 	Cron      map[string]CronJob     `yaml:"cron"`
 	Hooks     map[string]Hook        `yaml:"hooks"`
+	PgDB      map[string]string      `yaml:"pg_db"`
 	Overrides `yaml:",inline"`
 	Processes map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -1519,7 +1598,7 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, PgDB: raw.PgDB, Defaults: defaults, Processes: raw.Processes}
 	if err := app.deriveWeb(); err != nil {
 		return App{}, err
 	}
@@ -1554,6 +1633,9 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 		return App{}, err
 	}
 	if err := validateHooks(app.Hooks); err != nil {
+		return App{}, err
+	}
+	if err := validatePgDB(app.PgDB); err != nil {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)

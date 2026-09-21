@@ -27,7 +27,7 @@
         { id: 'health', title: 'Health & metrics', summary: 'Health endpoints, Prometheus metrics and the doctor preflight.' },
         { id: 'notify', title: 'Notifications', summary: 'One operator webhook for crashes and failures.' },
         { id: 'alerts', title: 'Alerts', summary: 'Posts to the webhook when an app answers with too many errors or too slowly.' },
-        { id: 'postgres', title: 'PostgreSQL backups', summary: 'Daily dumps of the host databases, kept for a week or a month.' },
+        { id: 'postgres', title: 'PostgreSQL', summary: 'Databases created for an app and handed to it as a URL, plus daily dumps kept for a week or a month.' },
       ],
     },
   ]
@@ -204,6 +204,13 @@
             rotation: week    # keep 7 days; month keeps 30
           reports:
             rotation: month
+    `,
+    pgdb: `
+    # in the app's dboss.yaml
+    pg_db:
+      db_main: myapp_production   # on this host's server
+      db_cache: myapp_cache
+      db_report: $REPORTS_URL     # a full postgres:// URL, anywhere else
     `,
   }
 
@@ -655,21 +662,27 @@
 
     {#if state.topic === 'postgres'}
       <section>
-        <h2>PostgreSQL backups</h2>
-        <p>dboss inspects the host's PostgreSQL server read-only and dumps the databases you select on a daily run, as zips of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/</code> next to the apps. The PostgreSQL tab appears only when a server is reachable.</p>
+        <h2>PostgreSQL</h2>
+        <p>dboss gives an app the databases it declares, inspects the host's server read-only, and dumps the databases you select on a daily run, as zips of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/</code> next to the apps. The PostgreSQL tab appears only when a server is reachable.</p>
         <h3>What it helps with</h3>
         <ul>
+          <li>No hand-written <code>DATABASE_URL</code>: name the databases an app owns and every process gets a connection URL, the same way it gets <code>PORT</code>.</li>
           <li>Backups without a cron script: pick databases in the console, set their rotation, done.</li>
           <li>Bounded storage: one daily run, scheduled dumps kept for a week or a month, a manual backup kept until you remove it.</li>
           <li>Restoring, deleting or dropping a database from the console, and seeing sizes and connections at a glance.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases" /></div>
+        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases,pg_db" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.postgres" />
+        <db-preview-yaml :text="state.examples.pgdb" />
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
+          <li><code>pg_db</code> lives in the app's own file. Each key is uppercased to make the variable name, so <code>db_main</code> becomes <code>DB_MAIN</code>. A database that does not exist yet is created.</li>
+          <li>A value is either a database name or a full <code>postgres://</code> URL; a name has no scheme, so the two can never be confused. A name lives on this host's server and dboss builds the URL from that connection, so the app connects as whatever identity dboss connects as, and every app using a bare name shares it.</li>
+          <li>A URL lives wherever it says. dboss creates the database on that server and passes the URL through exactly as written, so a password or an option in it survives. Keep credentials out of the committed file with <code>$REPORTS_URL</code> or <code>dboss.local.yaml</code>. A managed provider usually will not let you create a database, so create it there first and dboss just passes the URL on.</li>
+          <li>Web processes, workers, cron jobs, hooks and <code>dboss exec</code> all get the variables, injected like <code>PORT</code>, so they win over <code>env:</code> and over <code>.env</code>. While this host's server is unreachable, an app with <code>pg_db</code> refuses to start and retries under its restart policy, even when every entry is a URL pointing elsewhere.</li>
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><code>postgres</code> is a host key but applies without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>

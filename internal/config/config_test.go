@@ -856,3 +856,83 @@ func TestSingleAppModeBindsDevHost(t *testing.T) {
 		t.Fatalf("single-mode health = %q, want /up", got)
 	}
 }
+
+func TestParseAppPgDB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\npg_db:\n  db_main: myapp_production\n  DB_CACHE: myapp_cache\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"DB_MAIN": "myapp_production", "DB_CACHE": "myapp_cache"}
+	got := app.PgDatabases()
+	if len(got) != len(want) {
+		t.Fatalf("PgDatabases() = %v, want %v", got, want)
+	}
+	for name, database := range want {
+		if got[name] != database {
+			t.Errorf("%s = %q, want %q", name, got[name], database)
+		}
+	}
+	// The block is kept as written, so the console and config history see the real file.
+	if app.PgDB["db_main"] != "myapp_production" {
+		t.Errorf("PgDB = %v, want the keys as written", app.PgDB)
+	}
+}
+
+func TestParseAppPgDBRejects(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	cases := map[string]string{
+		"bad env name":            "pg_db:\n  \"db-main\": myapp\n",
+		"bad database name":       "pg_db:\n  db_main: my-app\n",
+		"injected name":           "pg_db:\n  port: myapp\n",
+		"collision":               "pg_db:\n  db_main: one\n  DB_MAIN: two\n",
+		"url without a database":  "pg_db:\n  db_main: postgres://user@db.example.com/\n",
+		"url with a bad database": "pg_db:\n  db_main: postgres://user@db.example.com/my-app\n",
+	}
+	for name, block := range cases {
+		if _, err := ParseApp([]byte("procfile:\n  web: ./server\n"+block), path, defaults); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+func TestPgDBIsAppOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if _, err := Parse([]byte("apps: ./apps\npg_db:\n  db_main: myapp\n"), path); err == nil {
+		t.Error("pg_db in the host file should be rejected")
+	}
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  pg_db:\n    db_main: myapp\n"), path); err == nil {
+		t.Error("pg_db under defaults should be rejected")
+	}
+}
+
+func TestParseAppPgDBAcceptsAFullURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	const remote = "postgres://user:p%40ss@db.example.com:5433/reports?sslmode=require"
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\npg_db:\n  db_main: myapp_production\n  db_report: "+remote+"\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := app.PgDatabases()
+	// A URL is carried through untouched; only a bare name is resolved against the host server.
+	if got["DB_REPORT"] != remote {
+		t.Errorf("DB_REPORT = %q, want the URL as written", got["DB_REPORT"])
+	}
+	if got["DB_MAIN"] != "myapp_production" {
+		t.Errorf("DB_MAIN = %q, want the database name", got["DB_MAIN"])
+	}
+	if !PgDBIsURL(remote) || PgDBIsURL("myapp_production") {
+		t.Error("PgDBIsURL should split on the scheme")
+	}
+	database, err := PgDBDatabase(remote)
+	if err != nil || database != "reports" {
+		t.Errorf("PgDBDatabase = %q, %v, want reports", database, err)
+	}
+}

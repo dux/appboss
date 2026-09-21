@@ -100,7 +100,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

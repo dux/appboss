@@ -497,6 +497,37 @@ autostart: true
 # unlinked without following its target. Single-app mode can never destroy itself.
 deletable: false
 
+# PostgreSQL databases this app owns, keyed by the environment variable each one is exported as.
+# The key is uppercased to make the variable name (db_main -> DB_MAIN). dboss creates a database
+# that does not exist yet, then hands every process of the app - web, worker, cron job, hook and
+# `dboss exec` - a connection URL. A value is one of two things:
+#
+#   a database name    the database lives on the server the postgres block resolved, and dboss
+#                      builds the URL from that connection with the database name swapped in:
+#                        db_main: myapp_production
+#                        ->  DB_MAIN=postgres:///myapp_production?host=/var/run/postgresql
+#
+#   a postgres:// URL  the database lives wherever the URL says. dboss creates it on that server
+#                      and hands the URL to the app exactly as written, so a password or an
+#                      option you put in it survives untouched:
+#                        db_report: postgres://user:pass@db.example.com/reports
+#                        ->  DB_REPORT=postgres://user:pass@db.example.com/reports
+#                      Keep the credentials out of the committed file with $REPORTS_URL, which is
+#                      expanded from the daemon environment at load, or use dboss.local.yaml.
+#                      Creating on a managed provider usually needs rights it will not give you;
+#                      create the database there first and dboss will simply pass the URL on.
+#
+# These variables are injected like PORT, so they win over env: and over .env/.env.local.
+# A database name connects as whatever identity postgres.dsn resolved, so every app using one
+# shares that identity; use per-database roles, or a full URL, if you need them separated.
+# An app with a pg_db block refuses to start while the host's own PostgreSQL server is
+# unreachable, even when every entry is a URL pointing elsewhere, and retries under its restart
+# policy rather than coming up with the variables unset.
+pg_db: {}
+#   db_main: myapp_production
+#   db_cache: myapp_cache
+#   db_report: $REPORTS_URL
+
 # Per-app overrides of defaults.* (all optional, same semantics as above).
 idle_stop: 0                # this app never sleeps
 health_timeout: 90s

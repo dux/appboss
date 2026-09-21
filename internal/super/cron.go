@@ -194,7 +194,12 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return nil
 	}
 	command := state.command
-	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env)
+	generated, err := a.appDatabases()
+	if err != nil {
+		state.lastError = err.Error()
+		return err
+	}
+	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env, generated)
 	var cmd *exec.Cmd
 	if a.spec.Config.Shell {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)

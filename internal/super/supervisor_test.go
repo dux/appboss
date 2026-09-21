@@ -1,6 +1,7 @@
 package super
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -28,9 +29,11 @@ func TestProcessEnvPriority(t *testing.T) {
 	spec.Config.Env = map[string]string{"A": "config", "B": "config", "D": "config"}
 	// extra stands in for Process(name).Env: app config env plus a process override.
 	extra := map[string]string{"A": "config", "B": "config", "D": "config", "E": "override"}
-	values := processEnv(spec, "web", 123, "/run/dboss.sock", extra)
+	// generated stands in for pg_db: it outranks .env, like the rest of the injected layer.
+	generated := map[string]string{"C": "generated", "DB_MAIN": "postgres:///demo"}
+	values := processEnv(spec, "web", 123, "/run/dboss.sock", extra, generated)
 	want := map[string]string{
-		"A": "config", "B": "file", "C": "file", "D": "config", "E": "override",
+		"A": "config", "B": "file", "C": "generated", "D": "config", "E": "override", "DB_MAIN": "postgres:///demo",
 		"PATH": "/bin", "PORT": "123", "APP_NAME": "demo", "PROC_TYPE": "web", "DBOSS_SOCKET": "/run/dboss.sock",
 	}
 	for key, value := range want {
@@ -82,7 +85,7 @@ func TestHealthcheckSendsAppHost(t *testing.T) {
 
 func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32100, 32120})
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +125,7 @@ func TestSnapshotListsEveryProcfileService(t *testing.T) {
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +153,7 @@ func TestSnapshotListsEveryProcfileService(t *testing.T) {
 
 func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32300, 32320})
-	first, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	first, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +167,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 	if alive(pid) {
 		t.Fatalf("process %d survived manager close", pid)
 	}
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +184,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 
 func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +194,7 @@ func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.Close()
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +206,7 @@ func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 
 func TestRestartDoesNotOrphanProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32400, 32420})
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +253,7 @@ func TestSpawnKillsSquatterOnPort(t *testing.T) {
 	}
 	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
 	squatter := startListenerHelperOnPort(t, 32500)
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +288,7 @@ func TestPortsFollowAppNameOrder(t *testing.T) {
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
 	cfg.Ports.Range = [2]int{32600, 32620}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +323,7 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -337,7 +340,7 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 
 func TestDestroyRequiresOptIn(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32650, 32670}, "autostart: false\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -360,7 +363,7 @@ func TestDestroyRejectsSingleAppMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -383,7 +386,7 @@ func TestDestroyRejectsSingleAppMode(t *testing.T) {
 
 func TestDestroyStopsAndRemovesOptedInApp(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32675, 32695}, "autostart: false\ndeletable: true\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -420,7 +423,7 @@ func TestDestroyStopsAndRemovesOptedInApp(t *testing.T) {
 
 func TestSupervisorSkipsAutostartFalseOnFirstStart(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32700, 32720}, "autostart: false\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +452,7 @@ func TestSupervisorSkipsAutostartFalseWhenListedInRunningJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.StateDir, "running.json"), []byte("[\n  \"demo\"\n]\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +553,7 @@ func TestSupervisorRestartsUnhealthyWebProcess(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "hang-once")
 	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\n", marker)
 	cfg := supervisorTestConfigApp(t, [2]int{32200, 32220}, extra)
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +598,7 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +623,7 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 		t.Fatal("maintenance flag not set")
 	}
 	manager.Close()
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +642,7 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 func TestIdleStopKeepsAppWithInFlightRequest(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{33300, 33320}, "idle_stop: 150ms\n")
 	cfg.Daemon.IdleTick = config.Duration(20 * time.Millisecond)
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,4 +669,63 @@ func TestIdleStopKeepsAppWithInFlightRequest(t *testing.T) {
 
 	manager.Leave(counter)
 	waitForSupervisorState(t, manager, Stopped)
+}
+
+// fakeDatabases stands in for the pg service: it records the request and answers with either the
+// connection URLs or the error an unreachable server produces.
+type fakeDatabases struct {
+	env  map[string]string
+	err  error
+	app  string
+	seen map[string]string
+}
+
+func (f *fakeDatabases) AppDatabases(_ context.Context, app string, databases map[string]string) (map[string]string, error) {
+	f.app, f.seen = app, databases
+	return f.env, f.err
+}
+
+func TestPgDBReachesTheProcessEnvironment(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{33400, 33420}, "pg_db:\n  db_main: demo_production\n")
+	databases := &fakeDatabases{env: map[string]string{"DB_MAIN": "postgres:///demo_production"}}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, databases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	if databases.app != "demo" {
+		t.Errorf("app = %q, want demo", databases.app)
+	}
+	if databases.seen["DB_MAIN"] != "demo_production" {
+		t.Errorf("requested databases = %v, want DB_MAIN=demo_production", databases.seen)
+	}
+}
+
+func TestPgDBRefusesToStartWithoutAServer(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{33420, 33440}, "pg_db:\n  db_main: demo_production\n")
+	databases := &fakeDatabases{err: errors.New("no reachable PostgreSQL server")}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, databases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err == nil || !strings.Contains(err.Error(), "no reachable PostgreSQL server") {
+		t.Fatalf("Start = %v, want the unreachable-server error", err)
+	}
+}
+
+func TestPgDBNeedsTheService(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{33440, 33460}, "pg_db:\n  db_main: demo_production\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err == nil || !strings.Contains(err.Error(), "PostgreSQL service") {
+		t.Fatalf("Start = %v, want the missing-service error", err)
+	}
 }

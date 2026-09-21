@@ -6,6 +6,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"sort"
@@ -107,6 +108,39 @@ func databaseConnString(connConfig *pgx.ConnConfig, database string) string {
 
 func serverConnString(connConfig *pgx.ConnConfig) string {
 	return connStringWithoutPassword(connConfig, "")
+}
+
+// databaseURL is the postgres:// URL for one database, credentials included. It is the only
+// form here that keeps the password, because it is handed to an app through its environment
+// rather than placed in a child process's argv. A unix socket has no authority to put a host in,
+// so it travels as the host query parameter libpq reads it from.
+func databaseURL(connConfig *pgx.ConnConfig, database string) string {
+	target := url.URL{Scheme: "postgres", Path: "/" + database}
+	if connConfig.User != "" {
+		if connConfig.Password != "" {
+			target.User = url.UserPassword(connConfig.User, connConfig.Password)
+		} else {
+			target.User = url.User(connConfig.User)
+		}
+	}
+	query := url.Values{}
+	if strings.HasPrefix(connConfig.Host, "/") {
+		query.Set("host", connConfig.Host)
+		if connConfig.Port > 0 {
+			query.Set("port", strconv.Itoa(int(connConfig.Port)))
+		}
+	} else {
+		target.Host = net.JoinHostPort(connConfig.Host, strconv.Itoa(int(connConfig.Port)))
+	}
+	if connConfig.TLSConfig == nil {
+		query.Set("sslmode", "disable")
+	}
+	// Anything else the DSN carried, such as application_name, survives the rewrite.
+	for key, value := range connConfig.RuntimeParams {
+		query.Set(key, value)
+	}
+	target.RawQuery = query.Encode()
+	return target.String()
 }
 
 // connStringWithoutPassword rebuilds a libpq connection string with the password removed and,
