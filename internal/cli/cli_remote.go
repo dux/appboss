@@ -15,6 +15,24 @@ import (
 	"dboss/internal/super"
 )
 
+// parseSubcommandFlags parses a subcommand's flags wherever they appear among its operands. Go's
+// flag package stops at the first operand, so `pg drop db --confirm db` would leave --confirm
+// unset even though that is the order the help prints. Operands come back in the order given.
+func parseSubcommandFlags(set *flag.FlagSet, args []string) ([]string, error) {
+	var operands []string
+	for {
+		if err := set.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := set.Args()
+		if len(rest) == 0 {
+			return operands, nil
+		}
+		operands = append(operands, rest[0])
+		args = rest[1:]
+	}
+}
+
 // remote sends one command to the running host over its control socket. Commands that take an
 // app default to the current folder's app when run inside one.
 func (c CLI) remote(command string, args []string) error {
@@ -163,14 +181,15 @@ func (c CLI) remote(command string, args []string) error {
 			set.SetOutput(c.Err)
 			target := set.String("target", "", "target database (default: <source>_restore)")
 			force := set.Bool("force", false, "replace an existing target database")
-			if err := set.Parse(pgArgs[1:]); err != nil {
+			operands, err := parseSubcommandFlags(set, pgArgs[1:])
+			if err != nil {
 				return err
 			}
-			if set.NArg() != 1 {
+			if len(operands) != 1 {
 				return errors.New("usage: dboss pg restore <backup-id> [--target name] [--force]")
 			}
 			request.Method = ops.ActionPGRestore
-			request.BackupID = set.Arg(0)
+			request.BackupID = operands[0]
 			request.Target, request.Replace = *target, *force
 			if *force {
 				request.Confirm = *target
@@ -185,14 +204,15 @@ func (c CLI) remote(command string, args []string) error {
 			set := flag.NewFlagSet("pg drop", flag.ContinueOnError)
 			set.SetOutput(c.Err)
 			confirm := set.String("confirm", "", "repeat the database name to confirm")
-			if err := set.Parse(pgArgs[1:]); err != nil {
+			operands, err := parseSubcommandFlags(set, pgArgs[1:])
+			if err != nil {
 				return err
 			}
-			if set.NArg() != 1 || *confirm == "" {
+			if len(operands) != 1 || *confirm == "" {
 				return errors.New("usage: dboss pg drop <database> --confirm <database>")
 			}
 			request.Method = ops.ActionPGDrop
-			request.Database, request.Confirm = set.Arg(0), *confirm
+			request.Database, request.Confirm = operands[0], *confirm
 		default:
 			return errors.New("usage: dboss pg [backups | backup [database] | delete <backup-id> | restore <backup-id> | drop <database>]")
 		}
@@ -354,6 +374,14 @@ func (c CLI) remote(command string, args []string) error {
 			return err
 		}
 		data = result
+	case ops.ActionPGDrop, ops.ActionPGDeleteDump:
+		// Both answer with the name they acted on. Without a case here they fall to the default
+		// below, and printHuman's data.(string) panics on its placeholder map.
+		var name string
+		if err := client.Call(request, &name); err != nil {
+			return err
+		}
+		data = name
 	case ops.ActionPubsub:
 		var apps []pubsub.App
 		if err := client.Call(request, &apps); err != nil {

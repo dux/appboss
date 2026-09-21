@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"io"
 	"os"
 	"os/user"
@@ -344,5 +345,39 @@ func TestPubsubDataNormalizesPayloads(t *testing.T) {
 		if string(got) != item.want {
 			t.Fatalf("pubsubData(%q) = %s, want %s", item.value, got, item.want)
 		}
+	}
+}
+
+func TestParseSubcommandFlagsReadsFlagsAfterTheOperand(t *testing.T) {
+	// The order the help prints: operand first, flags after. flag.Parse alone stops at the operand.
+	set := flag.NewFlagSet("pg drop", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	confirm := set.String("confirm", "", "")
+	operands, err := parseSubcommandFlags(set, []string{"pr222_erpx", "--confirm", "pr222_erpx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operands) != 1 || operands[0] != "pr222_erpx" || *confirm != "pr222_erpx" {
+		t.Fatalf("operands=%v confirm=%q", operands, *confirm)
+	}
+
+	// A bool flag between two operands must not swallow the one after it.
+	set = flag.NewFlagSet("pg restore", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	target := set.String("target", "", "")
+	force := set.Bool("force", false, "")
+	operands, err = parseSubcommandFlags(set, []string{"backup-7", "--force", "--target", "scratch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operands) != 1 || operands[0] != "backup-7" || !*force || *target != "scratch" {
+		t.Fatalf("operands=%v force=%t target=%q", operands, *force, *target)
+	}
+
+	set = flag.NewFlagSet("pg drop", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.String("confirm", "", "")
+	if _, err := parseSubcommandFlags(set, []string{"db", "--nope"}); err == nil {
+		t.Fatal("an unknown flag should still be an error")
 	}
 }
