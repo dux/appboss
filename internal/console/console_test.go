@@ -473,11 +473,40 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handle
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	return handlerFor(t, cfg, manager, rates)
+}
+
+// newDevTestHandler is the console of a dev session: one app run from its own folder, with no
+// management block at all.
+func newDevTestHandler(t *testing.T, manager *fakeManager) *Handler {
+	t.Helper()
+	cfg := config.Default()
+	cfg.StateDir = t.TempDir()
+	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{"web": {}}}
+	return handlerFor(t, cfg, manager, nil)
+}
+
+func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates ops.Rates) *Handler {
+	t.Helper()
 	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}, nil, nil), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+func TestDevConsoleOpensOnLoopbackWithoutASession(t *testing.T) {
+	handler := newDevTestHandler(t, &fakeManager{})
+	if !handler.capabilities()["dev"] {
+		t.Fatal("a dev console should report the dev capability")
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
+	request.RemoteAddr = "127.0.0.1:54321"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"viewer":"cli@localhost"`) {
+		t.Fatalf("dev bootstrap = %d %s", response.Code, response.Body.String())
+	}
 }
 
 func TestConsoleServesSystemInspection(t *testing.T) {

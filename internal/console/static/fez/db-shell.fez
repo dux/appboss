@@ -26,6 +26,7 @@
       this.globalState.restartRequired = []
       this.globalState.pgAvailable = false
       this.globalState.pubsubAvailable = false
+      this.globalState.devSession = false
     }
 
     onMount() {
@@ -127,6 +128,7 @@
       if (capabilities) {
         this.globalState.pgAvailable = Boolean(capabilities.postgres)
         this.globalState.pubsubAvailable = Boolean(capabilities.pubsub)
+        this.globalState.devSession = Boolean(capabilities.dev)
       }
     }
 
@@ -224,12 +226,14 @@
       <span class="avatar" aria-hidden="true">{initials()}</span>
       <span class="user-block">
         <strong>{state.viewer || 'Connecting...'}</strong>
-        <small>Administrator</small>
+        <small>{globalState.devSession ? 'Local session' : 'Administrator'}</small>
       </span>
-      <button class="btn btn-ghost" type="button" onclick="fez.logout()">
-        <svg class="icon"><use href="#i-logout"></use></svg>
-        Sign out
-      </button>
+      {#unless globalState.devSession}
+        <button class="btn btn-ghost" type="button" onclick="fez.logout()">
+          <svg class="icon"><use href="#i-logout"></use></svg>
+          Sign out
+        </button>
+      {/unless}
     </div>
   </div>
 </header>

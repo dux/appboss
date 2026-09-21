@@ -142,3 +142,52 @@ func TestDevSuffixExpandsEnvAndIgnoresOrder(t *testing.T) {
 		t.Fatalf("proxy.listen = %q, want :4321", got)
 	}
 }
+
+// A dev session always has a console, on its loopback port, and does not need an admin list for
+// it: the console signs a loopback request in by itself.
+func TestDevSessionAlwaysHasAConsole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ConsoleEnabled() {
+		t.Fatal("a dev session should serve the console with no management block")
+	}
+	if got := cfg.ConsoleURL(); got != "http://127.0.0.1:3100" {
+		t.Fatalf("ConsoleURL() = %q, want the loopback console", got)
+	}
+}
+
+// A named console in a dev session still skips the admin list, and a public URL wins over the
+// loopback one. A host without admins is still rejected.
+func TestDevConsoleHostNeedsNoAdminEmails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\nmanagement:\n  host: dboss.lvh.me\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ConsoleURL(); got != "https://dboss.lvh.me" {
+		t.Fatalf("ConsoleURL() = %q, want the management host", got)
+	}
+	host := filepath.Join(t.TempDir(), FileName)
+	writeConfigFile(t, host, "apps: ./apps\nmanagement:\n  host: dboss.lvh.me\n")
+	if _, err := Load(host); err == nil || !strings.Contains(err.Error(), "admin_emails") {
+		t.Fatalf("a host console without admins should be rejected, got %v", err)
+	}
+}
+
+// A host session with no management block has no console at all.
+func TestHostWithoutManagementHasNoConsole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	writeConfigFile(t, path, "apps: ./apps\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConsoleEnabled() || cfg.ConsoleURL() != "" {
+		t.Fatalf("host console = %v %q, want off", cfg.ConsoleEnabled(), cfg.ConsoleURL())
+	}
+}

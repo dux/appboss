@@ -21,16 +21,21 @@ func (d *Daemon) printBanner() {
 	if d.cfg.Proxy.TLS.Enabled() {
 		scheme = "https"
 	}
-	console := ""
-	if d.management != nil {
+	console, note := "", ""
+	switch {
+	case d.management == nil:
+	case d.cfg.Dev():
+		// A dev session admits this machine without a session, so the link needs no token.
+		console, note = d.cfg.ConsoleURL(), "open on this machine"
+	default:
 		link, err := d.management.DevLoginURL()
 		if err != nil {
 			logx.Warnf("console link: %v", err)
 		} else {
-			console = link
+			console, note = link, "signed in for an hour"
 		}
 	}
-	for _, line := range banner(d.manager.Snapshots(), console, scheme, bannerPort(d.listen[0], scheme), d.echo) {
+	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, bannerPort(d.listen[0], scheme), d.echo) {
 		d.echo.Print(line)
 	}
 }
@@ -39,7 +44,7 @@ func (d *Daemon) printBanner() {
 // same colored prefix that process logs under, so the address and its later output line up.
 // Web processes carry a clickable URL, workers say so, and every row ends in the app's state,
 // which is how an app that has not started yet is still visible.
-func banner(snapshots []super.Snapshot, console string, scheme, port string, echo *super.Echo) []string {
+func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, port string, echo *super.Echo) []string {
 	rows := make([]bannerRow, 0, len(snapshots))
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
 	for _, app := range snapshots {
@@ -56,9 +61,9 @@ func banner(snapshots []super.Snapshot, console string, scheme, port string, ech
 		}
 	}
 	if console != "" {
-		// The sign-in link carries a token, so it is far longer than any hostname. Keeping it
-		// out of the column width stops one row from stretching every other one.
-		rows = append(rows, newRow(echo, "dboss", "console", console, "signed in for an hour", false))
+		// A sign-in link carries a token, so it is far longer than any hostname. Keeping it out
+		// of the column width stops one row from stretching every other one.
+		rows = append(rows, newRow(echo, "dboss", "console", console, consoleNote, false))
 	}
 	keyWidth, addressWidth := 0, 0
 	for _, row := range rows {

@@ -424,9 +424,10 @@ func (a *appRuntime) hookInfos() []HookInfo {
 	return result
 }
 
-// hookBaseURL is the public address operators open, used to print ready-made ping URLs.
+// hookBaseURL is the address operators open, used to print ready-made ping URLs. A dev session
+// has no public hostname, so its URLs are the loopback console.
 func hookBaseURL(cfg config.Config) string {
-	return cfg.Management.PublicURL()
+	return cfg.ConsoleURL()
 }
 
 func hookLink(base, app, name, secret string) string {

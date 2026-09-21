@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -154,5 +155,36 @@ func TestBindProxyStaysFatalWithoutATerminal(t *testing.T) {
 func TestLoginURLNeedsTheConsole(t *testing.T) {
 	if _, _, err := (&Daemon{}).LoginURL(); err == nil {
 		t.Fatal("LoginURL succeeded without a management console")
+	}
+}
+
+// The console has its own loopback listener, so a dev session that turns the proxy off still
+// gets one, and `dboss login` with it.
+func TestDevConsoleIsServedWithoutTheProxy(t *testing.T) {
+	// Not t.TempDir(): its path plus the socket name overruns the unix socket length limit.
+	dir, err := os.MkdirTemp("", "dboss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	cfg := config.Default()
+	cfg.SourcePath = dir + "/" + config.FileName
+	if err := os.WriteFile(cfg.SourcePath, []byte("procfile: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
+	cfg.Ports.Range = [2]int{0, 0}
+	cfg.Proxy.Listen = nil
+	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}
+	session, err := Build(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if session.management == nil {
+		t.Fatal("a dev session should have a console with no proxy listener")
+	}
+	if _, _, err := session.LoginURL(); err != nil {
+		t.Fatalf("LoginURL = %v", err)
 	}
 }

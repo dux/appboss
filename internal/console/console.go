@@ -79,6 +79,7 @@ type Handler struct {
 	metricsToken   string
 	notifyStats    func() metrics.NotifyStats
 	sys            SysReader
+	dev            bool
 }
 
 type dashboard struct {
@@ -125,7 +126,7 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats, sys: sys}
+	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, notifyStats: notifyStats, sys: sys, dev: cfg.Dev()}
 	if len(cfg.Management.Host) > 0 {
 		handler.publicHost = cfg.Management.Host[0]
 	}
@@ -339,7 +340,7 @@ func (h *Handler) writeDashboard(w http.ResponseWriter, session authSession) {
 
 // capabilities tells the shell which optional tabs to show.
 func (h *Handler) capabilities() map[string]bool {
-	return map[string]bool{"postgres": h.service.PGAvailable(), "pubsub": len(h.service.PubsubApps()) > 0}
+	return map[string]bool{"postgres": h.service.PGAvailable(), "pubsub": len(h.service.PubsubApps()) > 0, "dev": h.dev}
 }
 
 // healthz is a liveness probe: 200 while the HTTP server answers.

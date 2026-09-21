@@ -33,6 +33,8 @@
 #     app file serves both. The value replaces the base key outright, so a block override names
 #     the leaf key it changes rather than restating the block. The suffix works at every depth
 #     and inside free-form maps, so procfile, env, headers and pg_db entries take it too.
+#     A dev session also gets the management console on 127.0.0.1:<first port of ports.range>
+#     with no management block and no sign-in; see that block for what it costs.
 #
 # Load order at `dboss start`:
 #   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in
@@ -157,7 +159,15 @@ proxy:
 # Omit this block to disable the management console.
 # It is served by proxy.listen; only requests for this exact hostname reach it,
 # so authentication never touches application traffic. It also listens on
-# 127.0.0.1:<first port of ports.range>, still requiring this hostname in Host.
+# 127.0.0.1:<first port of ports.range>, which answers to that hostname and to
+# any loopback name.
+#
+# A dev session (one app run from its own folder, the file has procfile) always
+# has a console on that loopback port, with or without this block, and signs a
+# request whose peer is 127.0.0.1 straight in, so admin_emails is not required
+# there. The check is the connecting address and never a forwarded-for header:
+# do not put nginx, caddy or cloudflared in front of an app run this way, or
+# every request through it looks local and the console is open to all of them.
 management:
   # Hostname accepted by the console and registered with AuthCog; one name or a list.
   # Point each at the box in Cloudflare like any app hostname.

@@ -37,12 +37,14 @@ type authSession = authcog.Session
 // authenticator is the console's side of the shared AuthCog flow: admins only, plus the
 // one-time `dboss login` tokens.
 type authenticator struct {
-	flow      *authcog.Flow
-	gate      authcog.Gate
-	admins    map[string]bool
-	mu        sync.Mutex
-	cliTokens map[string]cliToken
-	localPort string // console's own loopback port
+	flow       *authcog.Flow
+	gate       authcog.Gate
+	admins     map[string]bool
+	mu         sync.Mutex
+	cliTokens  map[string]cliToken
+	localPort  string // console's own loopback port
+	dev        bool
+	devSession authSession // the one local session a dev run hands out, minted at startup
 }
 
 func newAuthenticator(cfg config.Config) (*authenticator, error) {
@@ -50,15 +52,15 @@ func newAuthenticator(cfg config.Config) (*authenticator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return consoleAuthenticator(flow, cfg.Management, strconv.Itoa(cfg.Ports.Range[0])), nil
+	return consoleAuthenticator(flow, cfg.Management, strconv.Itoa(cfg.Ports.Range[0]), cfg.Dev())
 }
 
-func consoleAuthenticator(flow *authcog.Flow, management config.Management, localPort string) *authenticator {
+func consoleAuthenticator(flow *authcog.Flow, management config.Management, localPort string, dev bool) (*authenticator, error) {
 	hosts := make(map[string]bool, len(management.Host))
 	for _, host := range management.Host {
 		hosts[strings.ToLower(host)] = true
 	}
-	auth := &authenticator{flow: flow, admins: map[string]bool{}, localPort: localPort}
+	auth := &authenticator{flow: flow, admins: map[string]bool{}, localPort: localPort, dev: dev}
 	for _, email := range management.Auth.AdminEmails {
 		auth.admins[strings.ToLower(email)] = true
 	}
@@ -72,7 +74,18 @@ func consoleAuthenticator(flow *authcog.Flow, management config.Management, loca
 		TTL:           management.Auth.SessionTTL.Value(),
 		Allow:         func(email string) bool { return auth.admins[email] },
 	}
-	return auth
+	if dev {
+		// One session for the whole run, not a cookie minted per request: the console reads its
+		// CSRF token once at boot and polls for the rest of the session, so a token that changed
+		// under it would start failing every mutating call.
+		csrf, err := authcog.RandomToken()
+		if err != nil {
+			return nil, err
+		}
+		// It is never signed into a cookie, so its expiry is only there to outlive the run.
+		auth.devSession = authSession{Email: cliEmail, CSRF: csrf, Audience: authAudience, ExpiresAt: time.Now().AddDate(10, 0, 0).Unix()}
+	}
+	return auth, nil
 }
 
 func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (authSession, bool) {
@@ -91,6 +104,11 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 	}
 	if session, ok := a.validSession(r); ok {
 		return session, true
+	}
+	if a.dev && loopbackPeer(r) {
+		// A dev session answering its own machine is the operator's own terminal, so sending
+		// them to `dboss login` buys nothing; hand them the local session directly.
+		return a.devSession, true
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json")
@@ -122,6 +140,18 @@ func loopbackHost(rawHost string) bool {
 	host = strings.ToLower(strings.Trim(host, "[]"))
 	if host == "localhost" {
 		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// loopbackPeer reports whether the request's own TCP peer is this machine. It reads RemoteAddr
+// and never a forwarded-for header, so a request from off-box cannot claim to be local; a
+// reverse proxy on the same host, however, makes every request look local.
+func loopbackPeer(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = strings.Trim(r.RemoteAddr, "[]")
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()

@@ -154,6 +154,45 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 	}
 }
 
+func TestDevSignsInLoopbackPeer(t *testing.T) {
+	auth := devAuthenticator(true, "3100", "dboss.lvh.me")
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
+	request.RemoteAddr = "127.0.0.1:54321"
+	session, ok := auth.authenticate(httptest.NewRecorder(), request)
+	if !ok || session.Email != cliEmail || session.CSRF == "" {
+		t.Fatalf("dev loopback request = %v %+v", ok, session)
+	}
+	// The console reads its CSRF token once and polls for the rest of the run, so the session
+	// it is handed has to stay the same one.
+	again, _ := auth.authenticate(httptest.NewRecorder(), request)
+	if again.CSRF != session.CSRF {
+		t.Fatalf("CSRF changed between requests: %q then %q", session.CSRF, again.CSRF)
+	}
+}
+
+func TestDevStillAuthenticatesRemotePeer(t *testing.T) {
+	auth := devAuthenticator(true, "3100", "dboss.lvh.me")
+	api := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/api/bootstrap", nil)
+	api.RemoteAddr = "203.0.113.7:54321"
+	response := httptest.NewRecorder()
+	if _, ok := auth.authenticate(response, api); ok || response.Code != http.StatusUnauthorized {
+		t.Fatalf("remote API request = %v %d", ok, response.Code)
+	}
+	page := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)
+	page.RemoteAddr = "203.0.113.7:54321"
+	redirect := httptest.NewRecorder()
+	if _, ok := auth.authenticate(redirect, page); ok || redirect.Code != http.StatusFound {
+		t.Fatalf("remote page request = %v %d", ok, redirect.Code)
+	}
+	// A loopback host header from a remote peer is not local.
+	forged := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
+	forged.RemoteAddr = "203.0.113.7:54321"
+	spoofed := httptest.NewRecorder()
+	if _, ok := auth.authenticate(spoofed, forged); ok {
+		t.Fatal("a forged loopback host signed a remote peer in")
+	}
+}
+
 func TestAuthCogRejectsCLIEmail(t *testing.T) {
 	auth := testAuthenticator("", "dboss.lvh.me")
 	auth.flow.Exchange = func(_ context.Context, _, _, _ string) (authcog.Profile, error) {
@@ -243,8 +282,17 @@ func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
 // testAuthenticator is the console gate for the given management hosts with one admin and a
 // fixed signing key, so no test touches the disk.
 func testAuthenticator(localPort string, hosts ...string) *authenticator {
+	return devAuthenticator(false, localPort, hosts...)
+}
+
+// devAuthenticator is the same gate with the dev flag set either way.
+func devAuthenticator(dev bool, localPort string, hosts ...string) *authenticator {
 	management := config.Management{Host: hosts, Auth: config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)}}
-	return consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, localPort)
+	auth, err := consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, localPort, dev)
+	if err != nil {
+		panic(err)
+	}
+	return auth
 }
 
 func cookieNamed(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {

@@ -235,6 +235,22 @@ type Management struct {
 
 func (m Management) Enabled() bool { return len(m.Host) > 0 }
 
+// ConsoleEnabled reports whether the console is served at all. A host serves it when it names a
+// hostname; a dev session always gets it, on its loopback port, with no management block.
+func (c Config) ConsoleEnabled() bool { return c.Management.Enabled() || c.Dev() }
+
+// ConsoleURL is the console as something can reach it: the public management URL when one is
+// configured, else the loopback port of a dev session, else empty. Hook URLs are built from it.
+func (c Config) ConsoleURL() string {
+	if url := c.Management.PublicURL(); url != "" {
+		return url
+	}
+	if !c.Dev() {
+		return ""
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(c.Ports.Range[0])
+}
+
 // PublicURL is the address operators open and the base of the hook ping URLs. url wins when set;
 // otherwise it defaults to https on the first management host, so host alone is enough.
 func (m Management) PublicURL() string {
@@ -626,7 +642,7 @@ func (c Config) validate(hasApp bool) error {
 	if c.StateDir == "" || c.LogDir == "" || c.Socket == "" {
 		return &Error{Message: "state_dir, log_dir, and socket are required"}
 	}
-	if err := validateManagement(c.Management, len(c.Proxy.Listen) > 0); err != nil {
+	if err := validateManagement(c.Management, len(c.Proxy.Listen) > 0, hasApp); err != nil {
 		return scoped(err, "management")
 	}
 	for _, cidr := range c.Proxy.TrustedCIDRs {
@@ -830,7 +846,7 @@ func validateNotify(n Notify) error {
 	return nil
 }
 
-func validateManagement(management Management, proxyEnabled bool) error {
+func validateManagement(management Management, proxyEnabled, dev bool) error {
 	if !management.Enabled() {
 		if len(management.Auth.AdminEmails) > 0 {
 			return keyErr("host", "is required when management is configured")
@@ -865,7 +881,9 @@ func validateManagement(management Management, proxyEnabled bool) error {
 	if management.Auth.SessionTTL <= 0 {
 		return keyErr("auth.session_ttl", "must be positive")
 	}
-	if len(management.Auth.AdminEmails) == 0 {
+	// A dev session signs a loopback request in by itself, so the admin list is optional there:
+	// it only ever governs AuthCog, which nobody reaches on a local run.
+	if len(management.Auth.AdminEmails) == 0 && !dev {
 		return keyErr("auth.admin_emails", "must contain at least one email")
 	}
 	emails := map[string]bool{}

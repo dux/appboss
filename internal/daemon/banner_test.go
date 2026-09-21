@@ -97,7 +97,7 @@ func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
 			Processes:    []super.ProcessSnapshot{{Name: "web"}},
 		},
 	}
-	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "http", "", echo)
+	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "signed in for an hour", "http", "", echo)
 	if len(lines) != 4 {
 		t.Fatalf("want a row per process plus the console, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
@@ -132,4 +132,16 @@ func stripANSI(line string) string {
 		out.WriteByte(line[i])
 	}
 	return out.String()
+}
+
+// A dev session admits this machine without a session, so its console row is the plain address.
+func TestBannerConsoleRowCarriesItsNote(t *testing.T) {
+	echo := super.NewEcho(io.Discard)
+	lines := banner(nil, "http://127.0.0.1:3100", "open on this machine", "http", "", echo)
+	if len(lines) != 1 || !strings.Contains(lines[0], "http://127.0.0.1:3100") || !strings.Contains(lines[0], "open on this machine") {
+		t.Fatalf("console row = %v", lines)
+	}
+	if strings.Contains(lines[0], "token=") {
+		t.Fatalf("a dev console link must carry no token: %q", lines[0])
+	}
 }

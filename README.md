@@ -293,7 +293,7 @@ job | tick
 ```
 
 A web process shows the address to open (its `canonical_host`, else its first hostname), a worker says `worker`, and every row ends in the app's state, so an app that has not started yet is still listed with the URL that will wake it.
-The last row is a console sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
+The last row is the console: a dev session prints its plain loopback address, since it needs no sign-in, and a host session prints a sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
 Under systemd none of this appears and no link is minted: the banner, like the output echo and the privileged-port fallback, only happens when stdout is a terminal.
 
 A hand-run session also warns once when the runtime folder would be committed:
@@ -664,7 +664,8 @@ Both work on the host file (no app) or one app's file. A CLI restore writes the 
 
 ## Management console
 
-The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` is also accepted for `dboss login` sessions.
+The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` and `localhost` are also accepted.
+A dev session (one app run from its own folder) always gets that loopback console, with or without a `management:` block.
 `dboss start` prints the loopback address first, and the public address too (`management.url` when set, otherwise `https://` on the first `management.host`):
 
 ```
@@ -681,6 +682,9 @@ The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, u
 It never starts, stops or changes anything; the `sysinfo` module keeps the snapshot warm and **Re-inspect** re-probes on demand.
 
 ### Signing in
+
+A dev session does not sign in at all: a request whose peer is a loopback address is admitted as `cli@localhost`, so `management.auth.admin_emails` is not required and the startup line reads `(open from this machine, no sign-in)`.
+The check is the connecting address and never a forwarded-for header, so a request from off-box cannot claim to be local; a reverse proxy on the same host can, which is why nginx, caddy or `cloudflared` does not belong in front of an app run this way.
 
 Production sign-in goes through AuthCog: the console redirects to `management.auth.realm`, and only the addresses in `admin_emails` are admitted.
 AuthCog returns over `http` only to a local host (`localhost`, `*.lvh.me`, an IP) on a port above 999, so a plain-http sign-in started on port 80 is routed through the console's own port (the first of `ports.range`) and then sent back to the address it started on.
@@ -701,7 +705,7 @@ The loopback link and the public link carry the same single-use token, so openin
 `dboss login --json` prints `{"url": ..., "public_url": ...}`.
 
 The loopback link uses the console's own listener, the first port of `ports.range`, so it needs no DNS.
-That listener accepts `127.0.0.1` and `localhost` only for sessions created this way; without one it shows a page telling you to run `dboss login`.
+In a host session that listener accepts `127.0.0.1` and `localhost` only for sessions created this way; without one it shows a page telling you to run `dboss login`.
 The public link goes through `management.host`, so it signs in from any browser that can reach the edge.
 Without a public URL, tunnel the port first: `ssh -L 3100:127.0.0.1:3100 <host>`.
 
