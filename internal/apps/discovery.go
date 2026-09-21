@@ -71,7 +71,7 @@ func (e ScanError) Error() string { return e.Name + ": " + e.Err.Error() }
 func Discover(cfg config.Config) ([]*App, []error, error) {
 	var found []*App
 	var invalid []error
-	if cfg.App != nil {
+	if cfg.Dev() {
 		name := filepath.Base(cfg.Dir)
 		app, err := loadRootApp(cfg, name)
 		if err != nil {

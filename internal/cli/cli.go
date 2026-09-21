@@ -136,7 +136,7 @@ func (c CLI) start(args []string) error {
 	var echo *super.Echo
 	if info, statErr := os.Stdout.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
 		echo = super.NewEcho(c.Out)
-		if cfg.App != nil {
+		if cfg.Dev() {
 			echo.Solo()
 		}
 		warnUnignoredRuntime(c.Err, cfg)

@@ -455,8 +455,9 @@ type file struct {
 var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres"}
 
 // decode parses one document into raw and reports every top-level key present in it. The node
-// tree is kept so every error can be pointed at a line and a key.
-func decode(data []byte, path string, raw *file) (map[string]bool, *yaml.Node, error) {
+// tree is kept so every error can be pointed at a line and a key. allowDev lets the document be
+// a dev session when it turns out to be an app; a file read as an app under a host never is.
+func decode(data []byte, path string, raw *file, allowDev bool) (map[string]bool, *yaml.Node, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		return nil, nil, located(err, path, nil)
@@ -464,7 +465,9 @@ func decode(data []byte, path string, raw *file) (map[string]bool, *yaml.Node, e
 	if err := checkKeys(&root, reflect.TypeOf(file{}), ""); err != nil {
 		return nil, nil, located(err, path, &root)
 	}
-	if expandEnv(&root, "") && len(root.Content) > 0 {
+	changed := applyDev(&root, allowDev && hasTopKey(&root, "procfile"))
+	changed = expandEnv(&root, "") || changed
+	if changed && len(root.Content) > 0 {
 		if err := root.Content[0].Decode(raw); err != nil && !errors.Is(err, io.EOF) {
 			return nil, nil, located(err, path, &root)
 		}
@@ -539,7 +542,7 @@ func Load(path string) (Config, error) {
 // validated before it is written to disk. Relative paths resolve against path's directory.
 func Parse(data []byte, path string) (Config, error) {
 	raw := file{Config: Default()}
-	keys, root, err := decode(data, path, &raw)
+	keys, root, err := decode(data, path, &raw, true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -614,7 +617,7 @@ func RestartRequired(old, current Config) []string {
 	return keys
 }
 
-func (c Config) Validate() error { return c.validate(c.App != nil) }
+func (c Config) Validate() error { return c.validate(c.Dev()) }
 
 func (c Config) validate(hasApp bool) error {
 	if c.Apps == "" && !hasApp {
@@ -1578,7 +1581,7 @@ func LoadApp(path string, defaults Defaults) (App, error) {
 // ParseApp is LoadApp on bytes already in memory.
 func ParseApp(data []byte, path string, defaults Defaults) (App, error) {
 	raw := file{Config: Default()}
-	keys, root, err := decode(data, path, &raw)
+	keys, root, err := decode(data, path, &raw, false)
 	if err != nil {
 		return App{}, err
 	}
@@ -1594,7 +1597,7 @@ func ParseApp(data []byte, path string, defaults Defaults) (App, error) {
 	return app, nil
 }
 
-func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
+func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
@@ -1609,7 +1612,7 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 		app.Processes = map[string]ProcessOverrides{}
 	}
 	apply(&app.Defaults, raw.Overrides)
-	if single {
+	if dev {
 		app.UseDevHosts()
 	}
 	if err := app.resolveHealth(); err != nil {

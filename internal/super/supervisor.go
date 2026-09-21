@@ -344,7 +344,7 @@ func (m *Manager) Restart(name string) error {
 func (m *Manager) Destroy(name string) error {
 	m.rescanMu.Lock()
 	defer m.rescanMu.Unlock()
-	if m.cfg.App != nil {
+	if m.cfg.Dev() {
 		return errors.New("cannot destroy an app in single-app mode")
 	}
 	runtime, err := m.runtime(name)

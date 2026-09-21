@@ -27,6 +27,12 @@
 #   - $NAME in a value is replaced with that variable from the dboss process environment.
 #     Only all-uppercase names are expanded; an unset name is left as written.
 #     procfile commands and cron commands are never expanded; they are runtime shell lines.
+#   - Any key may be written twice, once with a _dev suffix: `listen: ":80"` next to
+#     `listen_dev: ":3000"`. A dev session (one app run from its own folder, the file below
+#     that has procfile) takes the _dev value; every other session drops it, so one committed
+#     app file serves both. The value replaces the base key outright, so a block override names
+#     the leaf key it changes rather than restating the block. The suffix works at every depth
+#     and inside free-form maps, so procfile, env, headers and pg_db entries take it too.
 #
 # Load order at `dboss start`:
 #   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in

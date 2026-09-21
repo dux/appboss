@@ -56,6 +56,14 @@
         hosts: [shop.example.com]
         health: /up
     `,
+    configDev: `
+    procfile:
+      web: bundle exec puma -e production
+      web_dev: bundle exec puma -e development
+    env:
+      API_URL: https://api.example.com
+      API_URL_dev: http://lvh.me:4000
+    `,
     supervision: `
     procfile:
       web:
@@ -306,6 +314,10 @@
         <db-preview-yaml :text="state.examples.configHost" />
         <h3>App</h3>
         <db-preview-yaml :text="state.examples.configApp" />
+        <h3>Dev values</h3>
+        <p>Any key can be written twice, once with a <code>_dev</code> suffix. A dev session - one app run from its own folder, <code>dboss s</code> where the config file has <code>procfile</code> - takes the <code>_dev</code> value; every other session drops it, so one committed app file serves both.</p>
+        <db-preview-yaml :text="state.examples.configDev" />
+        <p>The suffix works at every depth and inside free-form maps such as <code>procfile</code>, <code>env</code>, <code>headers</code> and <code>pg_db</code>. The value replaces the base key outright, so a block override names the leaf key it changes (<code>proxy.listen_dev</code>) rather than restating the block. A <code>&#60;key&#62;_dev</code> is checked against the schema in both modes, so a typo is still caught by <code>dboss check</code> on the host.</p>
       </section>
     {/if}
 

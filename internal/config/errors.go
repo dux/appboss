@@ -110,6 +110,13 @@ func checkKeys(node *yaml.Node, schema reflect.Type, prefix string) *Error {
 		keyNode, valueNode := node.Content[i], node.Content[i+1]
 		field, ok := fields[keyNode.Value]
 		if !ok {
+			// A _dev variant is checked as the key it overrides, so a typo in a value that only a
+			// dev session reads is still caught by dboss check on a host.
+			if base, found := strings.CutSuffix(keyNode.Value, DevSuffix); found {
+				field, ok = fields[base]
+			}
+		}
+		if !ok {
 			return unknownKey(keyNode, fields, prefix)
 		}
 		child := prefix + keyNode.Value + "."
