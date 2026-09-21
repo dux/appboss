@@ -113,10 +113,9 @@ make build            # ./bin/dboss
 make demo             # builds, then runs the host session on ./demo/dboss.yaml
 ```
 
-The demo listens on `:80` and hosts three apps.
-Binding port 80 needs root or `CAP_NET_BIND_SERVICE`, so `make demo` runs the daemon through `sudo`.
-Without it the demo still comes up: on a terminal a `proxy.listen` port the process may not bind moves to the first free port of `ports.range`, and the daemon logs the address it actually took.
-The URLs below then need that port, for example `http://bun.lvh.me:3101`.
+The demo listens on `:80` and hosts three apps, and it needs no `sudo`.
+Binding port 80 normally takes root or `CAP_NET_BIND_SERVICE`, but on a terminal a `proxy.listen` port the process may not bind moves to the first free port of `ports.range` instead of failing.
+The startup banner names the address every app ended up on, so when the demo falls back the URLs below need that port, for example `http://bun.lvh.me:3101`.
 
 * http://dboss.lvh.me - management console
 * http://sinatra.lvh.me - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)

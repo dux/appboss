@@ -30,11 +30,6 @@ lint: vet ## Run go vet and staticcheck
 check: lint test ## Run static checks and tests
 
 demo: build ## Run the local demo daemon
-	@printf '%s\n' \
-		'Management console: http://dboss.lvh.me (also :3100)' \
-		'Apps:' \
-		'  http://sinatra.lvh.me' \
-		'  http://bun.lvh.me'
 	$(BINARY) start -c ./demo/dboss.yaml
 
 demo-watch: build ## Rebuild and restart the demo on changes
