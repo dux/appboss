@@ -523,7 +523,7 @@ deletable: false
 # PostgreSQL databases this app owns, keyed by the environment variable each one is exported as.
 # The key is uppercased to make the variable name (db_main -> DB_MAIN). dboss creates a database
 # that does not exist yet, then hands every process of the app - web, worker, cron job, hook and
-# `dboss exec` - a connection URL. A value is one of two things:
+# `dboss exec` - a connection URL. A value is one of three things:
 #
 #   a database name    the database lives on the server the postgres block resolved, and dboss
 #                      builds the URL from that connection with the database name swapped in:
@@ -540,6 +540,20 @@ deletable: false
 #                      Creating on a managed provider usually needs rights it will not give you;
 #                      create the database there first and dboss will simply pass the URL on.
 #
+#   {database, template}  the database starts as a copy of another one on the same server,
+#                      created with CREATE DATABASE <database> TEMPLATE <template>:
+#                        db_fresh: {database: pr222_erpx, template: template_erpx}
+#                      Use it to give a throwaway environment a seeded database in seconds
+#                      instead of building one from scratch on every deploy. Three things to
+#                      know: the template is read only when dboss creates the database, so
+#                      changing it later does nothing and dboss never recreates what exists;
+#                      the template lives on the server that receives the create, which for a
+#                      URL entry is the server the URL names; and PostgreSQL copies a template
+#                      only while no other session is connected to it, so a psql left open on
+#                      the template fails the start until it is closed. Setting
+#                      `datallowconn = false` on a template nothing should ever connect to
+#                      makes that impossible.
+#
 # These variables are injected like PORT, so they win over env: and over .env/.env.local.
 # A database name connects as whatever identity postgres.dsn resolved, so every app using one
 # shares that identity; use per-database roles, or a full URL, if you need them separated.
@@ -550,6 +564,7 @@ pg_db: {}
 #   db_main: myapp_production
 #   db_cache: myapp_cache
 #   db_report: $REPORTS_URL
+#   db_fresh: {database: myapp_pr222, template: template_myapp}
 
 # Per-app overrides of defaults.* (all optional, same semantics as above).
 idle_stop: 0                # this app never sleeps

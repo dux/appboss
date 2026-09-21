@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func writeConfigFile(t *testing.T, path, contents string) {
@@ -905,12 +907,12 @@ func TestParseAppPgDB(t *testing.T) {
 		t.Fatalf("PgDatabases() = %v, want %v", got, want)
 	}
 	for name, database := range want {
-		if got[name] != database {
-			t.Errorf("%s = %q, want %q", name, got[name], database)
+		if got[name].Database != database {
+			t.Errorf("%s = %q, want %q", name, got[name].Database, database)
 		}
 	}
 	// The block is kept as written, so the console and config history see the real file.
-	if app.PgDB["db_main"] != "myapp_production" {
+	if app.PgDB["db_main"].Database != "myapp_production" {
 		t.Errorf("PgDB = %v, want the keys as written", app.PgDB)
 	}
 }
@@ -920,12 +922,18 @@ func TestParseAppPgDBRejects(t *testing.T) {
 	path := filepath.Join(dir, FileName)
 	defaults := Default().Defaults
 	cases := map[string]string{
-		"bad env name":            "pg_db:\n  \"db-main\": myapp\n",
-		"bad database name":       "pg_db:\n  db_main: my-app\n",
-		"injected name":           "pg_db:\n  port: myapp\n",
-		"collision":               "pg_db:\n  db_main: one\n  DB_MAIN: two\n",
-		"url without a database":  "pg_db:\n  db_main: postgres://user@db.example.com/\n",
-		"url with a bad database": "pg_db:\n  db_main: postgres://user@db.example.com/my-app\n",
+		"bad env name":                   "pg_db:\n  \"db-main\": myapp\n",
+		"bad database name":              "pg_db:\n  db_main: my-app\n",
+		"injected name":                  "pg_db:\n  port: myapp\n",
+		"collision":                      "pg_db:\n  db_main: one\n  DB_MAIN: two\n",
+		"url without a database":         "pg_db:\n  db_main: postgres://user@db.example.com/\n",
+		"url with a bad database":        "pg_db:\n  db_main: postgres://user@db.example.com/my-app\n",
+		"bad template name":              "pg_db:\n  db_main: {database: myapp, template: my-tpl}\n",
+		"template is a url":              "pg_db:\n  db_main: {database: myapp, template: postgres://h/t}\n",
+		"template is the database":       "pg_db:\n  db_main: {database: myapp, template: myapp}\n",
+		"template is the url's database": "pg_db:\n  db_main: {database: postgres://user@h/reports, template: reports}\n",
+		"mapping without a database":     "pg_db:\n  db_main: {template: template_erpx}\n",
+		"unknown key in the entry":       "pg_db:\n  db_main: {database: myapp, tempalte: x}\n",
 	}
 	for name, block := range cases {
 		if _, err := ParseApp([]byte("procfile:\n  web: ./server\n"+block), path, defaults); err == nil {
@@ -956,11 +964,11 @@ func TestParseAppPgDBAcceptsAFullURL(t *testing.T) {
 	}
 	got := app.PgDatabases()
 	// A URL is carried through untouched; only a bare name is resolved against the host server.
-	if got["DB_REPORT"] != remote {
-		t.Errorf("DB_REPORT = %q, want the URL as written", got["DB_REPORT"])
+	if got["DB_REPORT"].Database != remote {
+		t.Errorf("DB_REPORT = %q, want the URL as written", got["DB_REPORT"].Database)
 	}
-	if got["DB_MAIN"] != "myapp_production" {
-		t.Errorf("DB_MAIN = %q, want the database name", got["DB_MAIN"])
+	if got["DB_MAIN"].Database != "myapp_production" {
+		t.Errorf("DB_MAIN = %q, want the database name", got["DB_MAIN"].Database)
 	}
 	if !PgDBIsURL(remote) || PgDBIsURL("myapp_production") {
 		t.Error("PgDBIsURL should split on the scheme")
@@ -968,5 +976,45 @@ func TestParseAppPgDBAcceptsAFullURL(t *testing.T) {
 	database, err := PgDBDatabase(remote)
 	if err != nil || database != "reports" {
 		t.Errorf("PgDBDatabase = %q, %v, want reports", database, err)
+	}
+}
+
+func TestParseAppPgDBTemplate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	defaults := Default().Defaults
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\npg_db:\n  db_main: myapp_production\n  db_fresh:\n    database: pr222_erpx\n    template: template_erpx\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := app.PgDatabases()
+	if want := (PgDBSpec{Database: "pr222_erpx", Template: "template_erpx"}); got["DB_FRESH"] != want {
+		t.Errorf("DB_FRESH = %+v, want %+v", got["DB_FRESH"], want)
+	}
+	// The scalar form carries no template, so nothing is copied for it.
+	if got["DB_MAIN"].Template != "" {
+		t.Errorf("DB_MAIN template = %q, want none", got["DB_MAIN"].Template)
+	}
+}
+
+func TestPgDBSpecRoundTrip(t *testing.T) {
+	// apps.Store.Effective marshals the config back for the console, so a plain entry has to come
+	// out as the scalar it was written as rather than growing a mapping.
+	encoded, err := yaml.Marshal(map[string]PgDBSpec{
+		"db_main":  {Database: "myapp_production"},
+		"db_fresh": {Database: "pr222_erpx", Template: "template_erpx"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(encoded); !strings.Contains(got, "db_main: myapp_production") {
+		t.Errorf("a plain entry should stay a scalar, got:\n%s", got)
+	}
+	var back map[string]PgDBSpec
+	if err := yaml.Unmarshal(encoded, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back["db_fresh"].Template != "template_erpx" || back["db_main"].Database != "myapp_production" {
+		t.Errorf("round trip lost data: %+v", back)
 	}
 }

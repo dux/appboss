@@ -677,10 +677,10 @@ type fakeDatabases struct {
 	env  map[string]string
 	err  error
 	app  string
-	seen map[string]string
+	seen map[string]config.PgDBSpec
 }
 
-func (f *fakeDatabases) AppDatabases(_ context.Context, app string, databases map[string]string) (map[string]string, error) {
+func (f *fakeDatabases) AppDatabases(_ context.Context, app string, databases map[string]config.PgDBSpec) (map[string]string, error) {
 	f.app, f.seen = app, databases
 	return f.env, f.err
 }
@@ -700,7 +700,7 @@ func TestPgDBReachesTheProcessEnvironment(t *testing.T) {
 	if databases.app != "demo" {
 		t.Errorf("app = %q, want demo", databases.app)
 	}
-	if databases.seen["DB_MAIN"] != "demo_production" {
+	if databases.seen["DB_MAIN"].Database != "demo_production" {
 		t.Errorf("requested databases = %v, want DB_MAIN=demo_production", databases.seen)
 	}
 }
@@ -727,5 +727,24 @@ func TestPgDBNeedsTheService(t *testing.T) {
 	defer manager.Close()
 	if err := manager.Start("demo"); err == nil || !strings.Contains(err.Error(), "PostgreSQL service") {
 		t.Fatalf("Start = %v, want the missing-service error", err)
+	}
+}
+
+// TestPgDBTemplateReachesTheService proves the template survives config -> supervisor -> service,
+// so a preview really is created from its template rather than empty.
+func TestPgDBTemplateReachesTheService(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{33460, 33480}, "pg_db:\n  db_main:\n    database: demo_production\n    template: demo_template\n")
+	databases := &fakeDatabases{env: map[string]string{"DB_MAIN": "postgres:///demo_production"}}
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, databases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	if got := databases.seen["DB_MAIN"]; got.Database != "demo_production" || got.Template != "demo_template" {
+		t.Errorf("requested databases = %+v, want demo_production from demo_template", got)
 	}
 }

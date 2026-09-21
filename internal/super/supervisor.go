@@ -146,10 +146,11 @@ func WebProcessSnapshots(webs []config.WebProcess) []WebProcessSnapshot {
 const failureLogLines = 1000
 
 // Databases turns an app's pg_db block into the connection URLs its processes are spawned with,
-// creating a database that is missing. It is the supervisor's only view of PostgreSQL; a nil
-// value disables the feature, and an app that asks for databases then fails to start.
+// creating a database that is missing, from its template when the entry names one. It is the
+// supervisor's only view of PostgreSQL; a nil value disables the feature, and an app that asks
+// for databases then fails to start.
 type Databases interface {
-	AppDatabases(ctx context.Context, app string, databases map[string]string) (map[string]string, error)
+	AppDatabases(ctx context.Context, app string, databases map[string]config.PgDBSpec) (map[string]string, error)
 }
 
 type Manager struct {

@@ -571,6 +571,9 @@ pg_db:
   db_main: myapp_production                    # on this host's server
   db_cache: myapp_cache
   db_report: $REPORTS_URL                      # anywhere else
+  db_fresh:                                    # a copy of another database
+    database: myapp_pr222
+    template: template_myapp
 ```
 
 dboss creates a database that does not exist yet, then hands every process of the app a connection URL:
@@ -584,7 +587,8 @@ DB_REPORT=postgres://user:pass@db.example.com/reports
 This is the same deal as `PORT`: dboss owns the resource, so it hands it over instead of asking you to repeat it in `env:` or a `.env` file.
 Web processes, workers, cron jobs, deploy hooks and `dboss exec` all get the variables, and they are injected like `PORT`, so they win over `env:` and over `.env`/`.env.local`.
 
-A value is either a **database name** or a **full `postgres://` URL**, and the two can never be confused because a name has no scheme.
+A value is a **database name**, a **full `postgres://` URL**, or a **`{database, template}` mapping**.
+A name and a URL can never be confused, because a name has no scheme.
 
 A database name lives on the server the `postgres:` block resolved, and dboss builds the URL from that connection with only the database name swapped.
 The app then connects as whatever identity dboss connects as, and every app using a bare name shares that identity; if you need them separated, create per-app roles in PostgreSQL and give those apps a full URL instead.
@@ -593,6 +597,15 @@ A full URL lives wherever it says.
 dboss creates the database on that server and hands the URL to the app exactly as written, so a password or an option you put in it survives untouched.
 Keep credentials out of the committed file with `$REPORTS_URL`, expanded from the daemon environment at load, or put the URL in `dboss.local.yaml`.
 Creating a database on a managed provider usually needs rights it will not give you; create it there first and dboss will simply pass the URL on.
+
+A `{database, template}` mapping starts the database as a copy of another one on the same server, through `CREATE DATABASE <database> TEMPLATE <template>`.
+It is how a throwaway environment gets a seeded database in seconds rather than building one from scratch on every deploy.
+
+Three things are worth knowing about a template.
+The template is read only when dboss creates the database, so changing it later does nothing and dboss never recreates a database that already exists.
+It has to live on the server that receives the create, which for a URL entry is the server the URL names.
+And PostgreSQL copies a template only while no other session is connected to it, so a `psql` left open on the template fails the start until it is closed - dboss says so and gives you the `pg_terminate_backend` query.
+Setting `datallowconn = false` on a template nothing should ever connect to makes that failure impossible.
 
 An app with a `pg_db` block refuses to start while this host's own PostgreSQL server is unreachable, even when every entry is a URL pointing elsewhere, and retries under its restart policy rather than coming up with the variables unset.
 

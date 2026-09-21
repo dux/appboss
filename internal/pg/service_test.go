@@ -218,7 +218,7 @@ func TestAppDatabasesAgainstLiveServer(t *testing.T) {
 	database := fmt.Sprintf("dboss_pgdb_test_%d", time.Now().UnixNano())
 	defer func() { _ = service.dropDatabase(context.Background(), service.connConfig, database) }()
 
-	env, err := service.AppDatabases(ctx, "demo", map[string]string{"DB_MAIN": database})
+	env, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: database}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestAppDatabasesAgainstLiveServer(t *testing.T) {
 		t.Fatalf("current_database = %q (%v), want %q", current, err, database)
 	}
 	// A second call is a no-op on an existing database and returns the same URL.
-	again, err := service.AppDatabases(ctx, "demo", map[string]string{"DB_MAIN": database})
+	again, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: database}})
 	if err != nil || again["DB_MAIN"] != env["DB_MAIN"] {
 		t.Fatalf("second call = %v, %v", again, err)
 	}
@@ -257,7 +257,7 @@ func TestAppDatabasesCreatesFromAFullURL(t *testing.T) {
 	target := databaseURL(service.connConfig, database)
 	defer func() { _ = service.dropDatabase(context.Background(), service.connConfig, database) }()
 
-	env, err := service.AppDatabases(ctx, "demo", map[string]string{"DB_REPORT": target})
+	env, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_REPORT": {Database: target}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,5 +274,131 @@ func TestAppDatabasesCreatesFromAFullURL(t *testing.T) {
 	_ = conn.Close(ctx)
 	if err != nil || current != database {
 		t.Fatalf("current_database = %q (%v), want %q", current, err, database)
+	}
+}
+
+// TestAppDatabasesFromATemplateAgainstLiveServer exercises the real copy path. It skips unless a
+// PostgreSQL server is reachable, so it is a no-op on a box without one.
+func TestAppDatabasesFromATemplateAgainstLiveServer(t *testing.T) {
+	service := New(config.Config{StateDir: t.TempDir(), Postgres: config.Postgres{Enabled: true}}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	service.detect(ctx)
+	if service.connConfig == nil {
+		t.Skip("no reachable PostgreSQL server")
+	}
+	stamp := time.Now().UnixNano()
+	template := fmt.Sprintf("dboss_tpl_test_%d", stamp)
+	target := fmt.Sprintf("dboss_tpl_copy_%d", stamp)
+	defer func() {
+		_ = service.dropDatabase(context.Background(), service.connConfig, target)
+		_ = service.dropDatabase(context.Background(), service.connConfig, template)
+	}()
+
+	if err := service.createDatabase(ctx, service.connConfig, template, ""); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := pgx.Connect(ctx, databaseURL(service.connConfig, template))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, "CREATE TABLE marker (note text)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, "INSERT INTO marker VALUES ('from the template')"); err != nil {
+		t.Fatal(err)
+	}
+	_ = seed.Close(ctx)
+
+	env, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: target, Template: template}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, env["DB_MAIN"])
+	if err != nil {
+		t.Fatalf("connect with %q: %v", env["DB_MAIN"], err)
+	}
+	var note string
+	err = conn.QueryRow(ctx, "SELECT note FROM marker").Scan(&note)
+	_ = conn.Close(ctx)
+	if err != nil || note != "from the template" {
+		t.Fatalf("copied content = %q (%v), want the template's row", note, err)
+	}
+
+	// An existing database is never re-templated, however the entry reads.
+	again, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: target, Template: template}})
+	if err != nil || again["DB_MAIN"] != env["DB_MAIN"] {
+		t.Fatalf("second call = %v, %v", again, err)
+	}
+}
+
+// TestAppDatabasesRefusesABusyTemplate is the regression for the failure operators actually hit:
+// PostgreSQL copies a template only while nothing is connected to it.
+func TestAppDatabasesRefusesABusyTemplate(t *testing.T) {
+	service := New(config.Config{StateDir: t.TempDir(), Postgres: config.Postgres{Enabled: true}}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	service.detect(ctx)
+	if service.connConfig == nil {
+		t.Skip("no reachable PostgreSQL server")
+	}
+	stamp := time.Now().UnixNano()
+	template := fmt.Sprintf("dboss_busy_tpl_%d", stamp)
+	target := fmt.Sprintf("dboss_busy_copy_%d", stamp)
+	defer func() {
+		_ = service.dropDatabase(context.Background(), service.connConfig, target)
+		_ = service.dropDatabase(context.Background(), service.connConfig, template)
+	}()
+	if err := service.createDatabase(ctx, service.connConfig, template, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := pgx.Connect(ctx, databaseURL(service.connConfig, template))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := map[string]config.PgDBSpec{"DB_MAIN": {Database: target, Template: template}}
+	_, err = service.AppDatabases(ctx, "demo", entry)
+	if err == nil {
+		_ = holder.Close(ctx)
+		t.Fatal("a template with a live session should refuse the copy")
+	}
+	for _, want := range []string{template, "pg_terminate_backend"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q: %v", want, err)
+		}
+	}
+	_ = holder.Close(ctx)
+
+	// With the session gone the same call succeeds, so the failure is transient, not poisoned.
+	if _, err := service.AppDatabases(ctx, "demo", entry); err != nil {
+		t.Fatalf("after closing the session: %v", err)
+	}
+}
+
+// TestAppDatabasesMissingTemplate names the config, not a bare SQLSTATE, and creates nothing.
+func TestAppDatabasesMissingTemplate(t *testing.T) {
+	service := New(config.Config{StateDir: t.TempDir(), Postgres: config.Postgres{Enabled: true}}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	service.detect(ctx)
+	if service.connConfig == nil {
+		t.Skip("no reachable PostgreSQL server")
+	}
+	stamp := time.Now().UnixNano()
+	template := fmt.Sprintf("dboss_absent_tpl_%d", stamp)
+	target := fmt.Sprintf("dboss_absent_copy_%d", stamp)
+	defer func() { _ = service.dropDatabase(context.Background(), service.connConfig, target) }()
+
+	_, err := service.AppDatabases(ctx, "demo", map[string]config.PgDBSpec{"DB_MAIN": {Database: target, Template: template}})
+	if err == nil || !strings.Contains(err.Error(), "template database") || !strings.Contains(err.Error(), template) {
+		t.Fatalf("missing template error = %v", err)
+	}
+	exists, err := service.databaseExists(ctx, service.connConfig, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Error("a failed template create must not leave the database behind")
 	}
 }

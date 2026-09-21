@@ -1,9 +1,13 @@
 package pg
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"dboss/internal/config"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestCandidateDSNs(t *testing.T) {
@@ -56,5 +60,36 @@ func TestSelectedDatabases(t *testing.T) {
 	}
 	if got := backup.Rotation("missing"); got != "" {
 		t.Fatalf("Rotation(missing) = %q, want empty", got)
+	}
+}
+
+func TestCreateStatement(t *testing.T) {
+	if got, want := createStatement("pr222_erpx", ""), `CREATE DATABASE "pr222_erpx"`; got != want {
+		t.Errorf("createStatement = %q, want %q", got, want)
+	}
+	// Each name is its own identifier: pgx.Identifier{a, b} would render a qualified "a"."b".
+	if got, want := createStatement("pr222_erpx", "template_erpx"), `CREATE DATABASE "pr222_erpx" TEMPLATE "template_erpx"`; got != want {
+		t.Errorf("createStatement = %q, want %q", got, want)
+	}
+	if got := createStatement(`ev"il`, `t"pl`); !strings.Contains(got, `"ev""il"`) || !strings.Contains(got, `"t""pl"`) {
+		t.Errorf("both identifiers should be sanitised, got %q", got)
+	}
+}
+
+func TestCreateTemplateError(t *testing.T) {
+	busy := createTemplateError("pr222_erpx", "template_erpx", &pgconn.PgError{Code: "55006"})
+	// The message has to carry the way out; the server's own text names none.
+	for _, want := range []string{"template_erpx", "pg_terminate_backend", "start the app again"} {
+		if !strings.Contains(busy.Error(), want) {
+			t.Errorf("busy-template error is missing %q: %v", want, busy)
+		}
+	}
+	missing := createTemplateError("pr222_erpx", "template_erpx", &pgconn.PgError{Code: "3D000"})
+	if !strings.Contains(missing.Error(), "does not exist") {
+		t.Errorf("missing-template error = %v", missing)
+	}
+	other := createTemplateError("pr222_erpx", "template_erpx", errors.New("boom"))
+	if !strings.Contains(other.Error(), "boom") {
+		t.Errorf("an unmapped error should be wrapped, got %v", other)
 	}
 }

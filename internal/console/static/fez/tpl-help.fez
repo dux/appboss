@@ -219,6 +219,9 @@
       db_main: myapp_production   # on this host's server
       db_cache: myapp_cache
       db_report: $REPORTS_URL     # a full postgres:// URL, anywhere else
+      db_fresh:                   # starts as a copy of another database
+        database: myapp_pr222
+        template: template_myapp
     `,
   }
 
@@ -694,6 +697,7 @@
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
           <li><code>pg_db</code> lives in the app's own file. Each key is uppercased to make the variable name, so <code>db_main</code> becomes <code>DB_MAIN</code>. A database that does not exist yet is created.</li>
           <li>A value is either a database name or a full <code>postgres://</code> URL; a name has no scheme, so the two can never be confused. A name lives on this host's server and dboss builds the URL from that connection, so the app connects as whatever identity dboss connects as, and every app using a bare name shares it.</li>
+          <li>A <code>{database, template}</code> mapping starts the database as a copy of another one on the same server, through <code>CREATE DATABASE &#60;database&#62; TEMPLATE &#60;template&#62;</code> - a seeded throwaway environment in seconds instead of one built from scratch each deploy. The template is read only when dboss creates the database, so changing it later does nothing. PostgreSQL copies a template only while nothing is connected to it, so a session left open on it fails the start; <code>datallowconn = false</code> on a template nobody should connect to makes that impossible.</li>
           <li>A URL lives wherever it says. dboss creates the database on that server and passes the URL through exactly as written, so a password or an option in it survives. Keep credentials out of the committed file with <code>$REPORTS_URL</code> or <code>dboss.local.yaml</code>. A managed provider usually will not let you create a database, so create it there first and dboss just passes the URL on.</li>
           <li>Web processes, workers, cron jobs, hooks and <code>dboss exec</code> all get the variables, injected like <code>PORT</code>, so they win over <code>env:</code> and over <code>.env</code>. While this host's server is unreachable, an app with <code>pg_db</code> refuses to start and retries under its restart policy, even when every entry is a URL pointing elsewhere.</li>
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
