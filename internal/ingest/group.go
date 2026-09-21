@@ -31,6 +31,9 @@ func stripANSI(line string) string {
 // splitTag cuts a leading request id tag off the line. The id needs a digit, so word tags such
 // as [ActiveJob] stay part of the text.
 func splitTag(text string) (string, string) {
+	if text == "" || text[0] != '[' {
+		return "", text
+	}
 	match := tagPattern.FindStringSubmatch(text)
 	if match == nil || !strings.ContainsAny(match[1], "0123456789") {
 		return "", text

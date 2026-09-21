@@ -6,6 +6,7 @@ package ingest
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -359,13 +360,13 @@ func ParseLine(source, name, line string) logstore.LogEntry {
 	entry := logstore.LogEntry{Time: time.Now(), Source: source, Process: name, Stream: "combined", Message: text, RequestID: id, Raw: line}
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") {
-		var fields map[string]any
+		var fields jsonLog
 		if json.Unmarshal([]byte(trimmed), &fields) == nil {
-			entry.Level = stringField(fields, "level")
-			entry.Message = firstString(fields, "message", "msg")
+			entry.Level = strings.ToLower(fields.Level)
+			entry.Message = cmp.Or(fields.Message, fields.Msg)
 			// Case is kept: the id has to match the one the proxy recorded for the request.
-			if requestID := firstString(fields, "request_id"); requestID != "" {
-				entry.RequestID = requestID
+			if fields.RequestID != "" {
+				entry.RequestID = fields.RequestID
 			}
 		}
 	}
@@ -378,25 +379,44 @@ func ParseLine(source, name, line string) logstore.LogEntry {
 	return entry
 }
 
-func firstString(fields map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := fields[key].(string); ok {
-			return value
-		}
-	}
-	return ""
+// jsonLog is the part of a structured line dboss reads. Decoding into it rather than a
+// map[string]any keeps a JSON line to a couple of allocations; the rest of the object is skipped
+// in place instead of being materialized and thrown away.
+type jsonLog struct {
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	Msg       string `json:"msg"`
+	RequestID string `json:"request_id"`
 }
 
-func stringField(fields map[string]any, key string) string {
-	value, _ := fields[key].(string)
-	return strings.ToLower(value)
-}
+// levelNames and levelWords are the keywords detectLevel looks for, in priority order. The byte
+// copies let it use bytes.Contains, whose search is assembly; returning from levelNames keeps the
+// hit allocation-free.
+var (
+	levelNames = []string{"fatal", "error", "warn", "debug", "info"}
+	levelWords = [][]byte{[]byte("fatal"), []byte("error"), []byte("warn"), []byte("debug"), []byte("info")}
+)
 
+// detectLevel guesses a level from a keyword. It lowercases into a stack buffer rather than
+// strings.ToUpper, which allocated a second copy of every plain line before the five scans.
 func detectLevel(line string) string {
-	upper := strings.ToUpper(line)
-	for _, level := range []string{"FATAL", "ERROR", "WARN", "DEBUG", "INFO"} {
-		if strings.Contains(upper, level) {
-			return strings.ToLower(level)
+	var stack [256]byte
+	var lower []byte
+	if len(line) <= len(stack) {
+		lower = stack[:len(line)]
+	} else {
+		lower = make([]byte, len(line))
+	}
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		lower[i] = c
+	}
+	for i, word := range levelWords {
+		if bytes.Contains(lower, word) {
+			return levelNames[i]
 		}
 	}
 	return "info"
