@@ -702,6 +702,7 @@
           <li>Web processes, workers, cron jobs, hooks and <code>dboss exec</code> all get the variables, injected like <code>PORT</code>, so they win over <code>env:</code> and over <code>.env</code>. While this host's server is unreachable, an app with <code>pg_db</code> refuses to start and retries under its restart policy, even when every entry is a URL pointing elsewhere.</li>
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
+          <li><b>Download</b> serves that zip as it is, and <b>Upload backup</b> stores one you picked as a manual entry, so a database moves between hosts: download here, upload there, restore there.</li>
           <li><code>postgres</code> is a host key but applies without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>
           <li>The box needs <code>pg_dump</code> and <code>psql</code> on the service user's <code>PATH</code>, and a role that can read every selected database.</li>
         </ul>

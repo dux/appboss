@@ -99,6 +99,58 @@ func (h *Handler) pgDeleteBackup(w http.ResponseWriter, r *http.Request, session
 	writeJSON(w, http.StatusOK, map[string]any{"backups": h.service.Backups(), "updated_at": time.Now().UTC()})
 }
 
+// pgDownloadBackup streams one recorded dump exactly as it sits on disk, so the archive can be
+// carried to another host and uploaded there. It moves a full copy of a database off the box, so
+// it audits like a mutating action.
+func (h *Handler) pgDownloadBackup(w http.ResponseWriter, r *http.Request, session authSession) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	entry, path, err := h.service.BackupFile(id)
+	if err != nil {
+		h.service.Audit(session.Email, "", "pg-download-dump", id, err)
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	h.service.Audit(session.Email, "", "pg-download-dump", entry.ID, nil)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+entry.Database+"_"+entry.ID+"\"")
+	http.ServeFile(w, r, path)
+}
+
+// pgUploadBackup stores an archive the operator picked for ?database=<name>. The file streams
+// straight to disk: a dump is far larger than any JSON body this console handles.
+func (h *Handler) pgUploadBackup(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	database := strings.TrimSpace(r.URL.Query().Get("database"))
+	r.Body = http.MaxBytesReader(w, r.Body, maxBackupUpload)
+	parts, err := r.MultipartReader()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "upload must be a multipart form")
+		return
+	}
+	for {
+		part, err := parts.NextPart()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "upload is missing its file")
+			return
+		}
+		if part.FileName() == "" {
+			_ = part.Close()
+			continue
+		}
+		entry, err := h.service.ImportBackup(database, part)
+		_ = part.Close()
+		h.service.Audit(session.Email, "", "pg-upload-dump", database, err)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"backup": entry, "backups": h.service.Backups(), "updated_at": time.Now().UTC()})
+		return
+	}
+}
+
 func (h *Handler) pgRestore(w http.ResponseWriter, r *http.Request, session authSession) {
 	if !h.requireCSRF(w, r, session) {
 		return

@@ -153,6 +153,30 @@
       }
     }
 
+    // uploadBackup sends the picked archive as it is; the server stores the bytes and records a
+    // manual entry, so an archive from another host restores through the normal path.
+    async uploadBackup() {
+      const node = this.state.uploadNode
+      const file = node && node.files && node.files[0]
+      const name = this.state.selected && this.state.selected.name
+      if (!file || !name || this.state.busy) return
+      const body = new FormData()
+      body.append('file', file)
+      try {
+        this.state.busy = true
+        const data = await Dboss.api(`/api/pg/backup/upload?database=${encodeURIComponent(name)}`, { method: 'POST', body })
+        this.state.backups = data.backups || []
+        this.message(`Uploaded ${file.name} into ${name}.`)
+        Toast.show(`${name}: backup uploaded`)
+      } catch (error) {
+        this.message(error.message, true)
+        Toast.show(error.message, true)
+      } finally {
+        if (node) node.value = ''
+        this.state.busy = false
+      }
+    }
+
     async restoreById(id) {
       const entry = this.state.backups.find((candidate) => candidate.id === id)
       if (!entry || this.state.busy) return
@@ -373,6 +397,14 @@
     <span class="text-muted">{backupsFor(state.selected.name).length} recorded</span>
   </div>
   <section class="card">
+    <div class="pg-detail-actions pg-backup-upload">
+      <label class="btn" class:disabled={state.busy}>
+        <svg class="icon"><use href="#i-upload"></use></svg>
+        Upload backup
+        <input type="file" accept=".zip,application/zip" hidden fez:this="uploadNode" onchange="fez.uploadBackup()" disabled={state.busy}>
+      </label>
+      <span class="text-muted">A dboss backup zip is stored as it is and kept until you remove it.</span>
+    </div>
     <div class="pg-backups">
       {#each backupsFor(state.selected.name) as entry}
         <div class="pg-backup-line">
@@ -386,6 +418,7 @@
           <span class="badge" class:badge-success={entry.status === 'ok'} class:badge-danger={entry.status !== 'ok'}>{entry.status}</span>
           <span class="pg-backup-action">
             {#if entry.status === 'ok'}
+              <a class="btn btn-sm" href="/api/pg/backup/download?id={entry.id}" download>Download</a>
               <button class="btn btn-sm" type="button" onclick="fez.restoreById('{entry.id}')" disabled={state.busy}>Restore</button>
             {:else}
               <span class="text-muted">{entry.error || '-'}</span>

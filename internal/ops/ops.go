@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -135,6 +136,8 @@ type PG interface {
 	BackupAll(ctx context.Context) error
 	BackupDatabase(ctx context.Context, database string, manual bool) (pg.Backup, error)
 	Backups() []pg.Backup
+	BackupFile(id string) (pg.Backup, string, error)
+	ImportBackup(database string, source io.Reader) (pg.Backup, error)
 	DeleteBackup(id string) error
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
 	DropDatabase(ctx context.Context, database, confirm string) error
@@ -547,6 +550,23 @@ func (s *Service) DropDatabase(database, confirm string) error {
 		return errors.New("postgres is not enabled")
 	}
 	return s.pg.DropDatabase(context.Background(), database, confirm)
+}
+
+// BackupFile returns one recorded dump and the archive's path on disk, for the console download.
+func (s *Service) BackupFile(id string) (pg.Backup, string, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return pg.Backup{}, "", errors.New("postgres is not enabled")
+	}
+	return s.pg.BackupFile(id)
+}
+
+// ImportBackup stores an uploaded archive for a database as a manual dump, so it can be restored
+// like any other recorded backup.
+func (s *Service) ImportBackup(database string, source io.Reader) (pg.Backup, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return pg.Backup{}, errors.New("postgres is not enabled")
+	}
+	return s.pg.ImportBackup(database, source)
 }
 
 // DeleteBackup removes one recorded dump from disk and the catalog.

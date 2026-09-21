@@ -542,6 +542,9 @@ The connection resolves in order: `postgres.dsn` when set, then a unix socket (`
 
 Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 UTC; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `state_dir/pg-backups.json`.
 
+Every recorded dump has **Download**, which serves the stored zip as it is, and the per-database panel has **Upload backup**, which stores an archive you picked and records it as a manual entry.
+Together they move a database between hosts: download on one box, upload on the other, restore there.
+
 The console writes the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reloads the daemon, so no restart is needed. A plain edit on disk applies on the next config save or `dboss rescan`. Restore verifies the archive and loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation. The per-database panel also has **Drop database**, which needs the database name typed as confirmation.
 
 On the box this feature needs `pg_dump` and `psql` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:

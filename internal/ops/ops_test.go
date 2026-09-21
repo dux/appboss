@@ -3,6 +3,7 @@ package ops
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -259,7 +260,24 @@ func (f *fakePG) BackupAll(context.Context) error     { return nil }
 func (f *fakePG) BackupDatabase(context.Context, string, bool) (pg.Backup, error) {
 	return pg.Backup{Database: "app", Status: "ok"}, nil
 }
-func (f *fakePG) Backups() []pg.Backup      { return f.backups }
+func (f *fakePG) Backups() []pg.Backup { return f.backups }
+func (f *fakePG) BackupFile(id string) (pg.Backup, string, error) {
+	for _, entry := range f.backups {
+		if entry.ID == id {
+			return entry, "/tmp/" + entry.ID, nil
+		}
+	}
+	return pg.Backup{}, "", errors.New("unknown backup")
+}
+func (f *fakePG) ImportBackup(database string, source io.Reader) (pg.Backup, error) {
+	data, err := io.ReadAll(source)
+	if err != nil {
+		return pg.Backup{}, err
+	}
+	entry := pg.Backup{ID: "uploaded", Database: database, Status: "ok", Manual: true, Bytes: int64(len(data))}
+	f.backups = append(f.backups, entry)
+	return entry, nil
+}
 func (f *fakePG) DeleteBackup(string) error { return nil }
 func (f *fakePG) Restore(context.Context, pg.RestoreRequest) (pg.RestoreResult, error) {
 	return pg.RestoreResult{Target: "app_restore"}, nil

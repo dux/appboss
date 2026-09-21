@@ -36,6 +36,10 @@ import (
 const maxRequestBody = 1 << 20
 const maxHookBody = 1 << 20
 
+// maxBackupUpload bounds an uploaded dump. A database archive has nothing to do with the JSON
+// body cap, and a plain-SQL dump zips down far below this.
+const maxBackupUpload = 4 << 30
+
 //go:embed static/*
 var assets embed.FS
 
@@ -283,6 +287,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.pgBackup(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/backup/delete":
 		h.pgDeleteBackup(w, r, session)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/pg/backup/download":
+		h.pgDownloadBackup(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/backup/upload":
+		h.pgUploadBackup(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/restore":
 		h.pgRestore(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/drop":

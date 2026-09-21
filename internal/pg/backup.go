@@ -31,6 +31,79 @@ const (
 // Backups lists every recorded dump, newest first.
 func (s *Service) Backups() []Backup { return s.catalog.list() }
 
+// BackupFile returns a recorded dump and its path on disk, for the console download. The archive
+// is handed out exactly as it was written, so it can be uploaded to another host.
+func (s *Service) BackupFile(id string) (Backup, string, error) {
+	entry, ok := s.catalog.get(id)
+	if !ok {
+		return Backup{}, "", fmt.Errorf("unknown backup %q", id)
+	}
+	if entry.Status != "ok" {
+		return Backup{}, "", fmt.Errorf("backup %q did not complete", id)
+	}
+	path, err := fetch(entry)
+	if err != nil {
+		return Backup{}, "", err
+	}
+	return entry, path, nil
+}
+
+// ImportBackup stores an archive an operator uploaded. The bytes land verbatim under the
+// database's backup directory and the entry is recorded as manual, so it restores through the
+// normal path and rotation never removes it.
+func (s *Service) ImportBackup(database string, source io.Reader) (Backup, error) {
+	if err := validDatabaseName(database); err != nil {
+		return Backup{}, err
+	}
+	s.mu.RLock()
+	opts := s.opts
+	s.mu.RUnlock()
+
+	dir, err := s.dumpDir(opts, database)
+	if err != nil {
+		return Backup{}, err
+	}
+	temp, err := os.CreateTemp(dir, ".upload-*.zip")
+	if err != nil {
+		return Backup{}, err
+	}
+	tempPath := temp.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+	_, copyErr := io.Copy(temp, source)
+	if closeErr := temp.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		return Backup{}, copyErr
+	}
+	if err := readableArchive(tempPath); err != nil {
+		return Backup{}, err
+	}
+
+	started := time.Now()
+	name, finalPath := uniqueDump(dir, database, started)
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		return Backup{}, err
+	}
+	size, err := fileSize(finalPath)
+	if err != nil {
+		return Backup{}, err
+	}
+	sum, err := fileSHA256(finalPath)
+	if err != nil {
+		return Backup{}, err
+	}
+	entry := Backup{
+		ID: name, Database: database, Time: started.UTC().Format(time.RFC3339), Status: "ok", Manual: true,
+		Bytes: size, SHA256: sum, LocalPath: finalPath,
+	}
+	if err := s.catalog.record(entry); err != nil {
+		return entry, err
+	}
+	logx.Infof("postgres backup uploaded: %s %s %s", database, humanBytes(size), entry.Time)
+	return entry, nil
+}
+
 // DeleteBackup removes one recorded dump from disk and the catalog.
 func (s *Service) DeleteBackup(id string) error {
 	entry, ok := s.catalog.get(id)
@@ -100,13 +173,14 @@ func (s *Service) BackupDatabase(ctx context.Context, database string, manual bo
 // archive and record the result.
 func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts options, database string, manual bool) (Backup, error) {
 	started := time.Now()
-	name := dumpName(database, started)
-	entry := Backup{ID: name, Database: database, Time: started.UTC().Format(time.RFC3339), Status: "ok", Manual: manual}
+	entry := Backup{Database: database, Time: started.UTC().Format(time.RFC3339), Status: "ok", Manual: manual}
 
 	dir, err := s.dumpDir(opts, database)
 	if err != nil {
 		return s.failed(entry, started, err)
 	}
+	name, finalPath := uniqueDump(dir, database, started)
+	entry.ID = name
 	temp, err := os.CreateTemp(dir, ".dump-*.sql")
 	if err != nil {
 		return s.failed(entry, started, err)
@@ -118,7 +192,6 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	if err := s.execDump(ctx, connConfig, database, sqlPath); err != nil {
 		return s.failed(entry, started, err)
 	}
-	finalPath := filepath.Join(dir, name)
 	if err := zipSQL(sqlPath, finalPath); err != nil {
 		return s.failed(entry, started, err)
 	}
@@ -254,6 +327,46 @@ func (s *Service) prune() {
 
 func dumpName(database string, at time.Time) string {
 	return "BACKUP_" + at.UTC().Format("2006-01-02T15-04-05Z") + ".zip"
+}
+
+// uniqueDump names a dump and returns its path. The stamp is second-resolution, so a second dump
+// within the same second takes a suffix rather than overwriting the first and stealing its id.
+func uniqueDump(dir, database string, at time.Time) (string, string) {
+	name := dumpName(database, at)
+	path := filepath.Join(dir, name)
+	for index := 2; ; index++ {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return name, path
+		}
+		name = fmt.Sprintf("%s_%d.zip", strings.TrimSuffix(dumpName(database, at), ".zip"), index)
+		path = filepath.Join(dir, name)
+	}
+}
+
+// validDatabaseName keeps an uploaded archive inside the backup directory. PostgreSQL identifiers
+// stop at 63 bytes, so anything longer is a typo or an attempt at something else.
+func validDatabaseName(database string) error {
+	if database == "" {
+		return errors.New("database name is required")
+	}
+	if len(database) > 63 || strings.ContainsAny(database, `/\`) || strings.Contains(database, "..") || strings.HasPrefix(database, ".") {
+		return fmt.Errorf("%q is not a valid database name", database)
+	}
+	return nil
+}
+
+// readableArchive is the upload's integrity check: a truncated or mistyped file fails here rather
+// than at restore time, when a target database is already on the line.
+func readableArchive(path string) error {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("upload is not a readable zip archive: %w", err)
+	}
+	defer reader.Close()
+	if len(reader.File) == 0 {
+		return errors.New("upload is an empty zip archive")
+	}
+	return nil
 }
 
 func fileSize(path string) (int64, error) {

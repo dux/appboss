@@ -328,10 +328,16 @@ code {
   border-color: rgb(4 32 69 / 24%);
 }
 
-.btn:disabled {
+.btn:disabled,
+.btn.disabled {
   opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+/* A label used as a file picker cannot be :disabled, so the class also has to stop the click. */
+.btn.disabled {
+  pointer-events: none;
 }
 
 .btn-primary {
@@ -1119,6 +1125,11 @@ input[type="radio"] {
 
 .pg-backups {
   padding: 4px 20px 12px;
+}
+
+/* The upload row sits above the backup list, which drops its own first border. */
+.pg-backup-upload {
+  border-bottom: 1px solid var(--border);
 }
 
 .pg-backup-line {
