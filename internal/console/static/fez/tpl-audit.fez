@@ -2,9 +2,9 @@
   class {
     init() {
       this.state.rows = []
-      this.state.app = ''
-      this.state.actor = ''
-      this.state.action = ''
+      this.state.app = Pjax.hqs('app') || ''
+      this.state.actor = Pjax.hqs('actor') || ''
+      this.state.action = Pjax.hqs('action') || ''
       this.state.loading = false
       this.state.error = ''
     }
@@ -36,6 +36,7 @@
 
     setFilter(key, value) {
       this.state[key] = value
+      Dboss.setQs(key, value)
     }
 
     stamp(value) {

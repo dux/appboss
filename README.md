@@ -5,8 +5,9 @@ It runs the processes described by each app's `dboss.yaml`, hands every process 
 A built-in management console shows live state, controls the supervisor, edits the config files on disk and searches the logs.
 Daemon features are modules with a common lifecycle, so a new one (an ingestion sink, a security filter) plugs in at one place.
 
-It sits directly behind Cloudflare as the origin.
-There is no TLS, no containers and no deploy logic; rsync, releases and rollback stay in lux-deploy, which calls `dboss` at the end of a deploy.
+It sits directly behind Cloudflare as the origin, which is the preferred edge but not a requirement.
+TLS terminates at Cloudflare by default; set `proxy.tls.listen` and dboss terminates HTTPS itself with Let's Encrypt certificates obtained on demand for the hosts it already serves.
+There are no containers and no deploy logic; rsync, releases and rollback stay in lux-deploy, which calls `dboss` at the end of a deploy.
 The configuration reference ships in the binary: `dboss config --reference`, also embedded from `./internal/config/reference.yaml`.
 
 ## Requirements
@@ -17,16 +18,55 @@ The configuration reference ships in the binary: `dboss config --reference`, als
 
 ## Install
 
+One script installs the binary and, with a flag, sets up the host it runs.
+It asks GitHub for the latest release, downloads the `linux` or `darwin` build for the machine's architecture (`amd64` or `arm64`), verifies it against the release checksums and installs it as `/usr/local/bin/dboss`.
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh          # binary only
+curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh -s -- --help
 ```
 
-The installer asks GitHub for the latest release, downloads the `linux` or `darwin` binary for the machine's architecture (`amd64` or `arm64`), verifies it against the release checksums and installs it as `/usr/local/bin/dboss`.
-Set `DBOSS_INSTALL_DIR` to change the target, or `DBOSS_VERSION` (for example `v0.1.0`) to pin a release:
+Set `DBOSS_INSTALL_DIR` to change the target, or `DBOSS_VERSION` (for example `v0.1.0`) to pin a release.
+
+### Development (macOS or Linux)
 
 ```sh
-DBOSS_INSTALL_DIR=$HOME/bin DBOSS_VERSION=v0.1.0 \
-  curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sh -s -- --dev
+cd ./dboss && dboss start
+```
+
+`--dev` creates `./dboss/apps` and writes a starter `./dboss/dboss.yaml` from `dboss init service`; `--dir` puts it somewhere else.
+Nothing is installed as a service and no `sudo` is needed: on a terminal a `proxy.listen` port this session may not bind moves to the first free port of `ports.range`, and the daemon logs the address it took.
+Stop it with Ctrl-C, which stops every app with it.
+
+### Production (Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sudo sh -s -- --server --user deploy
+```
+
+`--server` needs root once, to write `/etc/systemd/system/dboss.service`. Everything after that runs unprivileged. It:
+
+* creates `/srv/dboss/apps` and a starter `/srv/dboss/dboss.yaml` when they are not there yet (`--dir` moves the host),
+* gives the whole directory to `--user`, so `state_dir`, `log_dir`, the certificate cache and the generated hook and pubsub secrets belong to the service user from the first start,
+* runs `dboss check` as the gate, then `dboss systemd --install` to write, reload and enable the unit.
+
+The user must already exist - reuse the account lux-deploy rsyncs with, so releases, app-written files and logs all have one owner and the control socket needs no group setup.
+The unit runs the daemon as that user with `CAP_NET_BIND_SERVICE`, so it binds `:80` and `:443` without being root.
+
+Then set `management.host` and `management.auth.admin_emails` in `/srv/dboss/dboss.local.yaml` (server-only, gitignored, never touched by a deploy), restart, and sign in:
+
+```sh
+sudo systemctl restart dboss
+dboss login
+```
+
+Check it came up unprivileged:
+
+```sh
+systemctl status dboss
+ps -o user= -p $(systemctl show -p MainPID --value dboss)   # the deploy user, not root
+dboss doctor
 ```
 
 Releases are built by `.github/workflows/release.yml` on every `v*` tag push; building from source is still the option below and needs Go 1.25+.
@@ -40,6 +80,8 @@ make demo             # builds, then runs the host session on ./demo/dboss.yaml
 
 The demo listens on `:80` and hosts three apps.
 Binding port 80 needs root or `CAP_NET_BIND_SERVICE`, so `make demo` runs the daemon through `sudo`.
+Without it the demo still comes up: on a terminal a `proxy.listen` port the process may not bind moves to the first free port of `ports.range`, and the daemon logs the address it actually took.
+The URLs below then need that port, for example `http://bun.lvh.me:3101`.
 
 * http://dboss.lvh.me - management console
 * http://sinatra.lvh.me - Ruby app (`autostart: false`, wakes on first request; needs the Ruby from `./demo/apps/sinatra/mise.toml` and `bundle install`)
@@ -81,15 +123,16 @@ App file (`./demo/apps/bun/dboss.yaml`):
 procfile:
   web:
     command: ./start.sh
-    domains: [bun.lvh.me]
+    hosts: [bun.lvh.me]
     health: /up
 ```
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
-Every process that declares `domains` is a web process, and an app may have several, each serving its own hostnames; a process with only a command is a background worker. Running dboss inside an app folder with no domains binds the first process to `.lvh.me`.
+When it does not have either and stdout is a terminal, the proxy falls back to the first free port of `ports.range` instead of exiting, so developing against an app needs no sudo; under systemd stdout is a pipe and the bind failure is still fatal.
+Every process that declares `hosts` is a web process, and an app may have several, each serving its own hostnames; a process with only a command is a background worker. Running dboss inside an app folder with no hosts binds the first process to `.lvh.me`.
 Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` equals `allow_ips: [10.0.0.0/8]`.
-A leading `*.` in a domain matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `domains: .myapp.com` covers `myapp.com` and `*.myapp.com`.
-The web process can also set `canonical_host` (one of its domains); every other domain answers 301 to it, so `www` never serves content.
+A leading `*.` in a host matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `hosts: .myapp.com` covers `myapp.com` and `*.myapp.com`.
+The web process can also set `canonical_host` (one of its hosts); every other host answers 301 to it, so `www` never serves content.
 `proxy.listen` and `management.host` are such lists: several listen addresses each get a listener with the same routing, and several console hostnames are all accepted.
 A `$NAME` in a value is replaced with that variable from the daemon's environment at load time, so `url: $ALERT_WEBHOOK_URL` keeps a secret out of the file; only all-uppercase names expand, an unset name stays as written, and `procfile` and cron commands are never expanded because they are runtime shell lines.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
@@ -241,13 +284,13 @@ With no `secret` in the config, dboss generates a 64-character secret under `sta
 
 ## PubSub channels
 
-A web process can serve a pub/sub hub on its domains. Set `pubsub` and dboss answers the path instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it. `pubsub: true` uses `/socketio`, `pubsub: /path` sets a custom prefix, and a mapping sets the full options:
+A web process can serve a pub/sub hub on its hosts. Set `pubsub` and dboss answers the path instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it. `pubsub: true` uses `/socketio`, `pubsub: /path` sets a custom prefix, and a mapping sets the full options:
 
 ```yaml
 procfile:
   web:
     command: ./start.sh
-    domains: [myapp.com]
+    hosts: [myapp.com]
     pubsub: true            # or /socketio, or a mapping
     # pubsub:
     #   path: /socketio
@@ -259,7 +302,7 @@ procfile:
     #   test: false              # serve the browser self-test at <path>/_test
 ```
 
-`pubsub` lives on a web process, because the hub is served on that process's domains. An app with several web processes may run one hub per process, each with its own path, secret and channels.
+`pubsub` lives on a web process, because the hub is served on that process's hosts. An app with several web processes may run one hub per process, each with its own path, secret and channels.
 
 **Subscribe.** A `GET <path>/<channel>` upgrades to a WebSocket, or streams SSE when the request carries no `Upgrade` header. Messages are `{"event","data","ts"}`; the last `replay` are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher.
 
@@ -444,7 +487,7 @@ Single-app mode cannot destroy itself, and retained logs, audit rows and config 
 
 On the way to an app the proxy adds `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Real-IP` when they are missing; whatever Cloudflare sent is left untouched. `X-Forwarded-For` is appended by the reverse proxy.
 
-An app's processes start with the web processes (the ones with `domains`) first, then the rest in name order, so a web process that expects other services to be up still gets that.
+An app's processes start with the web processes (the ones with `hosts`) first, then the rest in name order, so a web process that expects other services to be up still gets that.
 
 ## Audit log
 

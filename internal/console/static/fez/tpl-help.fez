@@ -53,7 +53,7 @@
     procfile:
       web:
         command: ./start.sh
-        domains: [shop.example.com]
+        hosts: [shop.example.com]
         health: /up
     `,
     supervision: `
@@ -80,7 +80,7 @@
     procfile:
       web:
         command: ./start.sh
-        domains:
+        hosts:
           - shop.example.com
           - www.shop.example.com
         canonical_host: shop.example.com
@@ -108,7 +108,7 @@
     procfile:
       web:
         command: ./start.sh
-        domains: [shop.example.com]
+        hosts: [shop.example.com]
         static: ./public
     static_immutable: [/assets/, /packs/]
     error_page_path: public/error_500.html
@@ -144,7 +144,7 @@
     procfile:
       web:
         command: ./start.sh
-        domains: [shop.example.com]
+        hosts: [shop.example.com]
         pubsub:
           path: /socketio
           replay: 10
@@ -209,7 +209,7 @@
 
   class {
     init() {
-      this.state.topic = 'intro'
+      this.state.topic = Pjax.hqs('topic') || 'intro'
       this.state.groups = GROUPS
       this.state.features = GROUPS[1].topics
       this.state.examples = EXAMPLES
@@ -217,6 +217,7 @@
 
     select(id) {
       this.state.topic = id
+      Dboss.setQs('topic', id === 'intro' ? '' : id)
       if (this.state.pane) this.state.pane.scrollTop = 0
     }
   }
@@ -318,7 +319,7 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
-        <p>All process types run at once; every process that declares <code>domains</code> is a web process and gets proxied traffic on those domains. An app may run several web processes, each with its own domains, health check, canonical host and realtime hub. They start first, then the rest by name. A process with no <code>domains</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
+        <p>All process types run at once; every process that declares <code>hosts</code> is a web process and gets proxied traffic on those hosts. An app may run several web processes, each with its own hosts, health check, canonical host and realtime hub. They start first, then the rest by name. A process with no <code>hosts</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
           <li><code>health</code> on a web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
@@ -355,7 +356,7 @@
     {#if state.topic === 'routing'}
       <section>
         <h2>Routing</h2>
-        <p>Each web process lists the hostnames it answers in <code>domains</code>. The proxy reads the request <code>Host</code>, picks the app, then forwards to the web process that owns that host. Background processes never get traffic.</p>
+        <p>Each web process lists the hostnames it answers in <code>hosts</code>. The proxy reads the request <code>Host</code>, picks the app, then forwards to the web process that owns that host. Background processes never get traffic.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Hosting many sites on one port 80 without writing an nginx vhost per app.</li>
@@ -369,7 +370,7 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.routing" />
         <h3>Details</h3>
-        <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>domains: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list, and in single-app dev mode a process with no domains is bound to <code>.lvh.me</code>.</p>
+        <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list, and in single-app dev mode a process with no hosts is bound to <code>.lvh.me</code>.</p>
         <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy. A host no app matches gets <code>proxy.wake.unknown_page</code>.</p>
         <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, health endpoint, <code>auth</code> sign-in, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward. Forwarded headers (<code>X-Forwarded-Proto</code>, <code>X-Forwarded-Host</code>, <code>X-Real-IP</code>) are added only when missing, so Cloudflare's values win.</p>
       </section>

@@ -1,7 +1,7 @@
 procfile:
   web:
     command: ./start.sh
-    domains:
+    hosts:
       - button.lvh.me
     # Serves a realtime hub at http://button.lvh.me/socketio; open /socketio/_test for the live test.
     pubsub:

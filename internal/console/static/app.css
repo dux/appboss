@@ -27,6 +27,11 @@
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+html {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1891,27 +1896,9 @@ input[type="radio"] {
 
 .log-level[data-level="debug"] { color: var(--muted); }
 
-.log-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-.log-page > .fez-db-log-shell {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.log-page .log-navbar { flex: 0 0 auto; }
-
-.log-page .fez-db-log-view {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
+.route-loading,
+.route-missing {
+  padding: 24px 0;
 }
 
 .log-view {
@@ -1926,12 +1913,6 @@ input[type="radio"] {
 
 .view .log-view {
   min-height: 560px;
-}
-
-.log-view-page {
-  flex: 1 1 auto;
-  margin: 12px;
-  min-height: 0;
 }
 
 .log-nav {

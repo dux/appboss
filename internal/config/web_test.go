@@ -10,7 +10,7 @@ import (
 func TestStaticAndErrorPageKeys(t *testing.T) {
 	dir := t.TempDir()
 	defaults := Default().Defaults
-	base := "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n"
+	base := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n"
 	app, err := ParseApp([]byte(base), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)

@@ -370,15 +370,15 @@ func TestConsoleServesFavicon(t *testing.T) {
 	}
 }
 
-func TestConsoleServesLogViewerPageAndTextExport(t *testing.T) {
+func TestConsoleServesShellAndLogTextExport(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)
-	page := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/logs?app=sinatra", nil)
+	page := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/?app=sinatra", nil)
 	page.AddCookie(cookie)
 	pageResponse := httptest.NewRecorder()
 	handler.ServeHTTP(pageResponse, page)
-	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "db-log-view") {
-		t.Fatalf("unexpected viewer page: %d %s", pageResponse.Code, pageResponse.Body.String())
+	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "route-outlet") {
+		t.Fatalf("unexpected shell page: %d %s", pageResponse.Code, pageResponse.Body.String())
 	}
 
 	text := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/logs.txt?app=sinatra&channel=stdout", nil)

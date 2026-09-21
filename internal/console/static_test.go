@@ -9,62 +9,56 @@ import (
 	"dboss/internal/config"
 )
 
-// Every nav tab must resolve in viewFromHash or its section never renders.
+// Every nav route must resolve to a tpl-<name>.fez in db-shell.fez, or its section never renders.
 // The #help tab silently lost its case once, so guard the pairing from here.
-func TestEveryConsoleTabIsRouted(t *testing.T) {
+func TestEveryConsoleRouteHasTemplate(t *testing.T) {
 	data, err := assets.ReadFile("static/fez/db-shell.fez")
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell := string(data)
-	tabs := regexp.MustCompile(`href="#([a-z]+)"`).FindAllStringSubmatch(shell, -1)
-	if len(tabs) == 0 {
-		t.Fatal("no nav tabs found in db-shell.fez")
+	routes := regexp.MustCompile(`\{\s*name:\s*'([a-z0-9-]+)'`).FindAllStringSubmatch(string(data), -1)
+	if len(routes) == 0 {
+		t.Fatal("no routes found in db-shell.fez")
 	}
-	for _, tab := range tabs {
-		view := tab[1]
-		if view == "overview" {
-			continue // the fallback view
-		}
-		if !strings.Contains(shell, "location.hash === '#"+view+"'") {
-			t.Errorf("nav tab #%s has no viewFromHash case", view)
+	for _, route := range routes {
+		path := "static/fez/tpl-" + route[1] + ".fez"
+		if _, err := assets.ReadFile(path); err != nil {
+			t.Errorf("route %q has no %s", route[1], path)
 		}
 	}
 }
 
-// The visual config form is a child of db-config, so index.html must load it before db-config.
+// db-config-form is preloaded in index.html while tpl-config is fetched per route, so the form
+// is always compiled before the page that uses it.
 func TestConfigFormComponentIsLoaded(t *testing.T) {
 	index, err := assets.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	html := string(index)
-	form := strings.Index(html, `fez="/assets/fez/db-config-form.fez"`)
-	parent := strings.Index(html, `fez="/assets/fez/db-config.fez"`)
-	if form < 0 || parent < 0 || form > parent {
-		t.Error("index.html must load db-config-form.fez before db-config.fez")
+	if !strings.Contains(string(index), `fez="/assets/fez/db-config-form.fez"`) {
+		t.Error("index.html must load db-config-form.fez")
 	}
-	if _, err := assets.ReadFile("static/fez/db-config-form.fez"); err != nil {
-		t.Fatalf("db-config-form.fez is not embedded: %v", err)
+	if _, err := assets.ReadFile("static/fez/tpl-config.fez"); err != nil {
+		t.Fatalf("tpl-config.fez is not embedded: %v", err)
 	}
 }
 
 // Help feature pages list their config keys by path and render them from the registry,
 // so a renamed or removed key must fail here instead of silently vanishing from the page.
 func TestHelpKeyPathsExist(t *testing.T) {
-	data, err := assets.ReadFile("static/fez/db-help.fez")
+	data, err := assets.ReadFile("static/fez/tpl-help.fez")
 	if err != nil {
 		t.Fatal(err)
 	}
 	lists := regexp.MustCompile(`<db-config-keys paths="([^"]+)"`).FindAllStringSubmatch(string(data), -1)
 	if len(lists) == 0 {
-		t.Fatal("no feature key lists found in db-help.fez")
+		t.Fatal("no feature key lists found in tpl-help.fez")
 	}
 	known := config.KeyPaths()
 	for _, list := range lists {
 		for _, path := range strings.Split(list[1], ",") {
 			if !slices.Contains(known, path) {
-				t.Errorf("db-help.fez lists unknown config key %q", path)
+				t.Errorf("tpl-help.fez lists unknown config key %q", path)
 			}
 		}
 	}

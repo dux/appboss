@@ -9,7 +9,7 @@ import (
 )
 
 func TestStartOrderPutsWebFirst(t *testing.T) {
-	cfg := hookConfig(t, [2]int{33040, 33060}, "procfile:\n  alpha: /usr/bin/true\n  web:\n    command: /usr/bin/true\n    domains: [demo.test]\n  zeta: /usr/bin/true\nautostart: false\n")
+	cfg := hookConfig(t, [2]int{33040, 33060}, "procfile:\n  alpha: /usr/bin/true\n  web:\n    command: /usr/bin/true\n    hosts: [demo.test]\n  zeta: /usr/bin/true\nautostart: false\n")
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)

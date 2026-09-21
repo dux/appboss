@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"dboss/internal/config"
+	"dboss/internal/res"
 )
 
 const unitPath = "/etc/systemd/system/dboss.service"
@@ -55,7 +56,11 @@ func (c CLI) systemd(args []string) error {
 			return err
 		}
 	}
-	unit := renderUnit(cfg, *userName, *groupName, *binary)
+	home := ""
+	if account, lookupErr := user.Lookup(*userName); lookupErr == nil {
+		home = account.HomeDir
+	}
+	unit := renderUnit(cfg, *userName, *groupName, *binary, home)
 	if !*install {
 		_, err := fmt.Fprint(c.Out, unit)
 		return err
@@ -74,7 +79,7 @@ func (c CLI) systemd(args []string) error {
 	return nil
 }
 
-func renderUnit(cfg config.Config, userName, groupName, binary string) string {
+func renderUnit(cfg config.Config, userName, groupName, binary, home string) string {
 	// Omit Group unless asked: systemd then uses the user's primary group, which need not be
 	// named after the user.
 	groupLine := ""
@@ -89,6 +94,8 @@ After=network.target
 Type=simple
 User=%s
 %sWorkingDirectory=%s
+Environment=PATH=%s
+ExecStartPre=+/bin/sh -c 'mkdir -p %s && chown -R %s %s || true'
 ExecStart=%s start -c %s
 Restart=always
 RestartSec=2
@@ -100,7 +107,20 @@ LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-`, cfg.Dir, userName, groupLine, cfg.Dir, quoteUnit(binary), quoteUnit(cfg.SourcePath))
+`, cfg.Dir, userName, groupLine, cfg.Dir, servicePATH(home), res.DefaultCgroupRoot, userName, res.DefaultCgroupRoot, quoteUnit(binary), quoteUnit(cfg.SourcePath))
+}
+
+// systemPATH is what systemd hands a unit that sets no PATH of its own.
+const systemPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// servicePATH puts the service user's own bin directories first. mise installs itself in
+// ~/.local/bin, and `apps.miseEnvironment` shells out to it, so without this the daemon cannot
+// find mise and every app with a mise.toml silently runs on the system toolchain.
+func servicePATH(home string) string {
+	if home == "" {
+		return systemPATH
+	}
+	return home + "/.local/bin:" + home + "/bin:" + systemPATH
 }
 
 // quoteUnit wraps a value in systemd's double quotes and escapes the two characters systemd

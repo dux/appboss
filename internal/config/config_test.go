@@ -41,13 +41,13 @@ func TestCanonicalHostAcceptsAShorthandPattern(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 	defaults := Default().Defaults
-	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [\".demo.test\"]\n    canonical_host: demo.test\n"), path, defaults); err != nil {
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [\".demo.test\"]\n    canonical_host: demo.test\n"), path, defaults); err != nil {
 		t.Fatalf("canonical host covered by shorthand: %v", err)
 	}
-	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [\".demo.test\"]\n    canonical_host: other.test\n"), path, defaults); err == nil {
-		t.Fatal("canonical host outside domains was accepted")
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [\".demo.test\"]\n    canonical_host: other.test\n"), path, defaults); err == nil {
+		t.Fatal("canonical host outside hosts was accepted")
 	}
-	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./worker\n    canonical_host: demo.test\n"), path, defaults); err == nil {
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n  worker:\n    command: ./worker\n    canonical_host: demo.test\n"), path, defaults); err == nil {
 		t.Fatal("canonical host on a non-web process was accepted")
 	}
 }
@@ -75,7 +75,7 @@ func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 func TestLoadSingleAppRoot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nidle_stop: 0s\nproxy:\n  listen: 127.0.0.1:9090\n")
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\nidle_stop: 0s\nproxy:\n  listen: 127.0.0.1:9090\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestLoadAppRequiresProcfileAndRejectsHostKeys(t *testing.T) {
 	if _, err := LoadApp(path, Default().Defaults); err == nil {
 		t.Fatal("expected missing procfile error")
 	}
-	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n")
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n")
 	app, err := LoadApp(path, Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
@@ -232,11 +232,11 @@ func TestParseAppDeletableDefaultsToFalse(t *testing.T) {
 func TestListKeysAcceptScalarOrSequence(t *testing.T) {
 	dir := t.TempDir()
 	defaults := Default().Defaults
-	scalar, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: demo.test\nstatic_immutable: /packs/\nallow_ips: 10.0.0.0/8\n"), filepath.Join(dir, FileName), defaults)
+	scalar, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: demo.test\nstatic_immutable: /packs/\nallow_ips: 10.0.0.0/8\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sequence, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nstatic_immutable: [/packs/]\nallow_ips: [10.0.0.0/8]\n"), filepath.Join(dir, FileName), defaults)
+	sequence, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\nstatic_immutable: [/packs/]\nallow_ips: [10.0.0.0/8]\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	defaults.Env = map[string]string{"A": "host", "B": "host"}
 	defaults.Headers = map[string]string{"X-Frame-Options": "DENY"}
 	defaults.BasicAuth = map[string]string{"ops": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}
-	data := "procfile:\n  web:\n    command: ./server\n    domains: [demo.test, www.demo.test]\n    canonical_host: demo.test\n    static: ./public\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
+	data := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test, www.demo.test]\n    canonical_host: demo.test\n    static: ./public\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
 	app, err := ParseApp([]byte(data), "app/dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +463,7 @@ func TestUnhealthyThreshold(t *testing.T) {
 
 func TestWebHealthPath(t *testing.T) {
 	defaults := Default().Defaults
-	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    health: /up\n  worker: ./worker.sh\n"), "dboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    health: /up\n  worker: ./worker.sh\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,10 +474,10 @@ func TestWebHealthPath(t *testing.T) {
 		t.Fatalf("worker health = %q, want tcp", got)
 	}
 	for name, data := range map[string]string{
-		"worker":    "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./worker.sh\n    health: /up\n",
-		"scheme":    "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    health: http:/up\n",
-		"app level": "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nhealth: /up\n",
-		"process":   "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\nprocesses:\n  web:\n    health: /up\n",
+		"worker":    "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n  worker:\n    command: ./worker.sh\n    health: /up\n",
+		"scheme":    "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    health: http:/up\n",
+		"app level": "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\nhealth: /up\n",
+		"process":   "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\nprocesses:\n  web:\n    health: /up\n",
 	} {
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("%s health should be rejected", name)
@@ -489,7 +489,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 	defaults := Default().Defaults
 	for _, test := range []struct{ name, data, want string }{
 		{"web key under process", "procfile:\n  web: ./server\nprocesses:\n  web:\n    static: ./public\n", "processes.web.static: unknown key"},
-		{"canonical host", "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    canonical_host: www.demo.test\n", "not one of the domains"},
+		{"canonical host", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    canonical_host: www.demo.test\n", "not one of the hosts"},
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
@@ -499,7 +499,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"auth session ttl", "procfile:\n  web: ./server\nauth:\n  session_ttl: 0s\n", "auth.session_ttl"},
 		{"authcog empty path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: \"\"\n", "authcog.path"},
 		{"authcog bad path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: bad\n", "authcog.path"},
-		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: /authcog\nauthcog:\n  login: true\n", "authcog.path"},
+		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: /authcog\nauthcog:\n  login: true\n", "authcog.path"},
 		{"authcog bad realm", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  realm: a.b\n", "authcog.realm"},
 		{"alerts window", "procfile:\n  web: ./server\nalerts:\n  window: 0s\n", "alerts.window"},
 		{"alerts error rate", "procfile:\n  web: ./server\nalerts:\n  error_rate: 101\n", "alerts.error_rate"},
@@ -720,7 +720,7 @@ func TestErrorsPointAtLineAndKey(t *testing.T) {
 
 func TestMultipleWebProcesses(t *testing.T) {
 	defaults := Default().Defaults
-	data := "procfile:\n  shop:\n    command: ./shop\n    domains: [shop.test, www.shop.test]\n    canonical_host: shop.test\n    pubsub: /events\n  admin:\n    command: ./admin\n    domains: [admin.test]\n    canonical_host: admin.test\n    pubsub:\n      path: /events\n      replay: 3\n"
+	data := "procfile:\n  shop:\n    command: ./shop\n    hosts: [shop.test, www.shop.test]\n    canonical_host: shop.test\n    pubsub: /events\n  admin:\n    command: ./admin\n    hosts: [admin.test]\n    canonical_host: admin.test\n    pubsub:\n      path: /events\n      replay: 3\n"
 	app, err := ParseApp([]byte(data), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
@@ -737,7 +737,7 @@ func TestMultipleWebProcesses(t *testing.T) {
 		t.Fatalf("unexpected shop: %+v", shop)
 	}
 	// A host pattern used by two processes of one app is rejected.
-	duplicate := "procfile:\n  a:\n    command: ./a\n    domains: [same.test]\n  b:\n    command: ./b\n    domains: [same.test]\n"
+	duplicate := "procfile:\n  a:\n    command: ./a\n    hosts: [same.test]\n  b:\n    command: ./b\n    hosts: [same.test]\n"
 	if _, err := ParseApp([]byte(duplicate), "dboss.yaml", defaults); err == nil {
 		t.Fatal("a duplicate host across two web processes was accepted")
 	}
@@ -749,7 +749,7 @@ func TestPubsubConfig(t *testing.T) {
 		t.Fatalf("unexpected pubsub defaults: %+v", defaultPubsub)
 	}
 
-	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub:\n      path: /socketio\n      replay: 0\n"), "dboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub:\n      path: /socketio\n      replay: 0\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,11 +763,11 @@ func TestPubsubConfig(t *testing.T) {
 	}
 
 	// `pubsub: true` is the default path; a bare string sets a custom one.
-	shorthand, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: true\n"), "dboss.yaml", defaults)
+	shorthand, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: true\n"), "dboss.yaml", defaults)
 	if err != nil || shorthand.WebProcesses[0].Pubsub.Path != DefaultPubsubPath {
 		t.Fatalf("pubsub: true = %+v, %v", shorthand.WebProcesses, err)
 	}
-	custom, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: /events\n"), "dboss.yaml", defaults)
+	custom, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: /events\n"), "dboss.yaml", defaults)
 	if err != nil || custom.WebProcesses[0].Pubsub.Path != "/events" || custom.WebProcesses[0].Pubsub.Replay != 10 {
 		t.Fatalf("pubsub: /events = %+v, %v", custom.WebProcesses, err)
 	}
@@ -775,7 +775,7 @@ func TestPubsubConfig(t *testing.T) {
 	// The top-level block is gone, and pubsub is web-process-only.
 	for _, data := range []string{
 		"procfile:\n  web: ./server\npubsub:\n  path: /socketio\n",
-		"procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: true\n",
+		"procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: true\n",
 		"procfile:\n  web:\n    command: ./server\n    pubsub: true\n",
 	} {
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
@@ -784,7 +784,7 @@ func TestPubsubConfig(t *testing.T) {
 	}
 
 	for _, path := range []string{"/", "socketio", "/socketio/", "/socket io", "/a//b", "/a$b"} {
-		data := "procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub: \"" + path + "\"\n"
+		data := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: \"" + path + "\"\n"
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("path %q should be invalid", path)
 		}
@@ -802,26 +802,26 @@ func TestProcessSpecShapesAndKeys(t *testing.T) {
 		t.Fatalf("a scalar process must not be the web process: %+v", app)
 	}
 	// An unknown process key and an unknown pubsub key are both rejected; two web processes are
-	// allowed as long as their domains differ.
+	// allowed as long as their hosts differ.
 	for _, data := range []string{
 		"procfile:\n  web:\n    command: ./server\n    ports: [80]\n",
-		"procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n    pubsub:\n      route: /socketio\n",
+		"procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub:\n      route: /socketio\n",
 	} {
 		if _, err := ParseApp([]byte(data), "dboss.yaml", defaults); err == nil {
 			t.Errorf("expected an error for:\n%s", data)
 		}
 	}
-	two, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  api:\n    command: ./api\n    domains: [api.demo.test]\n"), "dboss.yaml", defaults)
+	two, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n  api:\n    command: ./api\n    hosts: [api.demo.test]\n"), "dboss.yaml", defaults)
 	if err != nil || len(two.WebProcesses) != 2 || len(two.Hosts) != 2 {
 		t.Fatalf("two web processes = %+v, %v", two.WebProcesses, err)
 	}
 	// pubsub: false is off and may sit on any process.
-	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    domains: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: false\n"), "dboss.yaml", defaults); err != nil {
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n  worker:\n    command: ./jobs\n    pubsub: false\n"), "dboss.yaml", defaults); err != nil {
 		t.Fatalf("pubsub: false should be off: %v", err)
 	}
 }
 
-func TestSingleAppModeBindsDevDomain(t *testing.T) {
+func TestSingleAppModeBindsDevHost(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 	writeConfigFile(t, path, "procfile:\n  web: ./server\n  worker: ./jobs\n")
@@ -829,28 +829,28 @@ func TestSingleAppModeBindsDevDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.App == nil || len(cfg.App.WebProcesses) != 1 || cfg.App.WebProcesses[0].Name != "web" || !reflect.DeepEqual(cfg.App.Hosts, List{DevDomain}) {
-		t.Fatalf("single app should bind %s to web: %+v", DevDomain, cfg.App)
+	if cfg.App == nil || len(cfg.App.WebProcesses) != 1 || cfg.App.WebProcesses[0].Name != "web" || !reflect.DeepEqual(cfg.App.Hosts, List{DevHost}) {
+		t.Fatalf("single app should bind %s to web: %+v", DevHost, cfg.App)
 	}
 	// An explicit domain is kept and no dev domain is added.
-	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    domains: [my.test]\n")
+	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    hosts: [my.test]\n")
 	cfg, err = Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(cfg.App.Hosts, List{"my.test"}) {
-		t.Fatalf("explicit domains must win: %+v", cfg.App.Hosts)
+		t.Fatalf("explicit hosts must win: %+v", cfg.App.Hosts)
 	}
-	// pubsub with no domains is fine in single mode: the dev domain serves it.
+	// pubsub with no hosts is fine in single mode: the dev host serves it.
 	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    pubsub: true\n")
 	if _, err := Load(path); err != nil {
-		t.Fatalf("single-mode pubsub without domains: %v", err)
+		t.Fatalf("single-mode pubsub without hosts: %v", err)
 	}
-	// health with no domains binds the dev domain first, then resolves onto the web process.
+	// health with no hosts binds the dev host first, then resolves onto the web process.
 	writeConfigFile(t, path, "procfile:\n  web:\n    command: ./server\n    health: /up\n")
 	cfg, err = Load(path)
 	if err != nil {
-		t.Fatalf("single-mode health without domains: %v", err)
+		t.Fatalf("single-mode health without hosts: %v", err)
 	}
 	if got := cfg.App.Process("web").Health; got != "/up" {
 		t.Fatalf("single-mode health = %q, want /up", got)

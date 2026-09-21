@@ -48,8 +48,13 @@ type Daemon struct {
 	management     *console.Handler
 	notifier       *notify.Notifier
 	servers        []*http.Server
+	listen         []string
 	managementPort int
 }
+
+// netListen is the test seam for the privileged-port fallback: a test cannot provoke a real
+// EACCES portably.
+var netListen = net.Listen
 
 // Build prepares the session: directories, port range, supervisor, modules, the proxy pipeline,
 // the console and the control socket. Listeners bind here, so a returned error leaves nothing
@@ -112,33 +117,34 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 				d.Close()
 				return nil, err
 			}
-			server, err := startHTTPSServer("proxy-tls", cfg.Proxy.TLS.Listen, edge, certs.TLSConfig())
+			listener, err := bind("proxy-tls", cfg.Proxy.TLS.Listen, "proxy.tls.listen")
 			if err != nil {
 				d.Close()
 				return nil, err
 			}
-			d.servers = append(d.servers, server)
+			d.servers = append(d.servers, startHTTPSServer("proxy-tls", listener, edge, certs.TLSConfig()))
 			logx.Infof("proxy tls: %s (acme on demand)", cfg.Proxy.TLS.Listen)
 		}
-		for _, address := range cfg.Proxy.Listen {
+		for index, address := range cfg.Proxy.Listen {
 			handler := http.Handler(edge)
 			if certs != nil && cfg.Proxy.TLS.Redirect {
 				handler = certs.HTTPHandler(nil)
 			}
-			server, err := startHTTPServer("proxy", address, handler)
+			listener, bound, err := bindProxy(address, proxyProcess(index), allocator, echo != nil)
 			if err != nil {
 				d.Close()
 				return nil, err
 			}
-			d.servers = append(d.servers, server)
+			d.servers = append(d.servers, startHTTPServer("proxy", listener, handler))
+			d.listen = append(d.listen, bound)
 		}
 		if management != nil {
-			server, err := startHTTPServer("management", managementAddress(managementPort), management)
+			listener, err := bind("management", managementAddress(managementPort), "ports.range")
 			if err != nil {
 				d.Close()
 				return nil, err
 			}
-			d.servers = append(d.servers, server)
+			d.servers = append(d.servers, startHTTPServer("management", listener, management))
 		}
 	}
 	var login func() (string, string, error)
@@ -165,7 +171,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			logx.Infof("management console: %s (AuthCog sign-in)", publicURL)
 		}
 	}
-	logx.Infof("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.cfg.Proxy.Listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
+	logx.Infof("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
 	<-ctx.Done()
 	return nil
 }
@@ -232,38 +238,79 @@ func edgeHandler(cfg config.Config, service *ops.Service, manager *super.Manager
 	return proxy.CloudflareOnly(cfg.Proxy.CloudflareOnly, edge), management, nil
 }
 
-func startHTTPServer(name, address string, handler http.Handler) (*http.Server, error) {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) {
-			return nil, fmt.Errorf("%s listen %s: %w (port needs CAP_NET_BIND_SERVICE: run the systemd unit, or set proxy.listen to a high port for a hand-run session)", name, address, err)
-		}
-		return nil, fmt.Errorf("%s listen: %w", name, err)
-	}
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+func startHTTPServer(name string, listener net.Listener, handler http.Handler) *http.Server {
+	server := &http.Server{Addr: listener.Addr().String(), Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logx.Errorf("%s: %v", name, err)
 		}
 	}()
-	return server, nil
+	return server
 }
 
 // startHTTPSServer is startHTTPServer with TLS. The certificate comes from the config's
 // GetCertificate, so autocert can issue and renew it without a file or a reload.
-func startHTTPSServer(name, address string, handler http.Handler, tlsConfig *tls.Config) (*http.Server, error) {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) {
-			return nil, fmt.Errorf("%s listen %s: %w (port needs CAP_NET_BIND_SERVICE: run the systemd unit, or set proxy.tls.listen to a high port for a hand-run session)", name, address, err)
-		}
-		return nil, fmt.Errorf("%s listen: %w", name, err)
-	}
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsConfig}
+func startHTTPSServer(name string, listener net.Listener, handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	server := &http.Server{Addr: listener.Addr().String(), Handler: handler, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsConfig}
 	go func() {
 		if err := server.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logx.Errorf("%s: %v", name, err)
 		}
 	}()
-	return server, nil
+	return server
+}
+
+// bind opens a listener, turning a privileged-port refusal into an actionable error; key names
+// the config key that moves the listener off the port.
+func bind(name, address, key string) (net.Listener, error) {
+	listener, err := netListen("tcp", address)
+	if err != nil {
+		return nil, bindError(name, address, key, err)
+	}
+	return listener, nil
+}
+
+func bindError(name, address, key string, err error) error {
+	if errors.Is(err, syscall.EACCES) {
+		return fmt.Errorf("%s listen %s: %w (a port below 1024 needs root or CAP_NET_BIND_SERVICE: install the service with `dboss systemd --install`, start it with sudo, or set %s to a port above 1023)", name, address, err, key)
+	}
+	return fmt.Errorf("%s listen %s: %w", name, address, err)
+}
+
+// bindProxy is bind for a plain proxy address, with the terminal fallback: a hand-run session
+// that may not hold the configured port moves to the first free port of ports.range instead of
+// exiting, so developing against an app needs no sudo. Under systemd stdout is a pipe, so a
+// service start still fails.
+func bindProxy(address, process string, allocator *ports.Allocator, interactive bool) (net.Listener, string, error) {
+	listener, err := netListen("tcp", address)
+	if err == nil {
+		return listener, address, nil
+	}
+	if !interactive || !errors.Is(err, syscall.EACCES) {
+		return nil, "", bindError("proxy", address, "proxy.listen", err)
+	}
+	port, allocErr := allocator.Allocate("dboss", process)
+	if allocErr != nil {
+		return nil, "", bindError("proxy", address, "proxy.listen", err)
+	}
+	host, _, splitErr := net.SplitHostPort(address)
+	if splitErr != nil {
+		return nil, "", bindError("proxy", address, "proxy.listen", err)
+	}
+	fallback := net.JoinHostPort(host, strconv.Itoa(port))
+	listener, err = netListen("tcp", fallback)
+	if err != nil {
+		return nil, "", fmt.Errorf("proxy listen %s: %w", fallback, err)
+	}
+	logx.Warnf("proxy: %s needs root or CAP_NET_BIND_SERVICE; this terminal session listens on %s instead", address, fallback)
+	return listener, fallback, nil
+}
+
+// proxyProcess is the allocator key for the nth proxy.listen entry, so several addresses that
+// all fall back get one port each.
+func proxyProcess(index int) string {
+	if index == 0 {
+		return "proxy"
+	}
+	return "proxy-" + strconv.Itoa(index)
 }

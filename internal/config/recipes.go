@@ -88,7 +88,7 @@ var recipeSpecs = []recipeSpec{
 	{
 		id:          "web",
 		title:       "Web",
-		description: "Static policy and the proxy behaviour in front of the app. Domains, the static directory and the canonical host are declared on the web process in the YAML editor.",
+		description: "Static policy and the proxy behaviour in front of the app. Hosts, the static directory and the canonical host are declared on the web process in the YAML editor.",
 		scope:       RecipeApp,
 		fields: []recipeField{
 			{path: "autostart"},

@@ -17,7 +17,7 @@ func storeFixture(t *testing.T) (*Store, string) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(appDir, config.FileName), "procfile:\n  web:\n    command: ./server\n    domains: [sinatra.test]\n")
+	writeTestFile(t, filepath.Join(appDir, config.FileName), "procfile:\n  web:\n    command: ./server\n    hosts: [sinatra.test]\n")
 	writeTestFile(t, filepath.Join(root, config.FileName), "apps: ./apps\ndefaults:\n  idle_stop: 1h\n")
 	cfg, err := config.Load(filepath.Join(root, config.FileName))
 	if err != nil {
@@ -33,7 +33,7 @@ func TestStoreKeepsHistoryAndRestores(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := file.Revision
-	if _, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    domains: [sinatra.test, www.sinatra.test]\n", first); err != nil {
+	if _, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    hosts: [sinatra.test, www.sinatra.test]\n", first); err != nil {
 		t.Fatal(err)
 	}
 	revisions, err := store.History("app:sinatra")
@@ -44,7 +44,7 @@ func TestStoreKeepsHistoryAndRestores(t *testing.T) {
 		t.Fatalf("history = %+v", revisions)
 	}
 	contents, err := store.HistoryContents("app:sinatra", first)
-	if err != nil || !strings.Contains(contents, "domains: [sinatra.test]") {
+	if err != nil || !strings.Contains(contents, "hosts: [sinatra.test]") {
 		t.Fatalf("contents = %q, %v", contents, err)
 	}
 	restored, err := store.Restore("app:sinatra", first)
@@ -81,7 +81,7 @@ func TestStoreListsReadsAndWritesRealFiles(t *testing.T) {
 	if err := store.Validate("app:sinatra", "procfile:\n  web: ./server\nproxy:\n  listen: :80\n"); err == nil || !strings.Contains(err.Error(), "only valid in the root") {
 		t.Fatalf("host key in app file: %v", err)
 	}
-	if err := store.Validate("app:sinatra", "procfile:\n  web:\n    command: ./server\n    domains: [sinatra..test]\n"); err == nil || !strings.Contains(err.Error(), "invalid host pattern") {
+	if err := store.Validate("app:sinatra", "procfile:\n  web:\n    command: ./server\n    hosts: [sinatra..test]\n"); err == nil || !strings.Contains(err.Error(), "invalid host pattern") {
 		t.Fatalf("procfile rules must apply: %v", err)
 	}
 	if err := store.Validate("host", "procfile:\n  web: ./server\n"); err == nil || !strings.Contains(err.Error(), "cannot switch") {
@@ -90,13 +90,13 @@ func TestStoreListsReadsAndWritesRealFiles(t *testing.T) {
 	if err := store.Validate("host", "apps: ./apps\ndefaults:\n  nope: 1\n"); err == nil {
 		t.Fatal("unknown key must fail validation")
 	}
-	if _, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    domains: [sinatra.test, www.sinatra.test]\n", "stale"); !errors.Is(err, ErrConflict) {
+	if _, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    hosts: [sinatra.test, www.sinatra.test]\n", "stale"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale revision: %v", err)
 	}
 	if err := os.Chmod(file.Path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	written, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    domains: [sinatra.test, www.sinatra.test]\n", file.Revision)
+	written, err := store.Write("app:sinatra", "procfile:\n  web:\n    command: ./server\n    hosts: [sinatra.test, www.sinatra.test]\n", file.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}

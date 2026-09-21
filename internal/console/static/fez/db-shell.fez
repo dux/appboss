@@ -2,10 +2,22 @@
   class {
     GLOBAL = 'Dboss'
 
+    ROUTES = [
+      { name: 'overview', label: 'Overview', icon: 'i-home' },
+      { name: 'logs', label: 'Logs', icon: 'i-list' },
+      { name: 'traffic', label: 'Traffic', icon: 'i-activity' },
+      { name: 'audit', label: 'Audit', icon: 'i-file-text' },
+      { name: 'sys', label: 'Sys', icon: 'i-server' },
+      { name: 'pg', label: 'PG SQL', icon: 'i-database', capability: 'pgAvailable' },
+      { name: 'pubsub', label: 'PubSub', icon: 'i-broadcast', capability: 'pubsubAvailable' },
+      { name: 'config', label: 'Config', icon: 'i-settings' },
+      { name: 'help', label: 'Help', icon: 'i-help' },
+    ]
+
     init() {
-      this.state.view = this.viewFromHash()
-      this.state.viewer = ''
+      this.state.route = Pjax.hpath() || 'overview'
       this.state.csrf = ''
+      this.state.viewer = ''
       this.globalState.apps = []
       this.globalState.loaded = false
       this.globalState.busy = false
@@ -16,9 +28,9 @@
     }
 
     onMount() {
-      this.on('hashchange', () => {
-        this.state.view = this.viewFromHash()
-      })
+      this.syncRoute()
+      this.on('hashchange', () => this.syncRoute())
+      this.on('popstate', () => this.syncRoute())
       this.on(document, 'visibilitychange', () => {
         if (!document.hidden) this.reload({ quiet: true })
       })
@@ -26,16 +38,50 @@
       this.bootstrap()
     }
 
-    viewFromHash() {
-      if (location.hash === '#config') return 'config'
-      if (location.hash === '#logs') return 'logs'
-      if (location.hash === '#traffic') return 'traffic'
-      if (location.hash === '#audit') return 'audit'
-      if (location.hash === '#sys') return 'sys'
-      if (location.hash === '#pg' || location.hash.startsWith('#pg/')) return 'pg'
-      if (location.hash === '#pubsub') return 'pubsub'
-      if (location.hash === '#help') return 'help'
-      return 'overview'
+    // beforeRender filters the nav from the current capabilities, so the optional tabs follow a rescan.
+    beforeRender() {
+      this.state.visibleRoutes = this.ROUTES.filter(
+        (route) => !route.capability || this.globalState[route.capability],
+      )
+    }
+
+    // syncRoute maps the fragment onto a tpl-<name> component. A missing route (e.g. the bare
+    // origin, or a stale #anchor) falls back to overview with a replace, never a history entry.
+    syncRoute() {
+      if (!Pjax.hpath()) Pjax.hpath('overview', { replace: true })
+      this.navigate()
+    }
+
+    navigate() {
+      const name = Pjax.hpath() || 'overview'
+      this.state.route = name
+      const tag = 'tpl-' + name
+      const outlet = document.getElementById('route-outlet')
+      if (!outlet) return
+      if (Fez.index[tag]?.class) {
+        outlet.innerHTML = Fez.tag(tag)
+        return
+      }
+      outlet.innerHTML = '<p class="route-loading text-muted">Loading...</p>'
+      Fez.head({ fez: '/assets/fez/' + tag + '.fez' }, () => {
+        if (this.state.route !== name) return
+        const target = document.getElementById('route-outlet')
+        if (!target) return
+        target.innerHTML = Fez.index[tag]?.class
+          ? Fez.tag(tag)
+          : '<p class="route-missing text-muted">Page not found.</p>'
+      })
+    }
+
+    // readQs/setQs wrap the hash-route query so a page never has to build URLSearchParams.
+    readQs(key, fallback = '') {
+      return Pjax.hqs(key) ?? fallback
+    }
+
+    setQs(key, value, replace = true) {
+      const next = value || ''
+      if ((Pjax.hqs(key) || '') === next) return
+      Pjax.hqs(key, next || null, { replace })
     }
 
     initials() {
@@ -167,7 +213,7 @@
 
 <header class="navbar">
   <div class="container navbar-inner">
-    <a class="brand" href="/" aria-label="dboss home">
+    <a class="brand" href="#/overview" aria-label="dboss home">
       <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-terminal"></use></svg></span>
       <span class="brand-name">dboss</span>
     </a>
@@ -188,51 +234,13 @@
 <nav class="navbar-tabs" aria-label="Sections">
   <div class="container">
     <ul class="nav-tabs">
-      <li><a class="nav-link" class:active={state.view === 'overview'} href="#overview"><svg class="icon"><use href="#i-home"></use></svg>Overview</a></li>
-      <li><a class="nav-link" class:active={state.view === 'logs'} href="#logs"><svg class="icon"><use href="#i-list"></use></svg>Logs</a></li>
-      <li><a class="nav-link" class:active={state.view === 'traffic'} href="#traffic"><svg class="icon"><use href="#i-activity"></use></svg>Traffic</a></li>
-      <li><a class="nav-link" class:active={state.view === 'audit'} href="#audit"><svg class="icon"><use href="#i-file-text"></use></svg>Audit</a></li>
-      <li><a class="nav-link" class:active={state.view === 'sys'} href="#sys"><svg class="icon"><use href="#i-server"></use></svg>Sys</a></li>
-      {#if globalState.pgAvailable}
-        <li><a class="nav-link" class:active={state.view === 'pg'} href="#pg"><svg class="icon"><use href="#i-database"></use></svg>PG SQL</a></li>
-      {/if}
-      {#if globalState.pubsubAvailable}
-        <li><a class="nav-link" class:active={state.view === 'pubsub'} href="#pubsub"><svg class="icon"><use href="#i-broadcast"></use></svg>PubSub</a></li>
-      {/if}
-      <li><a class="nav-link" class:active={state.view === 'config'} href="#config"><svg class="icon"><use href="#i-settings"></use></svg>Config</a></li>
-      <li><a class="nav-link" class:active={state.view === 'help'} href="#help"><svg class="icon"><use href="#i-help"></use></svg>Help</a></li>
+      {#each state.visibleRoutes as item}
+        <li>
+          <a class="nav-link" class:active={item.name === state.route} href={'#/' + item.name}>
+            <svg class="icon"><use href={'#' + item.icon}></use></svg>{item.label}
+          </a>
+        </li>
+      {/each}
     </ul>
   </div>
 </nav>
-
-<main class="page-body">
-  <div class="container">
-    <section class="view" class:d-none={state.view !== 'overview'}>
-      <db-overview />
-    </section>
-    <section class="view" class:d-none={state.view !== 'logs'}>
-      <db-logs />
-    </section>
-    <section class="view" class:d-none={state.view !== 'traffic'}>
-      <db-traffic />
-    </section>
-    <section class="view" class:d-none={state.view !== 'audit'}>
-      <db-audit />
-    </section>
-    <section class="view" class:d-none={state.view !== 'sys'}>
-      <db-sys />
-    </section>
-    <section class="view" class:d-none={state.view !== 'pg'}>
-      <db-pg />
-    </section>
-    <section class="view" class:d-none={state.view !== 'pubsub'}>
-      <db-pubsub />
-    </section>
-    <section class="view" class:d-none={state.view !== 'config'}>
-      <db-config />
-    </section>
-    <section class="view" class:d-none={state.view !== 'help'}>
-      <db-help />
-    </section>
-  </div>
-</main>

@@ -2,8 +2,8 @@
   class {
     init() {
       this.state.apps = []
-      this.state.app = ''
-      this.state.range = '24h'
+      this.state.app = Pjax.hqs('app') || ''
+      this.state.range = Pjax.hqs('range') || '24h'
       this.state.traffic = null
       this.state.totals = {}
       this.state.columns = []
@@ -32,6 +32,7 @@
         const fleet = await Dboss.api('/api/apps')
         this.state.apps = (fleet.apps || []).map((app) => app.name).sort()
         if (!this.state.apps.includes(this.state.app)) this.state.app = this.state.apps[0] || ''
+        Dboss.setQs('app', this.state.app)
         this.state.needsSelectSync = true
         if (this.state.app) {
           const params = new URLSearchParams({ app: this.state.app, range: this.state.range })
@@ -48,11 +49,13 @@
 
     pickApp(name) {
       this.state.app = name
+      Dboss.setQs('app', name)
       this.load()
     }
 
     pickRange(value) {
       this.state.range = value
+      Dboss.setQs('range', value === '24h' ? '' : value)
       this.load()
     }
 
@@ -137,11 +140,11 @@
       return `s${Math.floor(Number(code) / 100)}`
     }
 
-    // logsLink opens the full-screen request log filtered to one value of the current view.
+    // logsLink opens the #/logs route filtered to one value of the current view.
     logsLink(key, value) {
       const params = new URLSearchParams({ app: this.state.app, channel: 'request', range: this.state.range === '30d' ? 'all' : this.state.range })
       params.set(key, value)
-      return `/logs?${params}`
+      return `/#/logs?${params}`
     }
   }
 </script>

@@ -97,7 +97,7 @@ Blocks shared by service and app:
 
 App-only blocks:
 
-* `app` - procfile (command, domains and pubsub per process), canonical_host, autostart
+* `app` - procfile (command, hosts and pubsub per process), canonical_host, autostart
 * `cron` - scheduled one-shot commands
 * `hooks` - signed one-shot commands
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"dboss/internal/config"
+	"dboss/internal/res"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -131,8 +132,15 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unit := renderUnit(cfg, "deploy", "", "/usr/local/bin/dboss")
-	for _, want := range []string{"User=deploy\n", "WorkingDirectory=" + dir + "\n", "ExecStart=\"/usr/local/bin/dboss\" start -c \"" + path + "\"\n", "WantedBy=multi-user.target\n"} {
+	unit := renderUnit(cfg, "deploy", "", "/usr/local/bin/dboss", "/home/deploy")
+	for _, want := range []string{
+		"User=deploy\n",
+		"WorkingDirectory=" + dir + "\n",
+		"ExecStart=\"/usr/local/bin/dboss\" start -c \"" + path + "\"\n",
+		"WantedBy=multi-user.target\n",
+		"Environment=PATH=/home/deploy/.local/bin:/home/deploy/bin:" + systemPATH + "\n",
+		"ExecStartPre=+/bin/sh -c 'mkdir -p " + res.DefaultCgroupRoot + " && chown -R deploy " + res.DefaultCgroupRoot + " || true'\n",
+	} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
@@ -140,8 +148,13 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	if strings.Contains(unit, "Group=") {
 		t.Fatalf("Group should be omitted by default:\n%s", unit)
 	}
-	if grouped := renderUnit(cfg, "deploy", "staff", "/usr/local/bin/dboss"); !strings.Contains(grouped, "Group=staff\n") {
+	if grouped := renderUnit(cfg, "deploy", "staff", "/usr/local/bin/dboss", "/home/deploy"); !strings.Contains(grouped, "Group=staff\n") {
 		t.Fatalf("explicit group missing:\n%s", grouped)
+	}
+	// An unknown user has no home, so the unit falls back to the plain system PATH instead of
+	// naming a directory that does not exist.
+	if homeless := renderUnit(cfg, "deploy", "", "/usr/local/bin/dboss", ""); !strings.Contains(homeless, "Environment=PATH="+systemPATH+"\n") {
+		t.Fatalf("PATH without a home should be the system default:\n%s", homeless)
 	}
 }
 

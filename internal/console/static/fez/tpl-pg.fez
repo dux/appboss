@@ -4,7 +4,7 @@
       this.state.snapshot = null
       this.state.backups = []
       this.state.rotations = {}
-      this.state.db = ''
+      this.state.db = Pjax.hqs('db') || ''
       this.state.selected = null
       this.state.loading = false
       this.state.busy = false
@@ -15,8 +15,6 @@
     }
 
     onMount() {
-      this.on('hashchange', () => this.syncFromHash())
-      this.syncFromHash()
       this.load()
     }
 
@@ -27,16 +25,6 @@
       if (!node || node === document.activeElement) return
       const value = this.state.selected ? (this.state.rotations[this.state.selected.name] || 'week') : 'week'
       if (node.value !== value) node.value = value
-    }
-
-    // The selected database lives in the hash (#pg/<name>), so the page survives a reload and the
-    // browser back button returns to the list.
-    syncFromHash() {
-      const hash = location.hash || ''
-      const name = hash.startsWith('#pg/') ? decodeURIComponent(hash.slice(4)) : ''
-      if (name === this.state.db) return
-      this.state.db = name
-      this.resolveSelected()
     }
 
     resolveSelected() {
@@ -99,13 +87,13 @@
       this.resolveSelected()
       this.state.message = ''
       this.state.messageError = false
-      location.hash = '#pg/' + encodeURIComponent(name)
+      Pjax.hqs('db', name)
     }
 
     closeDatabase() {
       this.state.db = ''
       this.state.selected = null
-      location.hash = '#pg'
+      Pjax.hqs('db', null)
     }
 
     rotationLabel(name) {
@@ -295,7 +283,7 @@
 {#if state.selected}
   <div class="page-header">
     <div>
-      <p class="page-pretitle"><a href="#pg" onclick="fez.closeDatabase()">&larr; Databases</a></p>
+      <p class="page-pretitle"><a href="#/pg">&larr; Databases</a></p>
       <h1 class="page-title">{state.selected.name}</h1>
     </div>
     <div class="page-actions">

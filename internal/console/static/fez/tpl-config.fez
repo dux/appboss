@@ -2,7 +2,7 @@
   class {
     init() {
       this.state.files = []
-      this.state.current = null
+      this.state.current = Pjax.hqs('id') || null
       this.state.mode = 'yaml'
       // Edits are kept per file so switching files never loses a change.
       this.state.buffers = {}
@@ -140,8 +140,10 @@
         const data = await Dboss.api('/api/config')
         const previous = new Map(this.state.files.map((file) => [file.id, file]))
         this.state.files = (data.files || []).map((file) => ({ ...file, saved: previous.get(file.id)?.saved ?? '' }))
-        if (!this.currentFile() && this.state.files.length) {
-          await this.select(this.state.files[0].id)
+        const requested = Pjax.hqs('id')
+        const chosen = requested && this.state.files.some((file) => file.id === requested) ? requested : this.state.files[0]?.id
+        if (chosen && (!this.currentFile() || this.currentFile().saved === '')) {
+          await this.select(chosen)
           return
         }
         this.syncEditor()
@@ -168,6 +170,7 @@
       this.state.message = ''
       this.state.conflict = null
       this.state.history = null
+      Dboss.setQs('id', id)
       this.syncEditor()
     }
 
@@ -265,6 +268,7 @@
         this.state.buffers[created.id] = created.contents
         this.state.revisions[created.id] = created.revision
         this.state.current = created.id
+        Dboss.setQs('id', created.id)
         this.syncEditor()
         Toast.show(`Created ${created.source} for ${file.app}. Edits now survive deploys.`)
       } catch (error) {

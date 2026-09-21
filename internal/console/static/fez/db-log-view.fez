@@ -26,13 +26,13 @@
       this.state.queryNode = null
       this.state.queryTimer = 0
       if (this.state.page) {
-        this.state.app = Pjax.qs('app') || this.state.app
-        this.state.channel = Pjax.qs('channel') || this.state.channel
-        this.state.range = Pjax.qs('range') || this.state.range
-        this.state.level = Pjax.qs('level') || ''
-        this.state.method = Pjax.qs('method') || ''
-        this.state.status = Pjax.qs('status') || ''
-        this.state.query = Pjax.qs('q') || ''
+        this.state.app = Pjax.hqs('app') || this.state.app
+        this.state.channel = Pjax.hqs('channel') || this.state.channel
+        this.state.range = Pjax.hqs('range') || this.state.range
+        this.state.level = Pjax.hqs('level') || ''
+        this.state.method = Pjax.hqs('method') || ''
+        this.state.status = Pjax.hqs('status') || ''
+        this.state.query = Pjax.hqs('q') || ''
       }
     }
 
@@ -290,8 +290,8 @@
     }
 
     setQs(key, value) {
-      if ((Pjax.qs(key) || '') === (value || '')) return
-      Pjax.qs(key, value || null, { replace: true })
+      if ((Pjax.hqs(key) || '') === (value || '')) return
+      Pjax.hqs(key, value || null, { replace: true })
     }
 
     shortcut(event) {

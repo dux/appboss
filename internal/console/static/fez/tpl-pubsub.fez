@@ -4,8 +4,8 @@
       this.state.apps = []
       this.state.guide = ''
       this.state.credential = null
-      this.state.publishApp = ''
-      this.state.publishProcess = ''
+      this.state.publishApp = Pjax.hqs('app') || ''
+      this.state.publishProcess = Pjax.hqs('process') || ''
       this.state.loading = false
       this.state.busy = false
       this.state.error = ''
@@ -43,6 +43,8 @@
           this.state.publishApp = first ? first.name : ''
           this.state.publishProcess = first ? first.process : ''
         }
+        Dboss.setQs('app', this.state.publishApp)
+        Dboss.setQs('process', this.state.publishProcess)
         this.state.needsSelectSync = true
         this.state.error = ''
       } catch (error) {
@@ -56,6 +58,8 @@
       const [name, process] = value.split('|')
       this.state.publishApp = name
       this.state.publishProcess = process
+      Dboss.setQs('app', name)
+      Dboss.setQs('process', process)
     }
 
     async reveal(name, process) {

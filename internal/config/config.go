@@ -1102,26 +1102,26 @@ const DefaultPubsubPath = "/socketio"
 // DefaultStatic is the directory a web process serves static files from unless it sets `static`.
 const DefaultStatic = "./public"
 
-// DevDomain is bound to a single-app config that declares no domains, so `dboss start` inside an
+// DevHost is bound to a single-app config that declares no hosts, so `dboss start` inside an
 // app folder serves it on *.lvh.me with no config.
-const DevDomain = ".lvh.me"
+const DevHost = ".lvh.me"
 
-// ProcessSpec is one entry of a procfile: the command to run, the domains the single web process
+// ProcessSpec is one entry of a procfile: the command to run, the hosts the single web process
 // answers, its optional realtime hub, its readiness check and the canonical hostname. A scalar
 // value is the command alone, so a background process stays a one-liner; a mapping adds the rest.
 type ProcessSpec struct {
 	Command string      `yaml:"command" json:"command"`
-	Domains List        `yaml:"domains,omitempty" json:"domains,omitempty"`
+	Hosts   List        `yaml:"hosts,omitempty" json:"hosts,omitempty"`
 	Pubsub  *PubsubSpec `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
 	Static  *StaticSpec `yaml:"static,omitempty" json:"static,omitempty"`
 	// Health is the web process's readiness path, e.g. /up; empty means a TCP connect.
 	Health string `yaml:"health,omitempty" json:"health,omitempty"`
-	// CanonicalHost is the web process hostname every other domain redirects to; it must be one
-	// of Domains.
+	// CanonicalHost is the web process hostname every other host redirects to; it must be one
+	// of Hosts.
 	CanonicalHost string `yaml:"canonical_host,omitempty" json:"canonical_host,omitempty"`
 }
 
-// UnmarshalYAML accepts a bare command string or a {command, domains, pubsub, static, health,
+// UnmarshalYAML accepts a bare command string or a {command, hosts, pubsub, static, health,
 // canonical_host} mapping. The keys are checked here because a custom decoder is a leaf as far as
 // the schema walk is concerned.
 func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
@@ -1132,14 +1132,14 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
-			case "command", "domains", "pubsub", "static", "health", "canonical_host":
+			case "command", "hosts", "pubsub", "static", "health", "canonical_host":
 			default:
-				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, domains, pubsub, static, health, canonical_host"}
+				return &Error{Line: node.Content[i].Line, Key: "procfile", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, hosts, pubsub, static, health, canonical_host"}
 			}
 		}
 		var raw struct {
 			Command       string      `yaml:"command"`
-			Domains       List        `yaml:"domains"`
+			Hosts         List        `yaml:"hosts"`
 			Pubsub        *PubsubSpec `yaml:"pubsub"`
 			Static        *StaticSpec `yaml:"static"`
 			Health        string      `yaml:"health"`
@@ -1149,45 +1149,45 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 			return err
 		}
 		p.Command = raw.Command
-		p.Domains = raw.Domains
+		p.Hosts = raw.Hosts
 		p.Pubsub = raw.Pubsub
 		p.Static = raw.Static
 		p.Health = raw.Health
 		p.CanonicalHost = raw.CanonicalHost
 		return nil
 	}
-	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, domains, pubsub, static, health, canonical_host} mapping"}
+	return &Error{Line: node.Line, Key: "procfile", Message: "must be a command or a {command, hosts, pubsub, static, health, canonical_host} mapping"}
 }
 
 // MarshalYAML writes a scalar command when the process only runs a command, else the full mapping,
 // so a resolved config reads like the file it came from.
 func (p ProcessSpec) MarshalYAML() (any, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
+	if len(p.Hosts) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
 		return p.Command, nil
 	}
 	return struct {
 		Command       string      `yaml:"command"`
-		Domains       List        `yaml:"domains,omitempty"`
+		Hosts         List        `yaml:"hosts,omitempty"`
 		Pubsub        *PubsubSpec `yaml:"pubsub,omitempty"`
 		Static        *StaticSpec `yaml:"static,omitempty"`
 		Health        string      `yaml:"health,omitempty"`
 		CanonicalHost string      `yaml:"canonical_host,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub, p.Static, p.Health, p.CanonicalHost}, nil
+	}{p.Command, p.Hosts, p.Pubsub, p.Static, p.Health, p.CanonicalHost}, nil
 }
 
 // MarshalJSON mirrors MarshalYAML for `dboss config -d --json`.
 func (p ProcessSpec) MarshalJSON() ([]byte, error) {
-	if len(p.Domains) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
+	if len(p.Hosts) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" {
 		return json.Marshal(p.Command)
 	}
 	return json.Marshal(struct {
 		Command       string      `json:"command"`
-		Domains       List        `json:"domains,omitempty"`
+		Hosts         List        `json:"hosts,omitempty"`
 		Pubsub        *PubsubSpec `json:"pubsub,omitempty"`
 		Static        *StaticSpec `json:"static,omitempty"`
 		Health        string      `json:"health,omitempty"`
 		CanonicalHost string      `json:"canonical_host,omitempty"`
-	}{p.Command, p.Domains, p.Pubsub, p.Static, p.Health, p.CanonicalHost})
+	}{p.Command, p.Hosts, p.Pubsub, p.Static, p.Health, p.CanonicalHost})
 }
 
 // StaticSpec is a web process's static file option: `true` for the default ./public, a path, or
@@ -1310,7 +1310,7 @@ type WebProcess struct {
 
 type App struct {
 	Procfile map[string]ProcessSpec `yaml:"procfile" json:"procfile"`
-	// WebProcesses and Hosts are derived from every procfile entry that declares domains; they
+	// WebProcesses and Hosts are derived from every procfile entry that declares hosts; they
 	// are never written back to YAML and exist for the supervisor and proxy.
 	WebProcesses []WebProcess       `yaml:"-" json:"-"`
 	Hosts        List               `yaml:"-" json:"-"`
@@ -1332,7 +1332,7 @@ func processNames(procfile map[string]ProcessSpec) []string {
 	return names
 }
 
-// IsWeb reports whether a procfile entry serves proxied traffic because it declares domains.
+// IsWeb reports whether a procfile entry serves proxied traffic because it declares hosts.
 func (a App) IsWeb(name string) bool {
 	for _, web := range a.WebProcesses {
 		if web.Name == name {
@@ -1342,24 +1342,24 @@ func (a App) IsWeb(name string) bool {
 	return false
 }
 
-// deriveWeb builds one WebProcess per procfile entry that declares domains, unions their hosts and
+// deriveWeb builds one WebProcess per procfile entry that declares hosts, unions their hosts and
 // rejects a host pattern used by two processes of the same app.
 func (a *App) deriveWeb() error {
 	seen := map[string]string{}
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
-		if len(spec.Domains) == 0 {
+		if len(spec.Hosts) == 0 {
 			continue
 		}
-		web := WebProcess{Name: name, Hosts: spec.Domains, CanonicalHost: spec.CanonicalHost, Static: DefaultStatic}
+		web := WebProcess{Name: name, Hosts: spec.Hosts, CanonicalHost: spec.CanonicalHost, Static: DefaultStatic}
 		if spec.Static != nil {
 			web.Static = spec.Static.Path
 		}
 		a.WebProcesses = append(a.WebProcesses, web)
-		for _, host := range spec.Domains {
+		for _, host := range spec.Hosts {
 			normalized := strings.ToLower(strings.TrimSuffix(host, "."))
 			if owner, ok := seen[normalized]; ok {
-				return &Error{Key: "procfile." + name + ".domains", Message: fmt.Sprintf("host pattern %q is already used by process %q", host, owner)}
+				return &Error{Key: "procfile." + name + ".hosts", Message: fmt.Sprintf("host pattern %q is already used by process %q", host, owner)}
 			}
 			seen[normalized] = name
 			a.Hosts = append(a.Hosts, host)
@@ -1377,7 +1377,7 @@ func (a *App) resolveHealth() error {
 			continue
 		}
 		if !a.IsWeb(name) {
-			return &Error{Key: "procfile." + name + ".health", Message: "health is only valid on a web process", Hint: "declare domains on this process, or set health on a process that declares them"}
+			return &Error{Key: "procfile." + name + ".health", Message: "health is only valid on a web process", Hint: "declare hosts on this process, or set health on a process that declares them"}
 		}
 		if !strings.HasPrefix(spec.Health, "/") {
 			return &Error{Key: "procfile." + name + ".health", Message: fmt.Sprintf("must be a path starting with /, not %q", spec.Health), Hint: "e.g. health: /up"}
@@ -1391,7 +1391,7 @@ func (a *App) resolveHealth() error {
 }
 
 // resolvePubsub resolves every web process's pubsub option onto its WebProcess. A process that
-// sets pubsub must declare domains so the hub has hosts to serve on.
+// sets pubsub must declare hosts so the hub has hosts to serve on.
 func (a *App) resolvePubsub() error {
 	for index := range a.WebProcesses {
 		web := &a.WebProcesses[index]
@@ -1414,32 +1414,32 @@ func (a *App) resolvePubsub() error {
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
 		if spec.Pubsub != nil && spec.Pubsub.enabled() && !a.IsWeb(name) {
-			return &Error{Key: "procfile." + name + ".pubsub", Message: "pubsub needs domains on the same process", Hint: "add domains to this process or move pubsub to a web process"}
+			return &Error{Key: "procfile." + name + ".pubsub", Message: "pubsub needs hosts on the same process", Hint: "add hosts to this process or move pubsub to a web process"}
 		}
 	}
 	return nil
 }
 
-// resolveCanonical validates each web process's canonical_host against its own domains and rejects
-// canonical_host on a process that serves no domains.
+// resolveCanonical validates each web process's canonical_host against its own hosts and rejects
+// canonical_host on a process that serves no hosts.
 func (a *App) resolveCanonical() error {
 	for _, web := range a.WebProcesses {
 		if web.CanonicalHost != "" && !hostAllowed(web.CanonicalHost, web.Hosts) {
-			return keyErr("procfile."+web.Name+".canonical_host", "%q is not one of the domains %v", web.CanonicalHost, web.Hosts)
+			return keyErr("procfile."+web.Name+".canonical_host", "%q is not one of the hosts %v", web.CanonicalHost, web.Hosts)
 		}
 	}
 	for _, name := range processNames(a.Procfile) {
 		spec := a.Procfile[name]
 		if spec.CanonicalHost != "" && !a.IsWeb(name) {
-			return &Error{Key: "procfile." + name + ".canonical_host", Message: "canonical_host is only valid on a web process", Hint: "declare domains on this process, or set canonical_host on a process that declares them"}
+			return &Error{Key: "procfile." + name + ".canonical_host", Message: "canonical_host is only valid on a web process", Hint: "declare hosts on this process, or set canonical_host on a process that declares them"}
 		}
 	}
 	return nil
 }
 
-// UseDevDomains binds the first process to DevDomain when no process declares domains. It is
+// UseDevHosts binds the first process to DevHost when no process declares hosts. It is
 // single-app mode only, so a host running a folder with no config still gets a hostname.
-func (a *App) UseDevDomains() {
+func (a *App) UseDevHosts() {
 	if len(a.Hosts) > 0 || len(a.Procfile) == 0 {
 		return
 	}
@@ -1447,8 +1447,8 @@ func (a *App) UseDevDomains() {
 	if _, ok := a.Procfile["web"]; !ok {
 		name = processNames(a.Procfile)[0]
 	}
-	a.WebProcesses = []WebProcess{{Name: name, Hosts: List{DevDomain}, Static: DefaultStatic}}
-	a.Hosts = List{DevDomain}
+	a.WebProcesses = []WebProcess{{Name: name, Hosts: List{DevHost}, Static: DefaultStatic}}
+	a.Hosts = List{DevHost}
 }
 
 // CronJob is one named scheduled one-shot command under cron:. Schedule is an "every <n><s|m|h|d>"
@@ -1530,7 +1530,7 @@ func buildApp(raw appFile, defaults Defaults, single bool) (App, error) {
 	}
 	apply(&app.Defaults, raw.Overrides)
 	if single {
-		app.UseDevDomains()
+		app.UseDevHosts()
 	}
 	if err := app.resolveHealth(); err != nil {
 		return App{}, err

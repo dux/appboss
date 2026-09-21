@@ -161,7 +161,7 @@
       {/if}
     </div>
     <div class="btn-list app-actions">
-      <a class="btn btn-sm" href="/logs?app={props.app.name}" target="_blank" rel="noreferrer">
+      <a class="btn btn-sm" href="/#/logs?app={props.app.name}" target="_blank" rel="noreferrer">
         <svg class="icon"><use href="#i-file-text"></use></svg>
         Logs
       </a>

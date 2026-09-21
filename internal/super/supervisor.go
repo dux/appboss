@@ -54,8 +54,8 @@ type RequestRates struct {
 	LastDay    int64 `json:"last_day"`
 }
 
-// WebProcessSnapshot is one web process of an app: the domains it answers and the canonical host
-// its other domains redirect to, plus its realtime hub.
+// WebProcessSnapshot is one web process of an app: the hosts it answers and the canonical host
+// its other hosts redirect to, plus its realtime hub.
 type WebProcessSnapshot struct {
 	Name          string        `json:"name"`
 	Hosts         []string      `json:"hosts"`
@@ -105,7 +105,7 @@ func (s Snapshot) Serving() bool {
 	return s.State == Running || (s.State == Stopped && !s.WakeButton)
 }
 
-// WebForHost returns the web process whose domains best match host. A request that resolved to an
+// WebForHost returns the web process whose hosts best match host. A request that resolved to an
 // app is always served by exactly one of its web processes, and the longest pattern wins.
 func (s Snapshot) WebForHost(host string) (WebProcessSnapshot, bool) {
 	host = config.NormalizeHost(host)

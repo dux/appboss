@@ -192,8 +192,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
 		h.serveAsset(w, r, "index.html")
-	case r.Method == http.MethodGet && r.URL.Path == "/logs":
-		h.serveAsset(w, r, "log.html")
 	case r.Method == http.MethodGet && r.URL.Path == "/logs.txt":
 		h.writeLogs(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/assets/"):

@@ -265,7 +265,7 @@ defaults:
 
   # --- Web keys: what nginx or Caddy did in front of the app. Shared by every web process. ----
   # Set here for every app, or at the top level of one app's file to override it there. The
-  # per-process web keys (domains, static, pubsub, health, canonical_host) live on the procfile
+  # per-process web keys (hosts, static, pubsub, health, canonical_host) live on the procfile
   # entry instead.
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
   # Order per request: canonical redirect -> allow_ips -> auth -> basic_auth -> maintenance -> static
@@ -414,15 +414,15 @@ postgres:
 # Required process map. Keys are process names and values are commands.
 # Names must match [a-z][a-z0-9_-]* and commands must not be empty.
 # Command strings are not env-expanded; $VAR is passed to the shell at run time.
-# A scalar value is a background process. A mapping adds domains; every process that declares
-# domains is a web process that receives proxied traffic on those domains, and its command must
-# not be empty. An app may have several web processes, each with its own domains, health,
-# canonical host and realtime hub, and each bound to its own PORT. An app with no domains
-# anywhere is background-only. Domains are matched against the request Host header,
+# A scalar value is a background process. A mapping adds hosts; every process that declares
+# hosts is a web process that receives proxied traffic on those hosts, and its command must
+# not be empty. An app may have several web processes, each with its own hosts, health,
+# canonical host and realtime hub, and each bound to its own PORT. An app with no hosts
+# anywhere is background-only. Hosts are matched against the request Host header,
 # case-insensitive, port stripped, and must be unique across the app's web processes. A leading
 # "*." matches subdomains only; a leading "." matches the bare domain and every subdomain, so
 # ".myapp.com" means "myapp.com" and "*.myapp.com". Longest match wins.
-# In single mode (no domains declared) the first process is bound to .lvh.me for local dev.
+# In single mode (no hosts declared) the first process is bound to .lvh.me for local dev.
 #
 # A web process may set `static`, the directory served straight from disk for GET and HEAD on its
 # hosts. `static: true` (the default) uses ./public, a path sets another directory, and
@@ -436,11 +436,11 @@ postgres:
 # running, e.g. /up (GET http://127.0.0.1:PORT/up must answer 2xx). Omitted means a plain TCP
 # connect. The same check keeps the process alive after readiness; see unhealthy_threshold.
 #
-# A web process may set `canonical_host`, one of its domains. Requests for any other of its
-# domains answer 301 to <scheme>://<canonical_host><path?query>; the scheme follows
+# A web process may set `canonical_host`, one of its hosts. Requests for any other of its
+# hosts answer 301 to <scheme>://<canonical_host><path?query>; the scheme follows
 # X-Forwarded-Proto, default https. Runs before auth and static files, so www never serves content.
 #
-# A web process may set `pubsub`, a realtime hub dboss serves on its domains. It accepts
+# A web process may set `pubsub`, a realtime hub dboss serves on its hosts. It accepts
 # true (the /socketio default), a path, or a mapping:
 #   pubsub: true                    -> path /socketio
 #   pubsub: /realtime               -> that path
@@ -466,7 +466,7 @@ postgres:
 procfile:
   web:
     command: bundle exec puma -C config/puma.rb
-    domains:
+    hosts:
       - ".myapp.com"
     pubsub: true
     static: ./public

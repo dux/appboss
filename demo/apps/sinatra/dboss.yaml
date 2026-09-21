@@ -1,7 +1,7 @@
 procfile:
   web:
     command: ./start.sh
-    domains:
+    hosts:
       - .sinatra.lvh.me
     health: /up
     canonical_host: sinatra.lvh.me
