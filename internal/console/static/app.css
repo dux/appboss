@@ -164,6 +164,18 @@ code {
   letter-spacing: -0.01em;
 }
 
+/* The negative margin pulls it out of the .brand gap, which is sized for nav items and reads as
+   a separate word at full width. Centered like the brand name rather than aligned to the flex
+   line, whose height comes from the 34px mark; top nudges the smaller text onto its baseline. */
+.brand-version {
+  position: relative;
+  top: 2px;
+  margin-left: -4px;
+  color: var(--muted);
+  font-size: var(--text-size-small);
+  font-weight: 500;
+}
+
 .navbar-user {
   display: flex;
   align-items: center;

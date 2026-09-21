@@ -30,6 +30,7 @@ import (
 	"dboss/internal/pubsub"
 	"dboss/internal/super"
 	"dboss/internal/sysinfo"
+	"dboss/internal/version"
 )
 
 const maxRequestBody = 1 << 20
@@ -86,6 +87,7 @@ type dashboard struct {
 	Apps            []super.Snapshot `json:"apps"`
 	RestartRequired []string         `json:"restart_required"`
 	Capabilities    map[string]bool  `json:"capabilities"`
+	Version         string           `json:"version"`
 	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
@@ -332,7 +334,7 @@ func (h *Handler) serveFavicon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeDashboard(w http.ResponseWriter, session authSession) {
-	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), UpdatedAt: time.Now().UTC()})
+	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), Version: version.String(), UpdatedAt: time.Now().UTC()})
 }
 
 // capabilities tells the shell which optional tabs to show.

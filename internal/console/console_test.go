@@ -22,6 +22,7 @@ import (
 	"dboss/internal/ops"
 	"dboss/internal/super"
 	"dboss/internal/sysinfo"
+	"dboss/internal/version"
 )
 
 // fakeSys is a SysReader whose refresh is observable.
@@ -314,6 +315,10 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	}
 	if dashboard.Viewer != "admin@example.com" || dashboard.CSRF != session.CSRF || dashboard.Apps[0].RequestRates.LastHour != 7 {
 		t.Fatalf("unexpected dashboard: %+v", dashboard)
+	}
+	// The navbar renders this next to the brand, so an empty payload would leave it blank.
+	if dashboard.Version != version.String() {
+		t.Fatalf("dashboard version = %q, want %q", dashboard.Version, version.String())
 	}
 
 	actionRequest := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"restart"}`))
