@@ -119,9 +119,9 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	return nil
 }
 
-// monitor walks the web process from spawn to exit. It first polls until the process answers
-// (readiness, bounded by health_timeout), then keeps polling and reports a health failure after
-// unhealthy_threshold consecutive failures. The runtime handles that exactly like a crash, so
+// monitor walks the web process from spawn to exit. It first polls every health_interval until
+// the process answers (readiness, bounded by health_timeout), then slows to liveness_interval
+// and reports a health failure after unhealthy_threshold consecutive failures. The runtime handles that exactly like a crash, so
 // restart policy, backoff and max_restarts apply. unhealthy_threshold: 0 stops after readiness.
 // It is given the process defaults and host instead of reading the app spec, which a rescan may
 // replace on the runtime goroutine.
@@ -147,6 +147,10 @@ func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 					if defaults.UnhealthyThreshold <= 0 {
 						return
 					}
+					// Readiness is decided; from here the check only has to notice a process
+					// that died quietly, so it drops to the slower liveness cadence instead of
+					// hitting the app's health path twice a second for its whole life.
+					ticker.Reset(a.livenessInterval(defaults))
 				}
 				failures = 0
 				continue
@@ -168,6 +172,24 @@ func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 			}
 		}
 	}
+}
+
+// devLivenessInterval is how often a hand-run session re-checks a process that is already up.
+// A developer watching one app does not need it polled every ten seconds, and every poll shows
+// up in their own request log; a server keeps the configured cadence so a hung process is
+// noticed quickly.
+const devLivenessInterval = 5 * time.Minute
+
+// livenessInterval is the ongoing check's period. A terminal session (the same signal behind the
+// output echo, the startup banner and the privileged-port fallback) is relaxed to
+// devLivenessInterval. It only ever slows the check down, so an app that asks for something
+// longer still gets it.
+func (a *appRuntime) livenessInterval(defaults config.Process) time.Duration {
+	interval := defaults.LivenessInterval.Value()
+	if a.echo != nil && interval < devLivenessInterval {
+		return devLivenessInterval
+	}
+	return interval
 }
 
 // healthCheck talks to the process the way the proxy does: loopback address, app hostname in Host.

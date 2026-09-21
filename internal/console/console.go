@@ -134,7 +134,19 @@ func New(cfg config.Config, service *ops.Service, store ConfigStore, notifyStats
 // address, which works without DNS and through an SSH tunnel, and the public management host
 // when one is configured. Both links carry the same single-use token.
 func (h *Handler) LoginURL() (local, public string, err error) {
-	token, err := h.auth.issueCLIToken()
+	return h.loginURL(h.auth.issueCLIToken)
+}
+
+// DevLoginURL is the loopback link printed in the startup banner of a hand-run session: it lives
+// for an hour and survives being clicked, so the one line stays useful for the whole session.
+// Callers must gate it on the session being a terminal; it is never minted under systemd.
+func (h *Handler) DevLoginURL() (string, error) {
+	local, _, err := h.loginURL(h.auth.issueDevToken)
+	return local, err
+}
+
+func (h *Handler) loginURL(issue func() (string, error)) (local, public string, err error) {
+	token, err := issue()
 	if err != nil {
 		return "", "", err
 	}

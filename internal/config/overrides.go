@@ -18,6 +18,7 @@ type ProcessOverrides struct {
 	IdleStop           *Duration         `yaml:"idle_stop,omitempty" json:"idle_stop,omitempty"`
 	Health             *string           `yaml:"-" json:"-"`
 	HealthInterval     *Duration         `yaml:"health_interval,omitempty" json:"health_interval,omitempty"`
+	LivenessInterval   *Duration         `yaml:"liveness_interval,omitempty" json:"liveness_interval,omitempty"`
 	HealthTimeout      *Duration         `yaml:"health_timeout,omitempty" json:"health_timeout,omitempty"`
 	UnhealthyThreshold *int              `yaml:"unhealthy_threshold,omitempty" json:"unhealthy_threshold,omitempty"`
 	StopTimeout        *Duration         `yaml:"stop_timeout,omitempty" json:"stop_timeout,omitempty"`

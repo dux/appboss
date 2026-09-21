@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -55,12 +56,60 @@ func TestCLILoginLinkSignsInOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth.cliTokens[expired] = time.Now().Add(-time.Second)
+	auth.cliTokens[expired] = cliToken{expiresAt: time.Now().Add(-time.Second)}
 	expiredResponse := httptest.NewRecorder()
 	auth.authenticate(expiredResponse, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8080/login?token="+url.QueryEscape(expired), nil))
 	if expiredResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expired link status = %d", expiredResponse.Code)
 	}
+}
+
+// The banner prints its link once and the operator clicks it whenever they get to it, so unlike
+// a `dboss login` link it has to survive being used.
+func TestDevLoginLinkIsReusableUntilItExpires(t *testing.T) {
+	auth := testAuthenticator("", "dboss.lvh.me")
+	handler := &Handler{auth: auth, managementPort: "3100", publicHost: "dboss.lvh.me"}
+	link, err := handler.DevLoginURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "http://127.0.0.1:3100/login?token=") {
+		t.Fatalf("dev link should be loopback only: %s", link)
+	}
+	token := strings.TrimPrefix(link, "http://127.0.0.1:3100/login?token=")
+	if ttl := time.Until(auth.cliTokens[token].expiresAt); ttl < 55*time.Minute {
+		t.Fatalf("dev token ttl = %s, want about an hour", ttl)
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		response := httptest.NewRecorder()
+		auth.authenticate(response, httptest.NewRequest(http.MethodGet, link, nil))
+		if response.Code != http.StatusSeeOther {
+			t.Fatalf("attempt %d status = %d, want a session every time", attempt, response.Code)
+		}
+		if _, err := cookieNamedOrNil(response.Result().Cookies(), authSessionCookie); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+
+	auth.cliTokens[token] = cliToken{expiresAt: time.Now().Add(-time.Second), reusable: true}
+	expired := httptest.NewRecorder()
+	auth.authenticate(expired, httptest.NewRequest(http.MethodGet, link, nil))
+	if expired.Code != http.StatusBadRequest {
+		t.Fatalf("expired dev link status = %d", expired.Code)
+	}
+	if _, ok := auth.cliTokens[token]; ok {
+		t.Fatal("an expired token should be dropped, not kept for its whole hour")
+	}
+}
+
+func cookieNamedOrNil(cookies []*http.Cookie, name string) (*http.Cookie, error) {
+	for _, cookie := range cookies {
+		if cookie.Name == name {
+			return cookie, nil
+		}
+	}
+	return nil, fmt.Errorf("no %s cookie", name)
 }
 
 func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {

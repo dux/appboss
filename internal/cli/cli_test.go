@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,6 +156,27 @@ func TestRenderUnitUsesResolvedPaths(t *testing.T) {
 	// naming a directory that does not exist.
 	if homeless := renderUnit(cfg, "deploy", "", "/usr/local/bin/dboss", ""); !strings.Contains(homeless, "Environment=PATH="+systemPATH+"\n") {
 		t.Fatalf("PATH without a home should be the system default:\n%s", homeless)
+	}
+}
+
+// The install path always runs under sudo, so the current user is root there. Defaulting to it
+// would put User=root in the unit and undo the point of the service user.
+func TestDefaultServiceUserPrefersTheInvoker(t *testing.T) {
+	t.Setenv("SUDO_USER", "deploy")
+	name, err := defaultServiceUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "deploy"
+	if os.Geteuid() != 0 {
+		current, err := user.Current()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = current.Username
+	}
+	if name != want {
+		t.Fatalf("user = %q, want %q", name, want)
 	}
 }
 

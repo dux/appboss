@@ -49,6 +49,7 @@ type Daemon struct {
 	notifier       *notify.Notifier
 	servers        []*http.Server
 	listen         []string
+	echo           *super.Echo
 	managementPort int
 }
 
@@ -101,7 +102,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		manager.Close()
 		return nil, err
 	}
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), sysInfo, postgres, channels), notifier: notifier, managementPort: managementPort}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort}
 	service := ops.New(manager, logs, logs, postgres, channels, notifier)
 	if len(cfg.Proxy.Listen) > 0 {
 		edge, management, err := edgeHandler(cfg, service, manager, logs, notifier, sysInfo.Inspector(), channels)
@@ -171,6 +172,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			logx.Infof("management console: %s (AuthCog sign-in)", publicURL)
 		}
 	}
+	d.printBanner()
 	logx.Infof("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
 	<-ctx.Done()
 	return nil

@@ -1,13 +1,48 @@
 # dboss
 
-Bare-metal app host for one Linux box, in a single Go binary called `dboss`.
-It runs the processes described by each app's `dboss.yaml`, hands every process a fixed `PORT`, proxies HTTP to the right app by hostname, stops idle apps and wakes them on the next request, and ingests every process log and request row into a per-app SQLite log store.
-A built-in management console shows live state, controls the supervisor, edits the config files on disk and searches the logs.
+Run all your apps on one server, from one Go binary.
+Supervisor, router, HTTPS, log store and web console in a single file, configured by one `dboss.yaml` per app.
+
+## Who this is for
+
+You have a handful of apps and one decent server, and you want them online without operating a cluster.
+
+dboss is for you if:
+
+* You do not use Kubernetes, and do not want to learn it to run four Rails apps.
+* You do not need a swarm of application servers, autoscaling or multi-region failover.
+* One box with enough RAM is genuinely enough, and you would rather spend that RAM on your apps than on a control plane.
+* You want to see what is running, read the logs and fix the config without stitching together five separate tools.
+
+If you really do need a cluster, use a cluster.
+dboss is deliberately a single-host tool, and it is very good at being one.
+
+## What you get
+
+All of it is in the one binary: no sidecars, no agents, no extra database, no YAML you did not write.
+
+* **Routing built in.** Requests reach the right app by hostname, including wildcard and apex patterns, several web processes per app, canonical host redirects and static files served straight off disk.
+* **Logging built in.** Every process log line and every request lands in a per-app SQLite database with full-text search, read from the console or from `dboss logs`, so there is no log pipeline to run.
+* **Traffic built in.** Requests over time, error rate, latency quantiles and the top paths, status codes, countries and client IPs, per app.
+* **Effortless deploys.** Push to GitHub or GitLab and a signed webhook runs your deploy hook and restarts the app, with no runner and no pipeline credentials on the box.
+* **Process supervision.** A procfile per app, workers alongside web processes, restart policies with backoff, readiness and liveness checks, and graceful draining so a restart does not drop live requests.
+* **Apps that sleep.** An idle app stops on its own and the next request wakes it, so a dozen side projects share one box without holding RAM they are not using.
+* **HTTPS without the chore.** Set one key and dboss gets Let's Encrypt certificates on demand for the hostnames it already serves and renews them, or put Cloudflare in front and let it terminate.
+* **A real web console.** Live state, start and stop, log search, traffic, the config files edited on disk with revision history and restore, and an audit row for every action.
+* **Scheduled jobs.** Cron per app, running even while the app itself is stopped, with output in the same log store.
+* **Access control.** Basic auth, IP allowlists, or a full SSO sign-in in front of any app, without touching the app's code.
+* **Batteries for the rest.** PostgreSQL inspection with scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
+
+Install is one command and the service runs as an ordinary user, not root.
+`dboss start` on your laptop gives you the same thing locally, with no sudo and no setup.
+
+## How it works
+
+Each app is a folder with a `dboss.yaml` naming its processes and hostnames.
+dboss reads them, hands every process a fixed `PORT`, proxies HTTP to the right one by hostname, stops idle apps and wakes them on the next request, and ingests every process log and request row into that app's log store.
 Daemon features are modules with a common lifecycle, so a new one (an ingestion sink, a security filter) plugs in at one place.
 
-It sits directly behind Cloudflare as the origin, which is the preferred edge but not a requirement.
-TLS terminates at Cloudflare by default; set `proxy.tls.listen` and dboss terminates HTTPS itself with Let's Encrypt certificates obtained on demand for the hosts it already serves.
-There are no containers and no deploy logic; rsync, releases and rollback stay in lux-deploy, which calls `dboss` at the end of a deploy.
+There are no containers and no deploy logic of its own; rsync, releases and rollback stay in lux-deploy, which calls `dboss restart` at the end of a deploy.
 The configuration reference ships in the binary: `dboss config --reference`, also embedded from `./internal/config/reference.yaml`.
 
 ## Requirements
@@ -141,11 +176,10 @@ Every app-level key can be set once under `defaults:` in the host file and repea
 `dboss init` prints a fully commented starter config, service or app, with every key shown with its default or an example; save it with `dboss init > dboss.yaml`.
 
 ```
-$ dboss config --keys health
+$ dboss config --keys interval
 Runtime  (defaults: in the root file, top level in an app file; per-process ones also under processes.<name>)
-  health_interval      poll interval of the readiness and liveness checks                                                  500ms  per process
-  health_timeout       give-up time of the readiness check; counts as a failed restart                                     1m     per process
-  unhealthy_threshold  consecutive liveness failures of the web process before it is restarted; 0 disables ongoing checks  3      per process
+  health_interval    poll interval while a web process is starting, until it first answers  500ms  e.g. 1s  per process
+  liveness_interval  poll interval of the ongoing check once a web process is ready         10s  e.g. 30s   per process
 ```
 
 ## Commands
@@ -188,6 +222,48 @@ Config
 `dboss start` always runs in the foreground; systemd is the daemonizer and `dboss systemd --install` writes and enables the unit.
 Every other command talks to the running host over its control socket and accepts `--json`.
 Inside an app folder the app argument defaults to that app.
+
+On a terminal, `dboss start` opens with one row per process before any output arrives:
+
+```
+bun/web       http://bun.lvh.me      starting
+button/web    http://button.lvh.me   stopped, needs the start button
+sinatra/web   http://sinatra.lvh.me  stopped, wakes on the first request
+sinatra/job   worker                 stopped
+dboss/console http://127.0.0.1:3100/login?token=...  signed in for an hour
+```
+
+Each row is keyed by the same colored `app/proc |` prefix that process logs under, so the address and the output that follows it line up:
+
+```
+sinatra/web | == Sinatra (v4.1.1) has taken the stage on 3101
+sinatra/job | tick
+```
+
+Inside an app folder there is only one app, so the key drops to the process name:
+
+```
+$ cd ~/apps/sinatra && dboss s
+web | http://sinatra.lvh.me  stopped, wakes on the first request
+job | worker                 stopped
+web | == Sinatra (v4.1.1) has taken the stage on 3101
+job | tick
+```
+
+A web process shows the address to open (its `canonical_host`, else its first hostname), a worker says `worker`, and every row ends in the app's state, so an app that has not started yet is still listed with the URL that will wake it.
+The last row is a console sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
+Under systemd none of this appears and no link is minted: the banner, like the output echo and the privileged-port fallback, only happens when stdout is a terminal.
+
+A hand-run session also warns once when the runtime folder would be committed:
+
+```
+dboss: .dboss holds this host's state, logs and secrets and is not gitignored
+       add it: echo .dboss/ >> /Users/me/apps/myapp/.gitignore
+```
+
+`state_dir`, `log_dir` and the socket all default under `.dboss` in the config directory, which holds the request and log databases, the generated hook and pubsub secrets and the certificate cache.
+The check only runs when that directory has a `.gitignore` of its own, and it asks `git check-ignore`, so a rule in a parent directory, in `.git/info/exclude` or in your global excludes counts.
+A host whose `state_dir` lives outside the checkout, which is every real server, never sees it.
 
 ### Startup and the running list
 
@@ -238,11 +314,10 @@ One row is one record, not one physical line:
 A record that is still being written is not cut: while a log was written to in the last 2 seconds its last open row waits for the next pass.
 `dboss logs -f` still tails the live file, while `dboss logs --search q [--level l] [--channel c] [-n rows]` queries the same store the viewer uses and prints matching rows.
 
-The full-screen viewer at `/logs` (the **Logs** button on an app card, opened in a new window)
+The **Logs** route (the **Logs** button on an app card opens `#/logs?app=<name>` in a new tab)
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,
 expands a row to its raw fields and exports the current query as text.
-The current filters live in the URL query string, so a view can be bookmarked or shared.
-It is a second fez page (`log.html`), independent of the console shell.
+The current filters live in the hash query, so a view can be bookmarked, shared or reached with Back.
 
 ## Scheduled jobs
 
@@ -346,7 +421,7 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while a visitor would be served, `503` otherwise. An app stopped by `idle_stop` (or `dboss stop`) still answers `200` with `"state":"stopped"`, because the next request wakes it, so a Cloudflare Health Check or Load Balancer never flags a sleeping app. Draining, maintenance, starting, crashed and a stopped `autostart: button` app answer `503`. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
-The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, then the same check runs every `health_interval`; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
+The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, polled every `health_interval` (default `500ms`, because it decides how long a visitor who woke the app waits on the starting page). Once the process answers, the same check keeps running at the slower `liveness_interval` (default `10s`, and `5m` in a hand-run session, where a developer watching one app does not need it polled every ten seconds and every poll lands in their own request log), so a healthy app is not asked twice a second for its whole life; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
 `dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
 
@@ -554,24 +629,33 @@ Without a public URL, tunnel the port first: `ssh -L 3100:127.0.0.1:3100 <host>`
 The console is a [fez](https://github.com/dux/fez) application.
 Everything lives under `./internal/console/static/` and is embedded in the binary:
 
-* `index.html` - the SVG icon sprite and a single `<db-shell>` tag, plus one `<script fez="...">` tag per component.
-* `log.html` - the standalone full-screen log viewer page, a second `<db-log-shell>` entry point.
+* `index.html` - the SVG icon sprite and a single `<db-shell>` tag, plus one `<script fez="...">` tag per shared widget.
 * `fez.min.js` - the fez runtime, copied from https://dux.github.io/fez/dist/fez.min.js.
-* `fez/db-shell.fez` - navbar, section tabs, hash-routed views, API calls, the 5 second poll; exposed as `Dboss`.
-* `fez/db-overview.fez` - stat cards and the service list.
-* `fez/db-log-view.fez` - the log viewer: left nav of apps with sqlite size and fold-out channels, time range, filters, search, row detail and export; shared by the tab and the full-screen page.
-* `fez/db-logs.fez` - the in-console Logs tab, a thin wrapper around `db-log-view`.
-* `fez/db-log-shell.fez` - the full-screen page shell; exposes `Dboss` for `log.html`.
-* `fez/db-app-card.fez` - one service: status badge, stats datagrid, actions.
-* `fez/db-config.fez` - config file list, the YAML/Form mode toggle, the editor and revision history.
-* `fez/db-config-form.fez` - the visual config editor: one form per recipe, driven by `config.Recipes()`.
-* `fez/db-config-keys.fez` - searchable key reference shown in the drawer by the Help button.
-* `fez/db-traffic.fez` - the Traffic tab: per-app requests over time, error rate, latency quantiles and the top paths, status codes, countries, client IPs and methods from the request log.
-* `fez/db-audit.fez` - the Audit tab: operator actions with app, actor and action filters.
-* `fez/db-sys.fez` - the Sys tab: read-only host facts, resource use and installed toolchains with versions.
-* `fez/db-help.fez` - the Help tab: a topic list with the operator guide and the live key reference.
-* `fez/db-toast.fez` and `fez/db-drawer.fez` - self-mounting singletons exposed as `Toast` and `Drawer`.
 * `app.css` - the whole stylesheet, a light Tabler-style theme; components carry no `<style>` blocks.
+
+Every page is a hash route on `/`, so reload, Back/Forward and a pasted link all reproduce the same view:
+
+* `fez/db-shell.fez` - navbar, the `ROUTES` list that drives it, the route outlet, API calls and the 5 second poll; exposed as `Dboss`.
+* `fez/tpl-overview.fez` - `#/overview`: stat cards and the service list.
+* `fez/tpl-logs.fez` - `#/logs`: the log viewer page, a thin wrapper around `db-log-view`.
+* `fez/tpl-traffic.fez` - `#/traffic`: per-app requests over time, error rate, latency quantiles and the top paths, status codes, countries, client IPs and methods from the request log.
+* `fez/tpl-audit.fez` - `#/audit`: operator actions with app, actor and action filters.
+* `fez/tpl-sys.fez` - `#/sys`: read-only host facts, resource use and installed toolchains with versions.
+* `fez/tpl-pg.fez` - `#/pg`: the PostgreSQL databases and their backups; `#/pg?db=<name>` is one database.
+* `fez/tpl-pubsub.fez` - `#/pubsub`: one entry per hub, with its secret and a publish form.
+* `fez/tpl-config.fez` - `#/config`: config file list, the YAML/Form mode toggle, the editor and revision history.
+* `fez/tpl-help.fez` - `#/help`: a topic list with the operator guide and the live key reference.
+
+The shared widgets are loaded once from `index.html` and used by several pages:
+
+* `fez/db-log-view.fez` - the log viewer itself: left nav of apps with sqlite size and fold-out channels, time range, filters, search, row detail and export.
+* `fez/db-app-card.fez` - one service: status badge, stats datagrid, actions.
+* `fez/db-config-form.fez` - the visual config editor: one form per recipe, driven by `config.Recipes()`.
+* `fez/db-config-keys.fez` - searchable key reference, rendered live from the key registry.
+* `fez/db-preview-yaml.fez` - highlighted YAML for the examples in the Help pages.
+* `fez/db-toast.fez` and `fez/db-drawer.fez` - self-mounting singletons exposed as `Toast` and `Drawer`.
+
+A new page is one `tpl-<name>.fez` plus one `ROUTES` entry; `TestEveryConsoleRouteHasTemplate` fails when a route has no template.
 
 There is no build step: fez compiles the components in the browser.
 The console's Content Security Policy allows `'unsafe-inline'` and `'unsafe-eval'` for scripts and `'unsafe-inline'` for styles because fez needs them; every origin other than the console itself stays blocked, so nothing loads from a CDN.
@@ -589,6 +673,10 @@ internal/hook/        generated deploy-hook secrets under state_dir
 internal/super/       process supervisor, health checks, idle stop, state files, log writer/seal
 internal/ports/       fixed port allocation inside ports.range
 internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
+internal/authcog/     AuthCog sign-in flow shared by the console and the per-app proxy gate
+internal/pubsub/      realtime channel hubs served in front of a web process
+internal/schedule/    cron expression parsing for scheduled jobs
+internal/alerts/      error-rate and slow-request checks over the request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
 internal/logx/        leveled logger for dboss's own output (daemon.log_level)

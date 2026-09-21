@@ -205,11 +205,21 @@ defaults:
   # Readiness check after spawn, flips starting -> running.
   # The check itself is `health` on a web process in the procfile: a path such as /up that must
   # answer 2xx, or omitted for a plain TCP connect to PORT. Only web processes are checked.
+  # health_interval is the poll rate while the process is still starting, so it decides how
+  # long a visitor who woke the app waits on the starting page. Keep it short.
   health_interval: 500ms
   health_timeout: 60s
-  # After a web process is ready it keeps being polled at health_interval. This many
-  # consecutive failures restart it (kill, then the restart policy, backoff and max_restarts
-  # apply); one success resets the count. 0 disables the ongoing check, so only readiness runs.
+
+  # Once the process has answered once, the same check keeps running at this slower rate for
+  # the rest of its life, so a healthy app is not asked every half second forever.
+  # A hand-run session (stdout is a terminal) relaxes this to 5 minutes, because a developer
+  # watching one app does not need it polled every ten seconds and every poll lands in their own
+  # request log. Under systemd the configured value is used as written. A value above 5 minutes
+  # is kept either way; dev only ever slows the check down.
+  liveness_interval: 10s
+  # This many consecutive liveness failures restart the process (kill, then the restart policy,
+  # backoff and max_restarts apply); one success resets the count. 0 disables the ongoing check,
+  # so only readiness runs and liveness_interval is never used.
   # Applies to web processes only; workers are covered by their exit and restart policy.
   unhealthy_threshold: 3
 

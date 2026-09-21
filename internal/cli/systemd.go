@@ -22,7 +22,7 @@ func (c CLI) systemd(args []string) error {
 	set := flag.NewFlagSet("systemd", flag.ContinueOnError)
 	set.SetOutput(c.Err)
 	configPath := configFlag(set)
-	userName := set.String("user", "", "service user (default: current user)")
+	userName := set.String("user", "", "service user (default: $SUDO_USER under sudo, else the current user)")
 	groupName := set.String("group", "", "service group (default: the user's primary group)")
 	binary := set.String("bin", "", "dboss binary (default: this executable)")
 	install := set.Bool("install", false, "write "+unitPath+", reload systemd and enable the service")
@@ -41,11 +41,13 @@ func (c CLI) systemd(args []string) error {
 		return err
 	}
 	if *userName == "" {
-		current, err := user.Current()
+		*userName, err = defaultServiceUser()
 		if err != nil {
 			return err
 		}
-		*userName = current.Username
+	}
+	if *userName == "root" {
+		fmt.Fprintln(c.Err, "dboss: warning: the unit will run as root; pass --user <name> so an app cannot take the box with it")
 	}
 	if *binary == "" {
 		executable, err := os.Executable()
@@ -108,6 +110,23 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 `, cfg.Dir, userName, groupLine, cfg.Dir, servicePATH(home), res.DefaultCgroupRoot, userName, res.DefaultCgroupRoot, quoteUnit(binary), quoteUnit(cfg.SourcePath))
+}
+
+// defaultServiceUser is who the unit runs as when --user is not given. Installing writes into
+// /etc, so this command is always run through sudo; taking the current user there would name
+// root and hand every supervised app the whole box. The invoking account is the useful default,
+// the same substitution the Postgres inspector makes.
+func defaultServiceUser() (string, error) {
+	if os.Geteuid() == 0 {
+		if invoker := strings.TrimSpace(os.Getenv("SUDO_USER")); invoker != "" {
+			return invoker, nil
+		}
+	}
+	current, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return current.Username, nil
 }
 
 // systemPATH is what systemd hands a unit that sets no PATH of its own.

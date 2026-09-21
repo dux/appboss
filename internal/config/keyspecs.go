@@ -88,9 +88,10 @@ var keySpecs = map[string]KeySpec{
 
 	// --- Runtime ---
 	"idle_stop":           {Block: "runtime", Name: "Idle stop", Description: "stop the app after this long without proxied requests; 0 never", Example: "30m"},
-	"health_interval":     {Block: "runtime", Name: "Check interval", Description: "poll interval of the readiness and liveness checks", Example: "1s"},
+	"health_interval":     {Block: "runtime", Name: "Readiness interval", Description: "poll interval while a web process is starting, until it first answers", Example: "1s"},
+	"liveness_interval":   {Block: "runtime", Name: "Liveness interval", Description: "poll interval of the ongoing check once a web process is ready; a hand-run session uses 5m", Example: "30s"},
 	"health_timeout":      {Block: "runtime", Name: "Readiness timeout", Description: "give-up time of the readiness check; counts as a failed restart", Example: "90s"},
-	"unhealthy_threshold": {Block: "runtime", Name: "Liveness failures", Description: "consecutive liveness failures of a web process before it is restarted; 0 disables the ongoing checks"},
+	"unhealthy_threshold": {Block: "runtime", Name: "Liveness failures", Description: "consecutive liveness_interval failures of a web process before it is restarted; 0 disables the ongoing checks"},
 	"stop_timeout":        {Block: "runtime", Name: "Stop timeout", Description: "grace period between stop_signal and SIGKILL", Example: "30s"},
 	"stop_signal":         {Block: "runtime", Name: "Stop signal", Description: "signal sent to the process group on stop", Enum: []string{"TERM", "INT", "QUIT", "USR1", "USR2"}},
 	"restart":             {Block: "runtime", Name: "Restart policy", Description: "restart policy on exit", Enum: []string{"on-failure", "always", "never"}},

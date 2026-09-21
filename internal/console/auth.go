@@ -25,6 +25,11 @@ const (
 	cliLoginPath = "/login"
 	cliEmail     = "cli@localhost"
 	cliTokenTTL  = 3 * time.Minute
+	// A hand-run session prints its console link once, in the startup banner, and the operator
+	// clicks it whenever they get to it. A single-use link would be dead by then, so this one
+	// stays usable for its whole life. It is only ever minted for a terminal session on the
+	// loopback address, never under systemd.
+	devTokenTTL = time.Hour
 )
 
 type authSession = authcog.Session
@@ -36,7 +41,7 @@ type authenticator struct {
 	gate      authcog.Gate
 	admins    map[string]bool
 	mu        sync.Mutex
-	cliTokens map[string]time.Time
+	cliTokens map[string]cliToken
 	localPort string // console's own loopback port
 }
 
@@ -135,8 +140,25 @@ func (a *authenticator) loginHost(r *http.Request) string {
 	return r.Host + ":" + a.localPort
 }
 
+// cliToken is one pending login link. A `dboss login` link is spent on first use; the banner
+// link of a hand-run session is not, so the same line can be clicked again while it lives.
+type cliToken struct {
+	expiresAt time.Time
+	reusable  bool
+}
+
 // issueCLIToken returns a fresh single-use login token that expires after cliTokenTTL.
 func (a *authenticator) issueCLIToken() (string, error) {
+	return a.issueToken(cliTokenTTL, false)
+}
+
+// issueDevToken returns the banner link's token: longer lived and reusable, for a terminal
+// session only.
+func (a *authenticator) issueDevToken() (string, error) {
+	return a.issueToken(devTokenTTL, true)
+}
+
+func (a *authenticator) issueToken(ttl time.Duration, reusable bool) (string, error) {
 	token, err := authcog.RandomToken()
 	if err != nil {
 		return "", err
@@ -145,14 +167,14 @@ func (a *authenticator) issueCLIToken() (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.cliTokens == nil {
-		a.cliTokens = map[string]time.Time{}
+		a.cliTokens = map[string]cliToken{}
 	}
-	for key, expiresAt := range a.cliTokens {
-		if !expiresAt.After(now) {
+	for key, pending := range a.cliTokens {
+		if !pending.expiresAt.After(now) {
 			delete(a.cliTokens, key)
 		}
 	}
-	a.cliTokens[token] = now.Add(cliTokenTTL)
+	a.cliTokens[token] = cliToken{expiresAt: now.Add(ttl), reusable: reusable}
 	return token, nil
 }
 
@@ -164,10 +186,12 @@ func (a *authenticator) cliLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.URL.Query().Get("token")
 	a.mu.Lock()
-	expiresAt, ok := a.cliTokens[token]
-	delete(a.cliTokens, token)
+	pending, ok := a.cliTokens[token]
+	if !pending.reusable || !pending.expiresAt.After(time.Now()) {
+		delete(a.cliTokens, token)
+	}
 	a.mu.Unlock()
-	if token == "" || !ok || !expiresAt.After(time.Now()) {
+	if token == "" || !ok || !pending.expiresAt.After(time.Now()) {
 		http.Error(w, "login link is invalid or expired; run dboss login again", http.StatusBadRequest)
 		return
 	}
