@@ -90,6 +90,30 @@
       return `${Math.round(past / 86400)}d ago`
     }
 
+    diskLabel() {
+      const disk = this.props.app.disk
+      if (!this.hasTime(disk?.measured_at)) return '-'
+      return this.bytes(disk.total_bytes)
+    }
+
+    diskTitle() {
+      const disk = this.props.app.disk
+      if (!this.hasTime(disk?.measured_at)) return 'Not measured yet - click to measure now'
+      return `app ${this.bytes(disk.app_bytes)} + logs ${this.bytes(disk.log_bytes)}, measured ${this.clock(disk.measured_at)} - click to re-measure`
+    }
+
+    // The value is measured once a day, so an operator who just cleaned up asks for a fresh walk
+    // here. The shell owns the app list, so the answer is picked up by a normal reload.
+    async measureDisk() {
+      try {
+        await Dboss.api('/api/disk/refresh', { method: 'POST', body: JSON.stringify({ app: this.props.app.name }) })
+        await Dboss.reload()
+        Toast.show(`${this.props.app.name}: disk measured`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
     lastRun(job) {
       if (job.running) return 'running'
       if (job.last_error) return job.last_error
@@ -193,6 +217,7 @@
   <div class="app-stats">
     uptime: <b>{props.app.uptime || '-'}</b> &sdot;
     memory: <b>{bytes(props.app.resources?.memory_bytes)}</b> &sdot;
+    disk: <b class="stat-action" title={diskTitle()} onclick="fez.measureDisk()">{diskLabel()}</b> &sdot;
     last activity: <b>{activity(props.app.last_activity)}</b> &sdot;
     requests / hour: <b>{number(props.app.request_rates?.last_hour)}</b>
   </div>

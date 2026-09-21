@@ -75,7 +75,7 @@ func (s *auditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, e
 func TestDispatchAttributesActionsToCLI(t *testing.T) {
 	runtime := &fakeRuntime{}
 	store := &auditStore{}
-	server := &Server{service: ops.New(runtime, nil, store, nil, nil)}
+	server := &Server{service: ops.New(runtime, nil, store, nil, nil, nil)}
 
 	if response := server.dispatch(Request{Method: ops.ActionStart, App: "alpha"}); !response.OK {
 		t.Fatalf("start failed: %s", response.Error)
@@ -96,7 +96,7 @@ func TestDispatchAttributesActionsToCLI(t *testing.T) {
 }
 
 func TestDispatchReturnsActionErrors(t *testing.T) {
-	server := &Server{service: ops.New(&fakeRuntime{}, nil, nil, nil, nil)}
+	server := &Server{service: ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil)}
 	response := server.dispatch(Request{Method: "nope"})
 	if response.OK || response.Error == "" {
 		t.Fatalf("unknown action response = %+v", response)
@@ -104,13 +104,13 @@ func TestDispatchReturnsActionErrors(t *testing.T) {
 }
 
 func TestLoginResponse(t *testing.T) {
-	withoutLogin := &Server{service: ops.New(&fakeRuntime{}, nil, nil, nil, nil)}
+	withoutLogin := &Server{service: ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil)}
 	if response := withoutLogin.dispatch(Request{Method: loginMethod}); response.OK || response.Error == "" {
 		t.Fatalf("login without handler = %+v", response)
 	}
 
 	withLogin := &Server{
-		service: ops.New(&fakeRuntime{}, nil, nil, nil, nil),
+		service: ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil),
 		login:   func() (string, string, error) { return "http://local", "https://public", nil },
 	}
 	response := withLogin.dispatch(Request{Method: loginMethod})
@@ -131,7 +131,7 @@ func TestListenServesAndRefusesASecondServer(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	socket := filepath.Join(dir, "dboss.sock")
-	service := ops.New(&fakeRuntime{}, nil, nil, nil, nil)
+	service := ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil)
 	server, listenErr := Listen(socket, service, nil)
 	if listenErr != nil {
 		t.Fatal(listenErr)

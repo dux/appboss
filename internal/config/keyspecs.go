@@ -105,6 +105,7 @@ var keySpecs = map[string]KeySpec{
 	"log_retention":       {Block: "runtime", Name: "Log retention", Description: "how long request rows and app log files are kept; 0 disables the whole log store for the app", Example: "72h"},
 	"stdout_retention":    {Block: "runtime", Name: "Stdout retention", Description: "how long process stdout and the dboss daemon log are kept; 0 disables both"},
 	"log_flush":           {Block: "runtime", Name: "Log flush", Description: "request log batch insert interval", Example: "5s"},
+	"tmp_clean":           {Block: "runtime", Name: "Tmp cleanup", Description: "delete files under the app's ./tmp older than this once a day; false or 0 never cleans", Example: "7d"},
 	"shell":               {Block: "runtime", Name: "Run through shell", Description: "run commands through sh -c instead of exec"},
 	"env":                 {Block: "runtime", Name: "Environment", Description: "extra environment for every process, lowest priority", Example: "{RAILS_ENV: production}"},
 	"resources":           {Block: "runtime", Name: "Resource backend", Description: "resource backend", Enum: []string{"auto", "cgroup", "procgroup"}},

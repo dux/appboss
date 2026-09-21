@@ -217,6 +217,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeDashboard(w, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/apps":
 		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "capabilities": h.capabilities(), "updated_at": time.Now().UTC()})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/disk/refresh":
+		h.diskRefresh(w, r, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/log/channels":
 		h.logChannels(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/log/tree":
@@ -627,6 +629,31 @@ func (h *Handler) writeSys(w http.ResponseWriter) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"snapshot": h.sys.Snapshot(), "updated_at": time.Now().UTC()})
+}
+
+// diskRefresh measures one app's footprint now instead of waiting for the daily pass. It only
+// reads the filesystem, so it writes no audit row.
+func (h *Handler) diskRefresh(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		App string `json:"app"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	app := strings.TrimSpace(request.App)
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	if _, err := h.service.DiskRefresh(app); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "updated_at": time.Now().UTC()})
 }
 
 // sysRefresh re-samples the host and re-probes the toolchains on demand. It is read-only, so it

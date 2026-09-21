@@ -22,6 +22,7 @@ func TestRenderIncludesCoreMetrics(t *testing.T) {
 			LastHour:   50,
 			LastDay:    500,
 		},
+		Disk:  super.DiskUsage{AppBytes: 4096, LogBytes: 512, TotalBytes: 4608, MeasuredAt: now},
 		Cron:  []super.CronSnapshot{{Name: "cleanup", LastEnd: now, LastExit: 1}},
 		Hooks: []super.HookSnapshot{{Name: "deploy", LastEnd: now, LastExit: 0}},
 	}}
@@ -34,6 +35,9 @@ func TestRenderIncludesCoreMetrics(t *testing.T) {
 		`dboss_app_uptime_seconds{app="web"} 90`,
 		`dboss_app_memory_bytes{app="web"} 2048`,
 		`dboss_app_cpu_percent{app="web"} 3.5`,
+		`dboss_app_disk_bytes{app="web",part="app"} 4096`,
+		`dboss_app_disk_bytes{app="web",part="logs"} 512`,
+		"# TYPE dboss_app_disk_measured_timestamp_seconds gauge",
 		`dboss_app_process_restarts_total{app="web",process="web"} 2`,
 		`dboss_app_process_memory_bytes{app="web",process="web"} 1024`,
 		`dboss_request_rate{app="web",window="minute"} 5`,
@@ -68,6 +72,10 @@ func TestRenderOmitsUnstartedJobsAndEscapesLabels(t *testing.T) {
 	}}, time.Now(), NotifyStats{}, nil, PGStats{}, nil)
 	if strings.Contains(out, "dboss_cron_last_exit{") || strings.Contains(out, "dboss_hook_last_exit{") {
 		t.Fatalf("a job that never ran should have no sample:\n%s", out)
+	}
+	// An app the daily walk has not reached yet is a gap, not zero bytes.
+	if strings.Contains(out, "dboss_app_disk_bytes{") || strings.Contains(out, "dboss_app_disk_measured_timestamp_seconds{") {
+		t.Fatalf("an unmeasured app should have no disk sample:\n%s", out)
 	}
 	if !strings.Contains(out, `dboss_app_up{app="bad\"name"} 0`) {
 		t.Fatalf("label was not escaped:\n%s", out)

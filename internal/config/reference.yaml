@@ -269,6 +269,13 @@ defaults:
   stdout_retention: 3h      # process stdout and the dboss daemon log
   log_flush: 1s             # batch insert interval
 
+  # Housekeeping of the app's own ./tmp directory. Once a day dboss deletes the files last
+  # modified longer than tmp_clean ago, then the sub-directories that are left empty. The
+  # tmp directory itself always stays, and an app without one is skipped. A file a long
+  # running process wrote once and still uses (a pid file, a socket) ages like any other
+  # file, so set tmp_clean to false when the app keeps something there for longer.
+  tmp_clean: 7d             # false or 0 never touches ./tmp
+
   # Run procfile commands through `sh -c` instead of exec'ing the first word.
   # Needed for lines with &&, pipes, or $VAR. Off by default so signals reach
   # the real process, not a shell. Command strings are never env-expanded, so
@@ -554,6 +561,7 @@ max_restarts: 5
 shell: false
 log_retention: 168h
 stdout_retention: 3h
+tmp_clean: false            # this app keeps its own ./tmp
 memory_max: 512m
 cpu_max: 0
 env:

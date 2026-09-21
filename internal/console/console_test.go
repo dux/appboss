@@ -18,6 +18,7 @@ import (
 
 	"dboss/internal/apps"
 	"dboss/internal/config"
+	"dboss/internal/diskusage"
 	"dboss/internal/logstore"
 	"dboss/internal/ops"
 	"dboss/internal/super"
@@ -488,7 +489,7 @@ func newDevTestHandler(t *testing.T, manager *fakeManager) *Handler {
 
 func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates ops.Rates) *Handler {
 	t.Helper()
-	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}, nil, nil), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
+	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}, nil, nil, nil), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,6 +521,59 @@ func TestConsoleServesSystemInspection(t *testing.T) {
 	refresh := call(t, handler, cookie, session, http.MethodPost, "/api/sys/refresh", "{}")
 	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"hostname":"refreshed"`) {
 		t.Fatalf("unexpected sys refresh: %d %s", refresh.Code, refresh.Body.String())
+	}
+}
+
+// fakeDisk stands in for the diskusage module: it measures one known app and refuses anything else.
+type fakeDisk struct{ usage diskusage.Usage }
+
+func (f *fakeDisk) Usage(app string) (diskusage.Usage, bool) {
+	if app != "sinatra" {
+		return diskusage.Usage{}, false
+	}
+	return f.usage, true
+}
+
+func (f *fakeDisk) Refresh(app string) (diskusage.Usage, error) {
+	if app != "sinatra" {
+		return diskusage.Usage{}, errors.New("unknown app")
+	}
+	f.usage = diskusage.Usage{AppBytes: 2048, LogBytes: 512, TotalBytes: 2560, MeasuredAt: time.Now()}
+	return f.usage, nil
+}
+
+func TestConsoleRefreshesAppDiskUsage(t *testing.T) {
+	cfg := config.Default()
+	cfg.Apps = "/apps"
+	cfg.StateDir = t.TempDir()
+	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
+	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "sinatra", State: super.Running}}}
+	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil, &fakeDisk{}), newFakeStore(), nil, &fakeSys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, session := sessionCookie(t, handler)
+
+	refresh := call(t, handler, cookie, session, http.MethodPost, "/api/disk/refresh", `{"app":"sinatra"}`)
+	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"total_bytes":2560`) {
+		t.Fatalf("disk refresh = %d %s", refresh.Code, refresh.Body.String())
+	}
+	if missing := call(t, handler, cookie, session, http.MethodPost, "/api/disk/refresh", `{"app":"gone"}`); missing.Code != http.StatusNotFound {
+		t.Fatalf("unknown app = %d %s", missing.Code, missing.Body.String())
+	}
+	if empty := call(t, handler, cookie, session, http.MethodPost, "/api/disk/refresh", `{}`); empty.Code != http.StatusBadRequest {
+		t.Fatalf("missing app = %d %s", empty.Code, empty.Body.String())
+	}
+
+	// Without the CSRF header the refresh is rejected like every other write.
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/disk/refresh", strings.NewReader(`{"app":"sinatra"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code == http.StatusOK {
+		t.Fatalf("a refresh without CSRF should be rejected, got %d", response.Code)
 	}
 }
 
@@ -728,7 +782,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	store := apps.NewStore(cfg)
 	manager := &fakeManager{}
-	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil), store, nil, &fakeSys{})
+	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil, nil), store, nil, &fakeSys{})
 	if err != nil {
 		t.Fatal(err)
 	}

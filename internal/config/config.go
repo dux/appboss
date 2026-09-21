@@ -29,12 +29,30 @@ import (
 type Duration time.Duration
 
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
-	v, err := time.ParseDuration(node.Value)
+	v, err := ParseDuration(node.Value)
 	if err != nil {
-		return &Error{Line: node.Line, Message: fmt.Sprintf("invalid duration %q", node.Value), Hint: "durations look like 500ms, 30s, 20m, 6h or 72h"}
+		return &Error{Line: node.Line, Message: fmt.Sprintf("invalid duration %q", node.Value), Hint: "durations look like 500ms, 30s, 20m, 6h, 72h or 7d; false means off"}
 	}
 	*d = Duration(v)
 	return nil
+}
+
+// ParseDuration reads a Go duration, plus the day unit `dboss cron` already accepts (7d) and
+// `false` for a key whose 0 means off, so a switch reads like one.
+func ParseDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "false", "off":
+		return 0, nil
+	}
+	if days, found := strings.CutSuffix(value, "d"); found {
+		count, err := strconv.Atoi(days)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", value)
+		}
+		return time.Duration(count) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(value)
 }
 
 func (d *Duration) UnmarshalJSON(data []byte) error {
@@ -47,7 +65,7 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 		*d = Duration(nanos)
 		return nil
 	}
-	value, err := time.ParseDuration(text)
+	value, err := ParseDuration(text)
 	if err != nil {
 		return fmt.Errorf("invalid duration %q", text)
 	}
@@ -321,6 +339,7 @@ type Process struct {
 	LogRetention       Duration          `yaml:"log_retention" json:"log_retention"`
 	StdoutRetention    Duration          `yaml:"stdout_retention" json:"stdout_retention"`
 	LogFlush           Duration          `yaml:"log_flush" json:"log_flush"`
+	TmpClean           Duration          `yaml:"tmp_clean" json:"tmp_clean"`
 	Shell              bool              `yaml:"shell" json:"shell"`
 	Env                map[string]string `yaml:"env" json:"env"`
 	Resources          string            `yaml:"resources" json:"resources"`
@@ -454,7 +473,7 @@ func Default() Config {
 		Proxy:      Proxy{Listen: List{":80"}, ClientIPHeaders: List{"CF-Connecting-IP", "X-Forwarded-For"}, TLS: ProxyTLS{Redirect: true}, Wake: Wake{RetryAfter: 5, StartingPage: "web/starting.html", CrashedPage: "web/crashed.html", UnknownPage: "web/404.html"}, Upstream: Upstream{DialTimeout: Duration(2 * time.Second), ResponseHeaderTimeout: Duration(60 * time.Second), IdleConnTimeout: Duration(90 * time.Second), MaxIdleConnsPerApp: 32}},
 		Management: Management{Auth: ManagementAuth{Realm: "auth.authcog.com", SessionTTL: Duration(24 * time.Hour)}, Metrics: ManagementMetrics{Enabled: true}},
 		Ports:      Ports{Range: [2]int{3100, 3990}},
-		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), LivenessInterval: Duration(10 * time.Second), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}, AuthCog: AuthCog{Realm: "auth", Path: "/authcog"}}},
+		Defaults:   Defaults{Process: Process{IdleStop: Duration(6 * time.Hour), Health: "tcp", HealthInterval: Duration(500 * time.Millisecond), LivenessInterval: Duration(10 * time.Second), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, RestartReset: Duration(60 * time.Second), RestartBackoff: []any{"1s", 2.0, "60s"}, LogMaxSize: Size(10 << 20), LogKeep: 5, LogTailLines: 500, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), LogFlush: Duration(time.Second), TmpClean: Duration(7 * 24 * time.Hour), Env: map[string]string{}, Resources: "auto"}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Alerts: Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10}, Auth: Auth{SessionTTL: Duration(24 * time.Hour)}, AuthCog: AuthCog{Realm: "auth", Path: "/authcog"}}},
 		Daemon:     Daemon{IdleTick: Duration(time.Minute), ResumeRunning: true, PruneAt: "04:10", VacuumAt: "04:30", LogLevel: "info", LogIngestInterval: Duration(5 * time.Second), AuditRetention: Duration(8760 * time.Hour)},
 		Notify:     Notify{Format: "generic", Events: List{"crash", "restart-loop", "health-timeout", "wake-failed", "hook-failed", "deploy", "config-changed", "backup-failed", "error-rate", "slow"}, MinInterval: Duration(5 * time.Minute), Headers: map[string]string{}},
 		Postgres:   Postgres{Enabled: true, Backup: PostgresBackup{}},
@@ -953,7 +972,7 @@ func validateProcess(d Process) error {
 			return keyErr(key, "must be positive")
 		}
 	}
-	for key, value := range map[string]Duration{"stop_timeout": d.StopTimeout, "idle_stop": d.IdleStop, "log_retention": d.LogRetention, "stdout_retention": d.StdoutRetention} {
+	for key, value := range map[string]Duration{"stop_timeout": d.StopTimeout, "idle_stop": d.IdleStop, "log_retention": d.LogRetention, "stdout_retention": d.StdoutRetention, "tmp_clean": d.TmpClean} {
 		if value < 0 {
 			return keyErr(key, "cannot be negative")
 		}

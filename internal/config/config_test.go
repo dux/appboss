@@ -661,6 +661,40 @@ func TestStdoutRetentionDefaultsAndValidates(t *testing.T) {
 	}
 }
 
+func TestTmpCleanDefaultsAndTakesFalse(t *testing.T) {
+	if got := Default().Defaults.TmpClean.Value(); got != 7*24*time.Hour {
+		t.Fatalf("tmp_clean default = %v, want 168h", got)
+	}
+	cfg, err := Parse([]byte("apps: ./apps\ndefaults:\n  tmp_clean: 30d\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Defaults.TmpClean.Value() != 30*24*time.Hour {
+		t.Fatalf("tmp_clean override: %v %v", err, cfg.Defaults.TmpClean.Value())
+	}
+	cfg, err = Parse([]byte("apps: ./apps\ndefaults:\n  tmp_clean: false\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Defaults.TmpClean.Value() != 0 {
+		t.Fatalf("tmp_clean false: %v %v", err, cfg.Defaults.TmpClean.Value())
+	}
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  tmp_clean: -1h\n"), "/srv/dboss.yaml"); err == nil {
+		t.Fatal("negative tmp_clean should fail")
+	}
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  tmp_clean: soon\n"), "/srv/dboss.yaml"); err == nil {
+		t.Fatal("tmp_clean: soon should fail")
+	}
+}
+
+func TestParseDurationTakesDaysAndOff(t *testing.T) {
+	for value, want := range map[string]time.Duration{"7d": 7 * 24 * time.Hour, "0d": 0, "90m": 90 * time.Minute, "false": 0, "off": 0} {
+		got, err := ParseDuration(value)
+		if err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %v, %v; want %v", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"d", "7days", "true", "7 d", ""} {
+		if got, err := ParseDuration(value); err == nil {
+			t.Errorf("ParseDuration(%q) = %v, want an error", value, got)
+		}
+	}
+}
+
 func TestRestartRequiredListsHostKeys(t *testing.T) {
 	old := Default()
 	old.Apps = "/apps"

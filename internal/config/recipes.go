@@ -132,6 +132,7 @@ var recipeSpecs = []recipeSpec{
 			{path: "log_retention", section: "Logs"},
 			{path: "stdout_retention", section: "Logs"},
 			{path: "log_flush", section: "Logs"},
+			{path: "tmp_clean", section: "Housekeeping"},
 		},
 	},
 	{

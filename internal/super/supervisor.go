@@ -54,6 +54,16 @@ type RequestRates struct {
 	LastDay    int64 `json:"last_day"`
 }
 
+// DiskUsage is what an app occupies on disk: its own directory and the log store dboss writes for
+// it. It is measured in the background and filled in by ops, so a zero MeasuredAt means the app
+// has not been measured yet rather than that it is empty.
+type DiskUsage struct {
+	AppBytes   int64     `json:"app_bytes"`
+	LogBytes   int64     `json:"log_bytes"`
+	TotalBytes int64     `json:"total_bytes"`
+	MeasuredAt time.Time `json:"measured_at,omitempty"`
+}
+
 // WebProcessSnapshot is one web process of an app: the hosts it answers and the canonical host
 // its other hosts redirect to, plus its realtime hub.
 type WebProcessSnapshot struct {
@@ -89,11 +99,13 @@ type Snapshot struct {
 	Uptime          string               `json:"uptime,omitempty"`
 	Resources       res.Stats            `json:"resources"`
 	RequestRates    RequestRates         `json:"request_rates"`
+	Disk            DiskUsage            `json:"disk"`
 	Error           string               `json:"error,omitempty"`
 	ErrorLog        []string             `json:"error_log,omitempty"`
 	LogRetention    time.Duration        `json:"-"`
 	StdoutRetention time.Duration        `json:"-"`
 	LogFlush        time.Duration        `json:"-"`
+	TmpClean        time.Duration        `json:"-"`
 }
 
 // Serving reports whether a request for the app would be answered by the app itself: it runs, or

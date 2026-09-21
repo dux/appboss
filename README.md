@@ -361,6 +361,44 @@ filters by channel, time range, level or HTTP method/status and free text, highl
 expands a row to its raw fields and exports the current query as text.
 The current filters live in the hash query, so a view can be bookmarked, shared or reached with Back.
 
+## Temporary files
+
+An app's `./tmp` is where caches, uploads, sockets and pids pile up, and nothing ever comes back
+for them.
+Once a day, and once when the daemon starts, dboss deletes the files under `<app dir>/tmp` that
+were last modified longer than `tmp_clean` ago (default `7d`), then the sub-directories the
+deletion left empty and the ones that were already empty and as old.
+The `tmp` directory itself always stays, an app without one is skipped, and a `tmp` that is a
+symlink to a shared directory is followed.
+
+```yaml
+tmp_clean: 30d              # or a plain duration: 72h
+tmp_clean: false            # never touch ./tmp; 0 means the same
+```
+
+The key is valid under host `defaults:` and at an app's top level, like the other runtime keys.
+Age is the file's mtime, so anything a long-running process wrote once and still uses is cleaned
+like the rest; set `tmp_clean: false` for an app that keeps something there for longer.
+
+## Disk usage
+
+Every app is measured once when the daemon starts and once a day after that: its own directory
+plus `log_dir/<app>`, the process logs and the SQLite log store dboss writes for it.
+The console card shows the total next to the memory stat, with the split and the measurement time
+in its tooltip; clicking the value measures that app again on the spot, which is what to do after
+a cleanup rather than waiting for the next pass.
+`/metrics` carries the same numbers as `dboss_app_disk_bytes{app,part="app"|"logs"}` plus
+`dboss_app_disk_measured_timestamp_seconds`, and an app that has not been measured yet is left out
+of both instead of being published as zero.
+
+A walk of a release tree is far too slow for a page load, so the value is always the cached one.
+It is apparent size, what `du --apparent-size` prints: two hard links to one file count twice.
+An app entry that is a symlink to the current release measures that release, not its siblings, and
+a `tmp` or `uploads` symlink out of the app counts as the link, so a shared directory is never
+billed to two apps.
+In a single-app session `log_dir` sits inside the app folder; the log store is still counted once,
+and the rest of `.dboss` (state, config history, certificates) lands in the app half.
+
 ## Scheduled jobs
 
 An app declares one-shot commands the daemon runs on a schedule, independent of whether the app itself is running:
@@ -457,7 +495,7 @@ The management host also serves three endpoints, enabled by `management.metrics.
 
 * `GET /healthz` - `200 ok` while the daemon is up.
 * `GET /readyz` - `200` only while every `autostart` app serves (running, or asleep and woken by the next request), else `503` with the apps that are not ready.
-* `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-process restarts and memory, request rates per window, request duration quantiles (p50/p95/p99 over the last hour), and the last exit of each cron job and hook.
+* `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-app disk usage by part with the time it was measured, per-process restarts and memory, request rates per window, request duration quantiles (p50/p95/p99 over the last hour), and the last exit of each cron job and hook.
 
 `healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
 
@@ -764,6 +802,8 @@ internal/schedule/    cron expression parsing for scheduled jobs
 internal/alerts/      error-rate and slow-request checks over the request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
+internal/tmpclean/    daily sweep of each app's ./tmp (tmp_clean)
+internal/diskusage/   daily measurement of what each app occupies on disk
 internal/logx/        leveled logger for dboss's own output (daemon.log_level)
 internal/sysinfo/     read-only host inspection: OS, load, memory, disks and installed toolchains
 internal/pg/          PostgreSQL inspection, scheduled dumps, retention and restore

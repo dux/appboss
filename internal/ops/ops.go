@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"dboss/internal/config"
+	"dboss/internal/diskusage"
 	"dboss/internal/logstore"
 	"dboss/internal/notify"
 	"dboss/internal/pg"
@@ -97,6 +98,13 @@ type LogStore interface {
 	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
 	Channels(app string) ([]logstore.Channel, error)
 	Tree(names []string) ([]logstore.AppTree, error)
+}
+
+// Disk reads what an app occupies on disk. diskusage.Module implements it; a nil value leaves
+// every snapshot's Disk block zero.
+type Disk interface {
+	Usage(app string) (diskusage.Usage, bool)
+	Refresh(app string) (diskusage.Usage, error)
 }
 
 // Auditor records and reads operator actions. logstore.Store implements it; a store that does not
@@ -190,10 +198,11 @@ type Service struct {
 	sink    notify.Sink
 	pg      PG
 	pubsub  Pubsub
+	disk    Disk
 }
 
-func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pubsub, sinks ...notify.Sink) *Service {
-	service := &Service{runtime: runtime, rates: rates, store: store, pg: postgres, pubsub: realtime}
+func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pubsub, sizes Disk, sinks ...notify.Sink) *Service {
+	service := &Service{runtime: runtime, rates: rates, store: store, pg: postgres, pubsub: realtime, disk: sizes}
 	if auditor, ok := store.(Auditor); ok {
 		service.auditor = auditor
 	}
@@ -384,14 +393,11 @@ func auditFilter(request Request) logstore.AuditFilter {
 	return logstore.AuditFilter{App: request.App, Actor: request.Actor, Action: request.Action, Limit: request.Lines}
 }
 
-// Apps returns every app snapshot with its request rates filled in.
+// Apps returns every app snapshot with its request rates and disk usage filled in.
 func (s *Service) Apps() []super.Snapshot {
 	snapshots := s.runtime.Snapshots()
-	if s.rates == nil {
-		return snapshots
-	}
 	for i := range snapshots {
-		s.withRates(&snapshots[i])
+		s.decorate(&snapshots[i])
 	}
 	return snapshots
 }
@@ -401,8 +407,20 @@ func (s *Service) App(name string) (super.Snapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
-	s.withRates(&snapshot)
+	s.decorate(&snapshot)
 	return snapshot, nil
+}
+
+// DiskRefresh measures one app on demand. It only reads the filesystem, so it writes no audit row.
+func (s *Service) DiskRefresh(name string) (super.DiskUsage, error) {
+	if s.disk == nil {
+		return super.DiskUsage{}, errors.New("disk usage is not enabled")
+	}
+	usage, err := s.disk.Refresh(name)
+	if err != nil {
+		return super.DiskUsage{}, err
+	}
+	return diskUsage(usage), nil
 }
 
 func (s *Service) Start(name string) error   { return s.runtime.Start(name) }
@@ -699,12 +717,29 @@ func (s *Service) Rescan() (RescanResult, error) {
 	return result, err
 }
 
+// decorate adds what the supervisor does not know about an app: how many requests it answered and
+// what it occupies on disk. Both sources are optional and a missing one leaves the zero value.
+func (s *Service) decorate(snapshot *super.Snapshot) {
+	if s.rates != nil {
+		s.withRates(snapshot)
+	}
+	if s.disk != nil {
+		if usage, ok := s.disk.Usage(snapshot.Name); ok {
+			snapshot.Disk = diskUsage(usage)
+		}
+	}
+}
+
 func (s *Service) withRates(snapshot *super.Snapshot) {
 	rates, err := s.rates.Rates(snapshot.Name)
 	if err != nil {
 		return
 	}
 	snapshot.RequestRates = super.RequestRates{LastMinute: rates.LastMinute, LastHour: rates.LastHour, LastDay: rates.LastDay}
+}
+
+func diskUsage(usage diskusage.Usage) super.DiskUsage {
+	return super.DiskUsage{AppBytes: usage.AppBytes, LogBytes: usage.LogBytes, TotalBytes: usage.TotalBytes, MeasuredAt: usage.MeasuredAt}
 }
 
 func messages(failures []error) []string {

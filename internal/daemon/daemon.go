@@ -24,6 +24,7 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/console"
 	"dboss/internal/ctl"
+	"dboss/internal/diskusage"
 	"dboss/internal/ingest"
 	"dboss/internal/logstore"
 	"dboss/internal/logx"
@@ -36,6 +37,7 @@ import (
 	"dboss/internal/pubsub"
 	"dboss/internal/super"
 	"dboss/internal/sysinfo"
+	"dboss/internal/tmpclean"
 )
 
 // Daemon is one running host session. New builds and binds it; Run serves until the context is
@@ -104,8 +106,9 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		manager.Close()
 		return nil, err
 	}
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort}
-	service := ops.New(manager, logs, logs, postgres, channels, notifier)
+	sizes := diskusage.New(manager, cfg.LogDir)
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort}
+	service := ops.New(manager, logs, logs, postgres, channels, sizes, notifier)
 	// The console has its own loopback listener, so it is built and bound outside the proxy
 	// block: a dev session with proxy.listen turned off still gets a console and `dboss login`.
 	var management *console.Handler

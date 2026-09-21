@@ -581,6 +581,12 @@ input[type="radio"] {
   font-weight: 600;
 }
 
+.app-stats b.stat-action {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
 .app-status {
   display: flex;
   align-items: center;

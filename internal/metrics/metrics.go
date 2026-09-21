@@ -108,6 +108,29 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 		sample("dboss_app_cpu_percent", name(app.Name), app.Resources.CPUPercent)
 	}
 
+	// The walk runs once a day, so an app that has not been measured yet is left out rather than
+	// published as zero bytes, and the timestamp shows how old the number is.
+	metric("dboss_app_disk_bytes", "Bytes the app occupies on disk, by part, measured once a day.", "gauge")
+	for _, app := range apps {
+		if app.Disk.MeasuredAt.IsZero() {
+			continue
+		}
+		for _, part := range []struct {
+			label string
+			value int64
+		}{{"app", app.Disk.AppBytes}, {"logs", app.Disk.LogBytes}} {
+			sample("dboss_app_disk_bytes", "{app="+quote(app.Name)+",part="+quote(part.label)+"}", float64(part.value))
+		}
+	}
+
+	metric("dboss_app_disk_measured_timestamp_seconds", "When the app's disk usage was last measured.", "gauge")
+	for _, app := range apps {
+		if app.Disk.MeasuredAt.IsZero() {
+			continue
+		}
+		sample("dboss_app_disk_measured_timestamp_seconds", name(app.Name), float64(app.Disk.MeasuredAt.Unix()))
+	}
+
 	metric("dboss_app_process_restarts_total", "Restarts of one process.", "counter")
 	for _, app := range apps {
 		for _, process := range app.Processes {
