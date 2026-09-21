@@ -97,15 +97,26 @@ func TestHealthEndpointReportsState(t *testing.T) {
 
 func TestCanonicalHostRedirect(t *testing.T) {
 	snapshot := featureSnapshot(t, "    canonical_host: demo.test\n")
+	// A plain-HTTP origin, which is every local session and any box not behind Cloudflare, has
+	// to be sent back to http; assuming https pointed the browser at a port nothing listens on.
 	request := httptest.NewRequest(http.MethodGet, "http://www.demo.test:8080/path?x=1", nil)
 	request.Host = "WWW.demo.test:8080"
 	response := serveFeature(t, featureHandler(), snapshot, request)
-	if response.Code != http.StatusMovedPermanently || response.Header().Get("Location") != "https://demo.test/path?x=1" {
+	if response.Code != http.StatusMovedPermanently || response.Header().Get("Location") != "http://demo.test/path?x=1" {
 		t.Fatalf("unexpected redirect: %d %s", response.Code, response.Header().Get("Location"))
 	}
-	request.Header.Set("X-Forwarded-Proto", "http")
-	if response := serveFeature(t, featureHandler(), snapshot, request); response.Header().Get("Location") != "http://demo.test/path?x=1" {
+	// Cloudflare's header wins, so an origin reached over plain HTTP still redirects to https.
+	forwarded := httptest.NewRequest(http.MethodGet, "http://www.demo.test:8080/path?x=1", nil)
+	forwarded.Host = "www.demo.test:8080"
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	if response := serveFeature(t, featureHandler(), snapshot, forwarded); response.Header().Get("Location") != "https://demo.test/path?x=1" {
 		t.Fatalf("scheme should follow X-Forwarded-Proto: %s", response.Header().Get("Location"))
+	}
+	// So does dboss terminating TLS itself, with no header in play.
+	secure := httptest.NewRequest(http.MethodGet, "https://www.demo.test/path?x=1", nil)
+	secure.Host = "www.demo.test"
+	if response := serveFeature(t, featureHandler(), snapshot, secure); response.Header().Get("Location") != "https://demo.test/path?x=1" {
+		t.Fatalf("own TLS should redirect to https: %s", response.Header().Get("Location"))
 	}
 	request.Host = "demo.test"
 	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code == http.StatusMovedPermanently {
@@ -120,7 +131,9 @@ func TestCanonicalHostPerWebProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: super.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
-	for host, want := range map[string]string{"www.shop.test": "https://shop.test/", "www.admin.test": "https://admin.test/"} {
+	// The scheme mirrors the plain-HTTP requests below; what matters here is that each web
+	// process redirects to its own canonical host, not the other one's.
+	for host, want := range map[string]string{"www.shop.test": "http://shop.test/", "www.admin.test": "http://admin.test/"} {
 		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
 		request.Host = host
 		response := serveFeature(t, featureHandler(), snapshot, request)

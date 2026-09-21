@@ -119,16 +119,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
-// serves content. The scheme follows X-Forwarded-Proto because TLS terminates at Cloudflare.
+// serves content. The scheme is the one the request arrived on: Cloudflare's X-Forwarded-Proto,
+// else dboss's own TLS, else plain HTTP. Assuming https here sent a plain-HTTP origin, and every
+// local session, to a port nothing listens on.
 func redirectCanonical(w http.ResponseWriter, r *http.Request, canonical string) bool {
 	if canonical == "" || strings.EqualFold(hostOnly(r.Host), canonical) {
 		return false
 	}
-	scheme := "https"
-	if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); proto != "" {
-		scheme = strings.ToLower(proto)
-	}
-	http.Redirect(w, r, scheme+"://"+canonical+r.URL.RequestURI(), http.StatusMovedPermanently)
+	http.Redirect(w, r, requestScheme(r)+"://"+canonical+r.URL.RequestURI(), http.StatusMovedPermanently)
 	return true
 }
 
