@@ -58,6 +58,21 @@ func TestButtonComponentIsLoaded(t *testing.T) {
 	}
 }
 
+// ui-tabs is a shared widget too: the PostgreSQL database page switches between Backup and SQL
+// with it, and an unregistered tag would leave the page stuck on whatever tab it loaded with.
+func TestTabsComponentIsLoaded(t *testing.T) {
+	index, err := assets.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `fez="/assets/fez/ui-tabs.fez"`) {
+		t.Error("index.html must load ui-tabs.fez")
+	}
+	if _, err := assets.ReadFile("static/fez/ui-tabs.fez"); err != nil {
+		t.Fatalf("ui-tabs.fez is not embedded: %v", err)
+	}
+}
+
 // Help feature pages list their config keys by path and render them from the registry,
 // so a renamed or removed key must fail here instead of silently vanishing from the page.
 func TestHelpKeyPathsExist(t *testing.T) {

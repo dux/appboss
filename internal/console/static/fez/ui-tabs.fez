@@ -1,0 +1,32 @@
+<script>
+  // tabs="backup:Backup,sql:SQL" - the id is what the page stores, the label is what it shows.
+  // A plain "sql" entry is both.
+  const parse = (raw) => (raw || '').split(',').map((entry) => {
+    const [id, label] = entry.split(':')
+    return { id: (id || '').trim(), label: (label || id || '').trim() }
+  }).filter((tab) => tab.id)
+
+  class {
+    PROPS = {
+      tabs: { type: Array, default: (raw) => parse(raw) },
+      active: { type: String, default: '' },
+      onselect: { type: Function, state: true, default: () => {} },
+    }
+
+    // The page owns the active tab, so a new active prop has to repaint the strip.
+    onRefresh() {
+      this.refresh()
+    }
+
+    select(id) {
+      if (id === this.props.active) return
+      this.state.onselect(id)
+    }
+  }
+</script>
+
+<nav class="ui-tabs" role="tablist">
+  {#each props.tabs as tab}
+    <button class="ui-tab" class:active={tab.id === props.active} type="button" role="tab" aria-selected={tab.id === props.active ? 'true' : 'false'} onclick="fez.select('{tab.id}')">{tab.label}</button>
+  {/each}
+</nav>

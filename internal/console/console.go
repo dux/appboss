@@ -298,6 +298,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.pgDrop(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/config":
 		h.pgConfig(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/pg/query":
+		h.pgQuery(w, r, session)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/pubsub":
 		h.writePubsub(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/pubsub/secret":

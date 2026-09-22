@@ -189,6 +189,28 @@ func (h *Handler) pgDrop(w http.ResponseWriter, r *http.Request, session authSes
 	writeJSON(w, http.StatusOK, map[string]any{"dropped": strings.TrimSpace(request.Database), "updated_at": time.Now().UTC()})
 }
 
+// pgQuery runs one SQL statement, or a batch of them, against a database and returns the last
+// result set. It can write, so it goes through Do and lands in the audit log with the statement.
+func (h *Handler) pgQuery(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		Database string `json:"database"`
+		SQL      string `json:"sql"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.service.Do(ops.Request{Method: ops.ActionPGQuery, Database: strings.TrimSpace(request.Database), SQL: request.SQL, Actor: session.Email})
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result, "updated_at": time.Now().UTC()})
+}
+
 // pgConfig writes the backup policy and database selection into the server-only host override
 // and hot-reloads the PostgreSQL service, so the checkboxes apply without a daemon restart.
 func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authSession) {

@@ -12,6 +12,11 @@
       this.state.message = ''
       this.state.messageError = false
       this.state.filter = ''
+      this.state.tab = Dboss.readQs('tab') === 'sql' ? 'sql' : 'backup'
+      this.state.selectTab = (tab) => this.setTab(tab)
+      this.state.result = null
+      this.state.resultError = ''
+      this.state.running = false
     }
 
     onMount() {
@@ -87,13 +92,21 @@
       this.resolveSelected()
       this.state.message = ''
       this.state.messageError = false
+      this.clearResult()
       Pjax.hqs('db', name)
     }
 
     closeDatabase() {
       this.state.db = ''
       this.state.selected = null
+      this.clearResult()
+      Dboss.setQs('tab', '')
       Pjax.hqs('db', null)
+    }
+
+    setTab(tab) {
+      this.state.tab = tab
+      Dboss.setQs('tab', tab === 'backup' ? '' : tab)
     }
 
     rotationLabel(name) {
@@ -237,6 +250,42 @@
       }
     }
 
+    // The editor is a fez:keep textarea, so the statement is read off the node rather than held
+    // in a rendered state key: a result render must never touch what the operator typed.
+    async runSQL() {
+      const node = this.state.sqlNode
+      const name = this.state.selected && this.state.selected.name
+      const sql = node ? node.value.trim() : ''
+      if (!name || !sql || this.state.running) return
+      this.state.running = true
+      this.state.resultError = ''
+      try {
+        const data = await Dboss.api('/api/pg/query', { method: 'POST', body: JSON.stringify({ database: name, sql }) })
+        this.state.result = data.result
+      } catch (error) {
+        this.state.result = null
+        this.state.resultError = error.message
+        Toast.show(error.message, true)
+      } finally {
+        this.state.running = false
+      }
+    }
+
+    sqlKeydown(event) {
+      if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+      event.preventDefault()
+      this.runSQL()
+    }
+
+    clearResult() {
+      this.state.result = null
+      this.state.resultError = ''
+    }
+
+    cell(value) {
+      return value === null || value === undefined ? 'NULL' : value
+    }
+
     message(text, error = false) {
       this.state.message = text
       this.state.messageError = error
@@ -355,6 +404,65 @@
     <span>Connecting to the local server and listing its databases.</span>
   </div>
 {:else if state.selected}
+  <ui-tabs tabs="backup:Backup,sql:SQL" active={state.tab} :onselect="state.selectTab" />
+{#if state.tab === 'sql'}
+  <div class="section-head">
+    <h2>SQL</h2>
+    <span class="text-muted">Runs on {state.selected.name} as the role dboss connects with</span>
+  </div>
+  <section class="card sql-runner">
+    <div fez:keep="sql-editor">
+      <textarea class="sql-editor" spellcheck="false" placeholder="select * from users order by created_at desc limit 20" fez:this="sqlNode" onkeydown="fez.sqlKeydown(event)"></textarea>
+    </div>
+    <div class="sql-actions">
+      <button class="btn btn-primary" type="button" onclick="fez.runSQL()" disabled={state.running}>
+        <svg class="icon"><use href="#i-play"></use></svg>
+        {state.running ? 'Running' : 'Run'}
+      </button>
+      <span class="text-muted">{state.running ? 'Waiting for the server' : 'Cmd/Ctrl+Enter runs. Several statements run in order; the last result set is shown. Every run is audited.'}</span>
+    </div>
+  </section>
+
+  {#if state.resultError}
+    <div class="alert alert-danger sql-error">{state.resultError}</div>
+  {/if}
+
+  {#if state.result}
+    <div class="section-head">
+      <h2>Result</h2>
+      <span class="text-muted">{state.result.command || '-'} · {number(state.result.row_count)} rows · {number(state.result.duration_ms)} ms</span>
+    </div>
+    <section class="card">
+      {#if state.result.columns}
+        <div class="sql-result">
+          <table class="sql-table">
+            <thead>
+              <tr>
+                {#each state.result.columns as column}
+                  <th>{column}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each state.result.rows as row}
+                <tr>
+                  {#each row as value}
+                    <td class:sql-null={value === null}>{cell(value)}</td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        {#if state.result.truncated}
+          <p class="text-muted sql-note">Showing the first {number(state.result.rows.length)} of {number(state.result.row_count)} rows. Add a LIMIT to see the rest.</p>
+        {/if}
+      {:else}
+        <p class="text-muted sql-note">{state.result.command || 'Done'} · {number(state.result.row_count)} rows affected. The statement returned no result set.</p>
+      {/if}
+    </section>
+  {/if}
+{:else}
   <div class="section-head">
     <h2>Overview</h2>
   </div>
@@ -431,6 +539,7 @@
       {/each}
     </div>
   </section>
+{/if}
 {:else}
   <section class="stat-row" aria-label="PostgreSQL summary">
     <article class="card stat-card">

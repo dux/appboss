@@ -740,6 +740,7 @@
           <li>Backups without a cron script: pick databases in the console, set their rotation, done.</li>
           <li>Bounded storage: one daily run, scheduled dumps kept for a week or a month, a manual backup kept until you remove it.</li>
           <li>Restoring, deleting or dropping a database from the console, and seeing sizes and connections at a glance.</li>
+          <li>A SQL prompt without an SSH session: the <b>SQL</b> tab on a database runs statements against it from the browser.</li>
         </ul>
         <h3>Config keys</h3>
         <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases,pg_db" /></div>
@@ -757,6 +758,7 @@
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><b>Download</b> serves that zip as it is, and <b>Upload backup</b> stores one you picked as a manual entry, so a database moves between hosts: download here, upload there, restore there.</li>
+          <li>A database page has a <b>Backup</b> and a <b>SQL</b> tab. SQL runs whatever you type as the role dboss connects with, <code>Cmd/Ctrl+Enter</code> runs it, a pasted batch runs in order and shows the last result set, and 500 rows travel while the full count is still reported. A run is bounded by a 30 second <code>statement_timeout</code>, and because it can write, every run is audited as <code>pg-query</code> with the statement.</li>
           <li><code>postgres</code> is a host key but applies without a daemon restart. The console writes the selection to the server-only <code>dboss.local.yaml</code>.</li>
           <li>The box needs <code>pg_dump</code> and <code>psql</code> on the service user's <code>PATH</code>, and a role that can read every selected database.</li>
         </ul>

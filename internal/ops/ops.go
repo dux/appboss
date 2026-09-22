@@ -54,6 +54,7 @@ const (
 	ActionPGRestore     = "pg-restore"
 	ActionPGDrop        = "pg-drop"
 	ActionPGDeleteDump  = "pg-delete-dump"
+	ActionPGQuery       = "pg-query"
 	ActionPubsub        = "pubsub"
 	ActionPubsubSecret  = "pubsub-secret"
 	ActionPubsubRotate  = "pubsub-rotate"
@@ -64,7 +65,7 @@ const (
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionHostHookRun: true, ActionExec: true,
-	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true,
+	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
 
@@ -144,6 +145,7 @@ type PG interface {
 	DeleteBackup(id string) error
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
 	DropDatabase(ctx context.Context, database, confirm string) error
+	Query(ctx context.Context, database, sql string) (pg.QueryResult, error)
 	BackupConfig() config.PostgresBackup
 	Apply(cfg config.Config)
 }
@@ -179,6 +181,7 @@ type Request struct {
 	Event    string          `json:"event,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`
 	Database string          `json:"database,omitempty"`
+	SQL      string          `json:"sql,omitempty"`
 	BackupID string          `json:"backup_id,omitempty"`
 	Target   string          `json:"target,omitempty"`
 	Replace  bool            `json:"replace,omitempty"`
@@ -323,6 +326,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return request.Database, s.DropDatabase(request.Database, request.Confirm)
 	case ActionPGDeleteDump:
 		return request.BackupID, s.DeleteBackup(request.BackupID)
+	case ActionPGQuery:
+		return s.RunQuery(request.Database, request.SQL)
 	case ActionPubsub:
 		return s.PubsubApps(), nil
 	case ActionPubsubSecret:
@@ -397,6 +402,8 @@ func auditDetail(request Request) string {
 		return request.Database
 	case ActionPGDeleteDump:
 		return request.BackupID
+	case ActionPGQuery:
+		return request.Database + ": " + pg.QueryAuditDetail(request.SQL)
 	case ActionPubsubPublish:
 		return request.Channel
 	default:
@@ -582,6 +589,15 @@ func (s *Service) DropDatabase(database, confirm string) error {
 		return errors.New("postgres is not enabled")
 	}
 	return s.pg.DropDatabase(context.Background(), database, confirm)
+}
+
+// RunQuery executes SQL against one database and returns its last result set. It is a mutating
+// action by nature, so it goes through Do and is audited with the statement.
+func (s *Service) RunQuery(database, sql string) (pg.QueryResult, error) {
+	if s.pg == nil || !s.pg.Enabled() {
+		return pg.QueryResult{}, errors.New("postgres is not enabled")
+	}
+	return s.pg.Query(context.Background(), database, sql)
 }
 
 // BackupFile returns one recorded dump and the archive's path on disk, for the console download.

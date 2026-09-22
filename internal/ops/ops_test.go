@@ -252,6 +252,7 @@ type fakePG struct {
 	available bool
 	backups   []pg.Backup
 	applied   int
+	queried   string
 }
 
 func (f *fakePG) Enabled() bool   { return f.enabled }
@@ -287,6 +288,10 @@ func (f *fakePG) Restore(context.Context, pg.RestoreRequest) (pg.RestoreResult, 
 	return pg.RestoreResult{Target: "app_restore"}, nil
 }
 func (f *fakePG) DropDatabase(context.Context, string, string) error { return nil }
+func (f *fakePG) Query(_ context.Context, database, sql string) (pg.QueryResult, error) {
+	f.queried = sql
+	return pg.QueryResult{Database: database, Columns: []string{"one"}, Rows: [][]any{{"1"}}, RowCount: 1, Command: "SELECT 1"}, nil
+}
 func (f *fakePG) BackupConfig() config.PostgresBackup                { return config.PostgresBackup{} }
 func (f *fakePG) Apply(config.Config)                                { f.applied++ }
 
@@ -305,6 +310,12 @@ func TestPGActionsDispatch(t *testing.T) {
 	}
 	if _, err := service.Do(Request{Method: ActionPG}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := service.Do(Request{Method: ActionPGQuery, Database: "app", SQL: "select 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if postgres.queried != "select 1" {
+		t.Fatalf("query = %q", postgres.queried)
 	}
 	if entries := service.Backups(); len(entries) != 1 {
 		t.Fatalf("backups = %+v", entries)

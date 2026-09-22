@@ -245,6 +245,34 @@ code {
   color: var(--text);
 }
 
+/* ui-tabs: the in-page tab strip, one step quieter than the navbar's own tabs. */
+.ui-tabs {
+  display: flex;
+  gap: 4px;
+  margin: -4px 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-tab {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: none;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.ui-tab:hover {
+  color: var(--text);
+}
+
+.ui-tab.active {
+  border-bottom-color: var(--primary);
+  color: var(--text);
+}
+
 /* --- Page ------------------------------------------------------------------ */
 
 .page-body {
@@ -1176,6 +1204,87 @@ input[type="radio"] {
 
 .pg-tablespace-row {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.8fr) 120px;
+}
+
+.sql-runner {
+  padding: 16px 20px;
+}
+
+textarea.sql-editor {
+  width: 100%;
+  min-height: 150px;
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.sql-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.sql-error {
+  margin-top: 16px;
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  white-space: pre-wrap;
+}
+
+/* The grid scrolls on its own so a wide result never widens the page. */
+.sql-result {
+  max-height: 60vh;
+  overflow: auto;
+  border-radius: inherit;
+}
+
+.sql-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sql-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: var(--text-size-small);
+  letter-spacing: var(--label-tracking);
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sql-table td {
+  max-width: 480px;
+  padding: 6px 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  text-overflow: ellipsis;
+  white-space: pre;
+  vertical-align: top;
+}
+
+.sql-table tr:hover td {
+  background: var(--primary-soft);
+}
+
+.sql-null {
+  color: var(--muted);
+}
+
+.sql-note {
+  margin: 0;
+  padding: 12px 20px;
+  font-size: var(--text-size-small);
 }
 
 .pg-check {

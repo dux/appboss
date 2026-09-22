@@ -594,6 +594,10 @@ Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_
 Every recorded dump has **Download**, which serves the stored zip as it is, and the per-database panel has **Upload backup**, which stores an archive you picked and records it as a manual entry.
 Together they move a database between hosts: download on one box, upload on the other, restore there.
 
+Each database page has two tabs: **Backup** is everything above, and **SQL** is a runner.
+It executes whatever you type against that database as the role dboss connects with - `Cmd/Ctrl+Enter` runs, several statements run in order and the last result set is shown, `NULL` is rendered as such, and long results stop at 500 rows with the full count reported.
+A run is bounded by a 30 second `statement_timeout`, so closing the tab cannot leave a query burning CPU, and it can write, so every run lands in the audit log as `pg-query` with the statement.
+
 The console writes the selection to `dboss.local.yaml` (the host override is created from the base when missing) and hot-reloads the daemon, so no restart is needed. A plain edit on disk applies on the next config save or `dboss rescan`. Restore verifies the archive and loads into a **new** database named `<source>_restore_<timestamp>` by default; replacing an existing database requires an explicit target and confirmation. The per-database panel also has **Drop database**, which needs the database name typed as confirmation.
 
 On the box this feature needs `pg_dump` and `psql` on the service user's `PATH`, and a role that can read every selected database (`pg_read_all_data` or ownership). The CLI mirrors the tab:
@@ -829,7 +833,7 @@ Every page is a hash route on `/`, so reload, Back/Forward and a pasted link all
 * `fez/tpl-traffic.fez` - `#/traffic`: per-app requests over time, error rate, latency quantiles and the top paths, status codes, countries, client IPs and methods from the request log.
 * `fez/tpl-audit.fez` - `#/audit`: operator actions with app, actor and action filters.
 * `fez/tpl-sys.fez` - `#/sys`: read-only host facts, resource use and installed toolchains with versions.
-* `fez/tpl-pg.fez` - `#/pg`: the PostgreSQL databases and their backups; `#/pg?db=<name>` is one database.
+* `fez/tpl-pg.fez` - `#/pg`: the PostgreSQL databases and their backups; `#/pg?db=<name>` is one database, with a Backup and a SQL tab (`&tab=sql`).
 * `fez/tpl-pubsub.fez` - `#/pubsub`: one entry per hub, with its secret and a publish form.
 * `fez/tpl-config.fez` - `#/config`: config file list, the YAML/Form mode toggle, the editor and revision history.
 * `fez/tpl-help.fez` - `#/help`: a topic list with the operator guide and the live key reference.
@@ -841,6 +845,7 @@ The shared widgets are loaded once from `index.html` and used by several pages:
 * `fez/db-config-form.fez` - the visual config editor: one form per recipe, driven by `config.Recipes()`.
 * `fez/db-config-keys.fez` - searchable key reference, rendered live from the key registry.
 * `fez/db-preview-yaml.fez` - highlighted YAML for the examples in the Help pages.
+* `fez/ui-tabs.fez` - an in-page tab strip: `tabs="backup:Backup,sql:SQL"`, the active id, and an `onselect` the page handles.
 * `fez/db-toast.fez` and `fez/db-drawer.fez` - self-mounting singletons exposed as `Toast` and `Drawer`.
 
 A new page is one `tpl-<name>.fez` plus one `ROUTES` entry; `TestEveryConsoleRouteHasTemplate` fails when a route has no template.
