@@ -138,7 +138,7 @@ func TestHookRotateReplacesGeneratedSecret(t *testing.T) {
 
 func TestGitAuthEnvCarriesTokenInEnvironment(t *testing.T) {
 	env := map[string]string{"PATH": "/usr/bin"}
-	gitAuthEnv(env, "s3cret")
+	GitAuthEnv(env, "s3cret")
 	if env["GITHUB_TOKEN"] != "s3cret" || env["GIT_TERMINAL_PROMPT"] != "0" {
 		t.Fatalf("env = %v", env)
 	}

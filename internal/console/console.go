@@ -25,6 +25,7 @@ import (
 	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
+	"dboss/internal/logx"
 	"dboss/internal/metrics"
 	"dboss/internal/ops"
 	"dboss/internal/pubsub"
@@ -415,16 +416,22 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/hooks/")
-	app, hookName, ok := strings.Cut(rest, "/")
-	if !ok || app == "" || hookName == "" || strings.Contains(hookName, "/") {
-		http.NotFound(w, r)
-		return
-	}
+	parts := strings.Split(rest, "/")
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	// One segment is a host hook (the github_pr built-in); two are an app hook.
+	if len(parts) == 1 && parts[0] != "" {
+		h.handleHostHook(w, r, parts[0], body)
+		return
+	}
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	app, hookName := parts[0], parts[1]
 	secret, err := h.service.HookSecret(app, hookName)
 	if err != nil {
 		http.NotFound(w, r)
@@ -444,6 +451,53 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "app": app, "hook": hookName})
+}
+
+// handleHostHook runs a host-level hook (the github_pr built-in). It answers 202 at once and
+// deploys in the background, since a checkout and setup can take minutes.
+func (h *Handler) handleHostHook(w http.ResponseWriter, r *http.Request, name string, body []byte) {
+	secret, err := h.service.HostHookSecret(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !hookAuthorized(r, secret, body) {
+		http.Error(w, "forbidden", http.StatusUnauthorized)
+		return
+	}
+	params := qsParams(r)
+	go func() {
+		if _, err := h.service.Do(ops.Request{Method: ops.ActionHostHookRun, Hook: name, Params: params, Actor: "hook:" + name}); err != nil {
+			logx.Warnf("host hook %s: %v", name, err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "hook": name})
+}
+
+// qsParams flattens the query into QS_<NAME> entries, skipping the hook's own token so a secret
+// never reaches the hook process.
+func qsParams(r *http.Request) map[string]string {
+	query := r.URL.Query()
+	params := make(map[string]string, len(query))
+	for key, values := range query {
+		if key == "token" || len(values) == 0 {
+			continue
+		}
+		params["QS_"+qsEnvName(key)] = values[0]
+	}
+	return params
+}
+
+func qsEnvName(key string) string {
+	var b strings.Builder
+	for _, c := range strings.ToUpper(key) {
+		if (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			b.WriteRune(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	return b.String()
 }
 
 // hookAuthorized accepts either a GitHub HMAC signature over the raw body or a bearer token in

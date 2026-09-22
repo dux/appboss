@@ -123,6 +123,10 @@ func (m *fakeManager) HookSecret(app, hook string) (string, error) {
 	return secret, nil
 }
 
+func (m *fakeManager) HostHookSecret(name string) (string, error) {
+	return "host-secret", nil
+}
+
 func (m *fakeManager) Exec(app string, argv []string, timeout time.Duration) (super.ExecResult, error) {
 	m.actions = append(m.actions, fmt.Sprintf("exec %s %s", app, strings.Join(argv, " ")))
 	return super.ExecResult{Output: "ran\n", ExitCode: 0}, nil

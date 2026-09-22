@@ -11,6 +11,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"dboss/internal/config"
@@ -43,6 +44,7 @@ const (
 	ActionHook          = "hook"
 	ActionHookRun       = "hook-run"
 	ActionHookRotate    = "hook-rotate"
+	ActionHostHookRun   = "host-hook-run"
 	ActionExec          = "exec"
 	ActionAudit         = "audit"
 	ActionLogSearch     = "log-search"
@@ -61,7 +63,7 @@ const (
 // auditActions are the methods that write an audit row when they run.
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
-	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionExec: true,
+	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionHostHookRun: true, ActionExec: true,
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
@@ -80,6 +82,7 @@ type Runtime interface {
 	RotateHook(name, hook string) (super.HookInfo, error)
 	Hooks(name string) ([]super.HookInfo, error)
 	HookSecret(name, hook string) (string, error)
+	HostHookSecret(name string) (string, error)
 	Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
@@ -180,6 +183,9 @@ type Request struct {
 	Target   string          `json:"target,omitempty"`
 	Replace  bool            `json:"replace,omitempty"`
 	Confirm  string          `json:"confirm,omitempty"`
+	// Params carries the request query parameters a hook ping arrived with, keyed by their QS_
+	// name. The built-in github_pr hook reads branch/repo/action/num from it.
+	Params map[string]string `json:"params,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -202,6 +208,10 @@ type Service struct {
 	pg      PG
 	pubsub  Pubsub
 	disk    Disk
+	// previews serializes the built-in github_pr deploys per app, so two pushes to one branch
+	// never race the same checkout while different branches deploy in parallel.
+	previewMu    sync.Mutex
+	previewLocks map[string]*sync.Mutex
 }
 
 func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pubsub, sizes Disk, sinks ...notify.Sink) *Service {
@@ -291,6 +301,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.Hooks(request.App)
 	case ActionHookRun:
 		return nil, s.RunHook(request.App, request.Hook)
+	case ActionHostHookRun:
+		return nil, s.RunHostHook(request.Hook, request.Params)
 	case ActionHookRotate:
 		return s.RotateHook(request.App, request.Hook)
 	case ActionExec:
@@ -467,6 +479,26 @@ func (s *Service) Hooks(name string) ([]super.HookInfo, error) { return s.runtim
 
 // RunHook starts one deploy hook now.
 func (s *Service) RunHook(name, hook string) error { return s.runtime.RunHook(name, hook) }
+
+// HostHookSecret returns the effective secret of a host-level hook, for verifying a ping.
+func (s *Service) HostHookSecret(name string) (string, error) {
+	return s.runtime.HostHookSecret(name)
+}
+
+// previewLock returns the mutex that serializes deploys for one preview app.
+func (s *Service) previewLock(name string) *sync.Mutex {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	if s.previewLocks == nil {
+		s.previewLocks = map[string]*sync.Mutex{}
+	}
+	lock := s.previewLocks[name]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.previewLocks[name] = lock
+	}
+	return lock
+}
 
 // RotateHook mints a new generated secret for one hook and returns it with its URL.
 func (s *Service) RotateHook(name, hook string) (super.HookInfo, error) {

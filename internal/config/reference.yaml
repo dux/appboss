@@ -631,6 +631,12 @@ cron:
     schedule: "0 7 * * 1-5"
     command: bundle exec rake report:daily
 
+# A host can declare one built-in hook, `github_pr`, in the root file. Its ping is
+# <management.url>/hooks/github_pr (one path segment is a host hook, two are an app hook) with
+# query params action, branch, repo and num. dboss itself checks out the branch, writes the app
+# from `template` (an app file with $VAR and ${VAR} from the params), runs `setup` and starts the
+# app; action=closed removes it. See README "GitHub PR previews".
+#
 # Deploy hooks: named one-shot commands a signed HTTP POST can trigger, independent of the app's
 # run state. The ping URL is <management.url>/hooks/<app>/<hook>. Auth is a token: either
 # ?token=<secret> in the URL, Authorization: Bearer <secret>, X-Gitlab-Token: <secret>, or a

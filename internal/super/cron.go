@@ -202,7 +202,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 	}
 	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env, generated)
 	if state.pull && a.spec.Config.GithubToken != "" {
-		gitAuthEnv(env, a.spec.Config.GithubToken)
+		GitAuthEnv(env, a.spec.Config.GithubToken)
 	}
 	var cmd *exec.Cmd
 	if a.spec.Config.Shell {
@@ -264,10 +264,10 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 	return nil
 }
 
-// gitAuthEnv points git at the app's github_token through a credential helper carried in the
+// GitAuthEnv points git at the app's github_token through a credential helper carried in the
 // environment, so the token reaches neither argv nor the repository's config. The helper answers
 // only the credential "get"; GIT_TERMINAL_PROMPT=0 makes a bad token fail instead of hanging.
-func gitAuthEnv(env map[string]string, token string) {
+func GitAuthEnv(env map[string]string, token string) {
 	env["GITHUB_TOKEN"] = token
 	env["GIT_TERMINAL_PROMPT"] = "0"
 	env["GIT_CONFIG_COUNT"] = "1"

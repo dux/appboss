@@ -441,6 +441,51 @@ With no `secret` in the config, dboss generates a 64-character secret under `sta
 
 `dboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes dboss's exit code.
 
+## GitHub PR previews
+
+A host can declare one built-in `github_pr` hook that turns a branch into a short-lived app, so a Git host webhook creates, updates and tears down PR previews with no runner and no SSH deploy script.
+The hook is host-level and answered at `https://<management.url>/hooks/github_pr`; one path segment is a host hook, two are an app hook.
+
+```yaml
+hooks:
+  github_pr:
+    # secret: $GITHUB_WEBHOOK_SECRET   # optional; generated under state_dir when omitted
+    repo: https://github.com/owner/repo.git       # fallback when the ping omits repo
+    setup:
+      command: ./bin/setup.sh     # after checkout, before start; non-zero fails the deploy
+      timeout: 3m                 # default
+    drop_database_on_close: false
+    template:
+      name: $QS_BRANCH
+      hosts: [pr-$QS_BRANCH.example.com]
+      autostart: false
+      deletable: true
+      pg_db:
+        db_url: ${QS_BRANCH}_db
+      procfile:
+        web: {command: ./start.sh, health: /up}
+```
+
+The ping carries the branch and a few query params: `action`, `branch`, `repo`, `num`.
+A GitHub Action step can send them straight from the event, so nothing has to parse the webhook body:
+
+```sh
+curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=${{ github.event.action }}&branch=${{ github.head_ref }}&repo=${{ github.event.pull_request.head.repo.clone_url }}&num=${{ github.event.number }}"
+```
+
+Every query param becomes `QS_<NAME>` for the hook.
+`action=closed` stops the app, optionally drops its `pg_db` databases and removes the checkout; any other action checks out the branch tip, writes the app config from `template`, runs `setup`, and starts the app.
+A private `repo` over HTTPS is pulled with `github_token`; a fork PR works because the caller passes the head repo's clone URL.
+Events for one branch are serialized, so two pushes cannot race the same checkout, while different branches deploy in parallel.
+
+`template` is an app file with `$VAR` and `${VAR}` interpolation.
+A value in a `hosts` or `canonical_host` field is sanitized as a DNS label (`/` and `_` become `-`); every other field is an identifier (`/` becomes `_`).
+A top-level `hosts` is the default for every procfile entry that declares none.
+The preview-only `name` key names the app folder and database prefix, sanitized the same way, and `main` and `development` are refused.
+
+Every step is audited under actor `hook:github_pr` (`config-write`, `deploy`, `setup-failed`, `stop`, `db-drop`, `destroy`).
+The preview runs like any other app, so the console, request log, metrics and `dboss ls` all see it.
+
 ## PubSub channels
 
 A web process can serve a pub/sub hub on its hosts. Set `pubsub` and dboss answers the path instead of forwarding, so subscribers connect even while the app is stopped and realtime traffic never wakes it. `pubsub: true` uses `/socketio`, `pubsub: /path` sets a custom prefix, and a mapping sets the full options:

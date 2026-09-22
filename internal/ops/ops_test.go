@@ -85,6 +85,10 @@ func (f *fakeRuntime) HookSecret(name, hook string) (string, error) {
 	return "secret", nil
 }
 
+func (f *fakeRuntime) HostHookSecret(name string) (string, error) {
+	return "secret", nil
+}
+
 func (f *fakeRuntime) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
 	f.actions = append(f.actions, "exec "+name)
 	return super.ExecResult{Output: "ok", ExitCode: 0}, nil

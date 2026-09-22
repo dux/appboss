@@ -194,6 +194,9 @@ type Config struct {
 	Daemon     Daemon     `yaml:"daemon" json:"daemon"`
 	Notify     Notify     `yaml:"notify" json:"notify"`
 	Postgres   Postgres   `yaml:"postgres" json:"postgres"`
+	// HostHooks is the host-level hooks: block of the root file. It shares the `hooks` key with an
+	// app's hooks, so Parse copies it out of the embedded appFile rather than a yaml field here.
+	HostHooks map[string]Hook `yaml:"-" json:"-"`
 }
 
 // Postgres is the host's PostgreSQL server. The console inspects it read-only and the daemon
@@ -488,7 +491,13 @@ type file struct {
 	appFile `yaml:",inline"`
 }
 
+// hostKeys are the keys valid only in the root file. ParseApp rejects them in an app file.
 var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres"}
+
+// hostTopKeys are the keys a root file may carry at its top level: the host-only keys plus the
+// shared keys that are meaningful on the host itself. `hooks` is the one shared key that is a
+// host-level block (the github_pr built-in), not only an app key under defaults:.
+var hostTopKeys = append(append([]string{}, hostKeys...), "hooks")
 
 // decode parses one document into raw and reports every top-level key present in it. The node
 // tree is kept so every error can be pointed at a line and a key. allowDev lets the document be
@@ -602,9 +611,15 @@ func Parse(data []byte, path string) (Config, error) {
 		}
 		sort.Strings(names)
 		for _, key := range names {
-			if !slices.Contains(hostKeys, key) {
+			if !slices.Contains(hostTopKeys, key) {
 				return Config{}, located(&Error{Key: key, Message: "is only valid in an app file", Hint: "put shared keys under defaults: in the host file"}, path, root)
 			}
+		}
+	}
+	if !hasApp {
+		cfg.HostHooks = raw.Hooks
+		if err := validateHostHooks(cfg.HostHooks); err != nil {
+			return Config{}, located(err, path, root)
 		}
 	}
 	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
@@ -1238,11 +1253,53 @@ func validateHooks(hooks map[string]Hook) error {
 		if !cronName.MatchString(name) {
 			return keyErr("hooks", "invalid hook name %q", name)
 		}
+		if hasBuiltinFields(hook) {
+			return keyErr("hooks."+name, "uses github_pr options; those are only valid on the host github_pr hook")
+		}
 		if strings.TrimSpace(hook.Command) == "" {
 			return keyErr("hooks."+name+".command", "must not be empty")
 		}
 		if hook.Timeout < 0 {
 			return keyErr("hooks."+name+".timeout", "cannot be negative")
+		}
+	}
+	return nil
+}
+
+// BuiltinGithubPR is the reserved host hook name that deploys a branch as an app from a template.
+const BuiltinGithubPR = "github_pr"
+
+// hasBuiltinFields reports whether a hook uses options that only the github_pr built-in reads.
+func hasBuiltinFields(hook Hook) bool {
+	return hook.Repo != "" || hook.Setup != nil || hook.DropDatabaseOnClose || hook.Template != nil
+}
+
+// validateHostHooks checks the host-level hooks block: only the github_pr built-in is supported
+// there for now, and it must carry a template with a name.
+func validateHostHooks(hooks map[string]Hook) error {
+	for name, hook := range hooks {
+		if !cronName.MatchString(name) {
+			return keyErr("hooks", "invalid hook name %q", name)
+		}
+		if name != BuiltinGithubPR {
+			return keyErr("hooks."+name, "host hooks support only the built-in %q", BuiltinGithubPR)
+		}
+		if strings.TrimSpace(hook.Command) != "" {
+			return keyErr("hooks."+name, "the built-in %q takes no command; it deploys and restarts itself", BuiltinGithubPR)
+		}
+		if len(hook.Template) == 0 {
+			return keyErr("hooks."+name+".template", "must define the app the preview runs")
+		}
+		if _, ok := hook.Template["name"]; !ok {
+			return keyErr("hooks."+name+".template.name", "is required")
+		}
+		if hook.Setup != nil {
+			if strings.TrimSpace(hook.Setup.Command) == "" {
+				return keyErr("hooks."+name+".setup.command", "must not be empty")
+			}
+			if hook.Setup.Timeout < 0 {
+				return keyErr("hooks."+name+".setup.timeout", "cannot be negative")
+			}
 		}
 	}
 	return nil
@@ -1678,7 +1735,24 @@ type Hook struct {
 	Secret   string   `yaml:"secret" json:"-"`
 	// Pull marks the scalar shorthand; the pull job then authenticates with github_token.
 	Pull bool `yaml:"-" json:"pull,omitempty"`
+
+	// The fields below configure the built-in github_pr host hook. They are invalid on an app
+	// hook and on any other host hook name.
+	Repo                string         `yaml:"repo"`
+	Setup               *SetupSpec     `yaml:"setup"`
+	DropDatabaseOnClose bool           `yaml:"drop_database_on_close"`
+	Template            map[string]any `yaml:"template"`
 }
+
+// Setup is the command the built-in github_pr hook runs in the checkout after the branch is
+// pulled and before the app is started. A non-zero exit fails the deploy and the app stays down.
+type SetupSpec struct {
+	Command string   `yaml:"command" json:"command"`
+	Timeout Duration `yaml:"timeout" json:"timeout"`
+}
+
+// DefaultSetupTimeout is how long a github_pr setup_command may run when it sets no timeout.
+const DefaultSetupTimeout = 3 * time.Minute
 
 // UnmarshalYAML accepts a bare true, shorthand for pulling the current branch and restarting, or
 // a {command, timeout, restart, overlap, disabled, secret} mapping. The keys are checked here
@@ -1696,7 +1770,8 @@ func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
-			case "command", "timeout", "restart", "overlap", "disabled", "secret":
+			case "command", "timeout", "restart", "overlap", "disabled", "secret",
+				"repo", "setup", "drop_database_on_close", "template":
 			default:
 				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled, secret"}
 			}

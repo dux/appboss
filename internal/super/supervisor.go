@@ -524,6 +524,20 @@ func (m *Manager) HookSecret(name, hookName string) (string, error) {
 	return "", fmt.Errorf("unknown hook %q", hookName)
 }
 
+// HostHookSecret returns the effective secret of a host-level hook: the config value when set,
+// else the generated one. Host hooks share the generated store under the reserved app name
+// "_host", so a host hook rotates and persists like an app hook.
+func (m *Manager) HostHookSecret(name string) (string, error) {
+	hook, ok := m.HostConfig().HostHooks[name]
+	if !ok {
+		return "", fmt.Errorf("unknown host hook %q", name)
+	}
+	if hook.Secret != "" {
+		return hook.Secret, nil
+	}
+	return m.secrets.Ensure("_host", name)
+}
+
 // RotateHook mints a new generated secret for one hook and returns the hook with its new URL. A
 // hook whose secret comes from the config is rejected: the operator changes it in the file.
 func (m *Manager) RotateHook(name, hookName string) (HookInfo, error) {

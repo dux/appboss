@@ -39,6 +39,7 @@ func (f *fakeRuntime) Hooks(string) ([]super.HookInfo, error) { return nil, nil 
 func (f *fakeRuntime) HookSecret(string, string) (string, error) {
 	return "", nil
 }
+func (f *fakeRuntime) HostHookSecret(string) (string, error) { return "", nil }
 func (f *fakeRuntime) Exec(string, []string, time.Duration) (super.ExecResult, error) {
 	return super.ExecResult{}, nil
 }
