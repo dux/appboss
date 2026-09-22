@@ -189,6 +189,10 @@
         <svg class="icon"><use href="#i-file-text"></use></svg>
         Logs
       </a>
+      <a class="btn btn-sm" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml">
+        <svg class="icon"><use href="#i-settings"></use></svg>
+        Config
+      </a>
       <button class="btn btn-sm" class:btn-warning={props.app.maintenance} type="button" onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'}>
         <svg class="icon"><use href="#i-tool"></use></svg>
         {props.app.maintenance ? 'End maintenance' : 'Maintenance'}

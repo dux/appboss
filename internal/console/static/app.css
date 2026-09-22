@@ -613,8 +613,9 @@ input[type="radio"] {
   gap: 8px;
 }
 
+/* the buttons always get their own line, so a long host or an extra badge never reflows the header */
 .app-actions {
-  margin-left: auto;
+  flex: 1 0 100%;
 }
 
 .badge {
@@ -2359,7 +2360,6 @@ select.log-control { max-width: 220px; }
   .user-block { display: none; }
   .stat-row { grid-template-columns: 1fr; }
   .datagrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .app-actions { width: 100%; margin-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
