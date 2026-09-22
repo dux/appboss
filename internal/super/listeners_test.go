@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -30,6 +31,45 @@ func TestClearPortRangeTerminatesOnlyListenersInRange(t *testing.T) {
 	}
 	if err := syscall.Kill(outside.Process.Pid, 0); err != nil {
 		t.Fatalf("listener outside range was killed: %v", err)
+	}
+}
+
+// doctor reports the address an app bound, not just that something is there, so the parse of
+// lsof's field output has to survive a real process.
+func TestListenersInRangeReportsAddress(t *testing.T) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof is not installed")
+	}
+	helper, port := startListenerHelper(t)
+	listeners, err := ListenersInRange([2]int{port, port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listeners) != 1 {
+		t.Fatalf("listeners = %+v, want one", listeners)
+	}
+	listener := listeners[0]
+	if listener.PID != helper.Process.Pid || listener.Command == "" {
+		t.Fatalf("unexpected listener: %+v", listener)
+	}
+	if !strings.HasPrefix(listener.Address, "127.0.0.1:") || !listener.Loopback() {
+		t.Fatalf("helper binds loopback, got %+v", listener)
+	}
+}
+
+func TestListenerLoopback(t *testing.T) {
+	for address, want := range map[string]bool{
+		"127.0.0.1:3101": true,
+		"[::1]:3101":     true,
+		"*:3101":         false,
+		"[::]:3101":      false,
+		"0.0.0.0:3101":   false,
+		"10.0.0.5:3101":  false,
+		"":               false,
+	} {
+		if got := (Listener{Address: address}).Loopback(); got != want {
+			t.Errorf("Loopback(%q) = %v, want %v", address, got, want)
+		}
 	}
 }
 

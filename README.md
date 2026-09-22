@@ -553,6 +553,9 @@ Each app also answers on its own hosts at `health_endpoint` (default `/.well-kno
 The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, polled every `health_interval` (default `500ms`, because it decides how long a visitor who woke the app waits on the starting page). Once the process answers, the same check keeps running at the slower `liveness_interval` (default `10s`, and `5m` in a hand-run session, where a developer watching one app does not need it polled every ten seconds and every poll lands in their own request log), so a healthy app is not asked twice a second for its whole life; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
 `dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
+It also names any listener in that range bound to a public address (`*:3101`, `0.0.0.0`, a LAN IP) rather than `127.0.0.1`.
+An app binds its own port - dboss injects `PORT` and never an interface - and the proxy always dials `127.0.0.1`, so a public bind is a second door into the app that answers without `basic_auth`, `allow_ips`, the `auth` sign-in gate or the `X-Dboss-User` strip.
+Bind loopback in the procfile (`puma -b tcp://127.0.0.1:$PORT`, `gunicorn -b 127.0.0.1:$PORT`, `next start -H 127.0.0.1`) or firewall the range.
 
 ## Notifications
 

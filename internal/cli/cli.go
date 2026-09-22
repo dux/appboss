@@ -573,12 +573,30 @@ func (c CLI) doctor(cfg config.Config, jsonOutput bool) error {
 	default:
 		add("ok", "config and every app are valid")
 	}
-	if pids, err := super.ListenersInRange(cfg.Ports.Range); err != nil {
-		add("warn", "port range check failed: "+err.Error())
-	} else if len(pids) > 0 {
+	listeners, listenErr := super.ListenersInRange(cfg.Ports.Range)
+	switch {
+	case listenErr != nil:
+		add("warn", "port range check failed: "+listenErr.Error())
+	case len(listeners) > 0:
+		pids := make([]int, 0, len(listeners))
+		for _, listener := range listeners {
+			if len(pids) == 0 || pids[len(pids)-1] != listener.PID {
+				pids = append(pids, listener.PID)
+			}
+		}
 		add("warn", fmt.Sprintf("port range %d-%d has listeners (pids %v); a start clears them", cfg.Ports.Range[0], cfg.Ports.Range[1], pids))
-	} else {
+	default:
 		add("ok", fmt.Sprintf("port range %d-%d is clear", cfg.Ports.Range[0], cfg.Ports.Range[1]))
+	}
+	// An app binds its own port and dboss only ever dials 127.0.0.1, so a listener on a public
+	// address answers without the proxy in front of it. dboss's own listeners are skipped: the
+	// console is loopback by design and a hand-run proxy may take a port from the range.
+	for _, listener := range listeners {
+		if listener.Loopback() || listener.Command == "dboss" {
+			continue
+		}
+		add("warn", fmt.Sprintf("%s (pid %d) listens on %s: that port answers without the proxy, so basic_auth, allow_ips, the sign-in gate and the X-Dboss-User strip do not apply; bind 127.0.0.1 or firewall %d-%d",
+			listener.Command, listener.PID, listener.Address, cfg.Ports.Range[0], cfg.Ports.Range[1]))
 	}
 	if jsonOutput {
 		encoded, _ := json.MarshalIndent(map[string]any{"ok": !failed, "findings": findings}, "", "  ")
