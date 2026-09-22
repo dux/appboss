@@ -785,10 +785,11 @@ It links to the process logs and edits the host and app `dboss.yaml` files in pl
 The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
 A form save is written to the server-only `dboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
-The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, uptime, load, memory and disk use, the dboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
+The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, public IP, uptime, load, memory and disk use, the dboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
 It never starts, stops or changes anything; the `sysinfo` module keeps the snapshot warm and **Re-inspect** re-probes on demand.
 The **dboss** field names the running build and **Latest release** the newest tag published on GitHub, linked to its release page and badged `up to date` or `update available`, so a box that needs `sudo dboss update` says so.
-The tag is looked up at most once an hour and left empty when the box cannot reach GitHub, so the tab works offline.
+**Public IP** is the box's own routable address when it has one, which is the normal case for a server, and otherwise the address an echo service (`api.ipify.org`) sees, so a box behind NAT still reports something DNS can point at; the copy button puts it on the clipboard.
+Both facts leave the box, so each is looked up at most once an hour behind a short timeout and left empty when it cannot be reached; the rest of the tab works offline.
 
 ### Signing in
 

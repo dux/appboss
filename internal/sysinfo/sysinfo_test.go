@@ -55,7 +55,7 @@ func TestFirstLineSkipsBlanksAndTrims(t *testing.T) {
 func TestRefreshReusesToolsUntilInterval(t *testing.T) {
 	inspector := NewInspector(nil)
 	inspector.probes = []probe{{name: "alpha"}, {name: "beta"}}
-	inspector.latest = nil
+	inspector.release, inspector.echo = nil, nil
 	inspector.lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 	probesRun := 0
 	inspector.run = func(context.Context, string, ...string) (string, error) {
@@ -81,11 +81,12 @@ func TestRefreshReusesToolsUntilInterval(t *testing.T) {
 func TestRefreshCachesLatestRelease(t *testing.T) {
 	inspector := NewInspector(nil)
 	inspector.probes = nil
+	inspector.echo = nil
 	lookups, tag, lookupErr := 0, "v84", error(nil)
-	inspector.latest = func(context.Context) (string, error) {
+	inspector.release = newRemote(func(context.Context) (string, error) {
 		lookups++
 		return tag, lookupErr
-	}
+	})
 
 	snapshot := inspector.Refresh(context.Background())
 	if snapshot.Runtime.DbossLatest != "v84" || snapshot.Runtime.DbossLatestURL == "" {
@@ -97,9 +98,7 @@ func TestRefreshCachesLatestRelease(t *testing.T) {
 	}
 
 	tag, lookupErr = "", errors.New("no route to host")
-	inspector.mu.Lock()
-	inspector.lastRelease = time.Now().Add(-inspector.releaseInterval - time.Second)
-	inspector.mu.Unlock()
+	inspector.release.last = time.Now().Add(-inspector.release.interval - time.Second)
 	snapshot = inspector.Refresh(context.Background())
 	if snapshot.Runtime.DbossLatest != "" || snapshot.Runtime.DbossLatestURL != "" {
 		t.Fatalf("a failed lookup should leave the fields empty: %+v", snapshot.Runtime)
@@ -114,7 +113,7 @@ func TestRefreshCollectsHostAndDirs(t *testing.T) {
 	dir := t.TempDir()
 	inspector := NewInspector([]DirSpec{{Name: "state", Path: dir}})
 	inspector.probes = nil
-	inspector.latest = nil
+	inspector.release, inspector.echo = nil, nil
 	snapshot := inspector.Refresh(context.Background())
 	if snapshot.CollectedAt.IsZero() {
 		t.Fatal("snapshot has no collection time")

@@ -21,13 +21,13 @@ import (
 
 const (
 	// defaultInterval is how often host and disk facts are re-sampled. Probing every installed
-	// tool is slower, so it runs at most every toolInterval; asking GitHub for the latest
-	// release leaves the box, so it runs at most every releaseInterval.
-	defaultInterval       = 30 * time.Second
-	defaultToolRefresh    = 10 * time.Minute
-	defaultReleaseRefresh = time.Hour
-	probeTimeout          = 2 * time.Second
-	releaseTimeout        = 4 * time.Second
+	// tool is slower, so it runs at most every toolInterval; a fact that has to be fetched from
+	// off the box runs at most every defaultRemoteRefresh.
+	defaultInterval      = 30 * time.Second
+	defaultToolRefresh   = 10 * time.Minute
+	defaultRemoteRefresh = time.Hour
+	probeTimeout         = 2 * time.Second
+	remoteTimeout        = 4 * time.Second
 )
 
 // toolEnv is the non-secret environment dboss forwards to the console for context.
@@ -61,12 +61,14 @@ type Dir struct {
 	Error      string  `json:"error,omitempty"`
 }
 
-// Host is the machine dboss runs on.
+// Host is the machine dboss runs on. PublicIP is the address DNS would point at and is empty
+// when the box has no routable address and no way to ask for one.
 type Host struct {
 	Hostname  string  `json:"hostname"`
 	OS        string  `json:"os"`
 	OSName    string  `json:"os_name,omitempty"`
 	Arch      string  `json:"arch"`
+	PublicIP  string  `json:"public_ip,omitempty"`
 	Kernel    string  `json:"kernel,omitempty"`
 	UptimeSec int64   `json:"uptime_seconds,omitempty"`
 	CPUs      int     `json:"cpus"`
@@ -151,31 +153,66 @@ var defaultProbes = []probe{
 // Inspector collects and caches one Snapshot. Snapshot is cheap and safe for any goroutine;
 // Refresh re-samples the host and re-probes the tools when the tool interval has elapsed.
 type Inspector struct {
-	dirs            []DirSpec
-	probes          []probe
-	toolInterval    time.Duration
-	releaseInterval time.Duration
-	lookPath        func(string) (string, error)
-	run             func(context.Context, string, ...string) (string, error)
-	latest          func(context.Context) (string, error)
+	dirs         []DirSpec
+	probes       []probe
+	toolInterval time.Duration
+	lookPath     func(string) (string, error)
+	run          func(context.Context, string, ...string) (string, error)
+	release      *remote
+	echo         *remote
 
-	mu          sync.RWMutex
-	snapshot    Snapshot
-	lastTools   time.Time
-	lastRelease time.Time
-	latestTag   string
+	mu        sync.RWMutex
+	snapshot  Snapshot
+	lastTools time.Time
 }
 
 func NewInspector(dirs []DirSpec) *Inspector {
 	return &Inspector{
-		dirs:            dirs,
-		probes:          defaultProbes,
-		toolInterval:    defaultToolRefresh,
-		releaseInterval: defaultReleaseRefresh,
-		lookPath:        exec.LookPath,
-		run:             runCommand,
-		latest:          release.Latest,
+		dirs:         dirs,
+		probes:       defaultProbes,
+		toolInterval: defaultToolRefresh,
+		lookPath:     exec.LookPath,
+		run:          runCommand,
+		release:      newRemote(release.Latest),
+		echo:         newRemote(echoPublicIP),
 	}
+}
+
+// remote is one fact that has to be fetched from off the box. It keeps an answer for interval
+// and stamps every attempt, a failure included, so a refresh never waits on the network more
+// than once per interval and an unreachable service simply leaves the fact empty.
+type remote struct {
+	interval time.Duration
+	timeout  time.Duration
+	lookup   func(context.Context) (string, error)
+
+	mu    sync.Mutex
+	value string
+	last  time.Time
+}
+
+func newRemote(lookup func(context.Context) (string, error)) *remote {
+	return &remote{interval: defaultRemoteRefresh, timeout: remoteTimeout, lookup: lookup}
+}
+
+func (r *remote) get(ctx context.Context) string {
+	if r == nil || r.lookup == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.last.IsZero() && time.Since(r.last) < r.interval {
+		return r.value
+	}
+	r.last = time.Now()
+	lookupCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	value, err := r.lookup(lookupCtx)
+	if err != nil {
+		value = ""
+	}
+	r.value = value
+	return value
 }
 
 // Snapshot returns the last collected inspection without touching the host.
@@ -190,7 +227,7 @@ func (i *Inspector) Snapshot() Snapshot {
 func (i *Inspector) Refresh(ctx context.Context) Snapshot {
 	now := time.Now()
 	i.mu.RLock()
-	previous, lastTools, lastRelease, latestTag := i.snapshot, i.lastTools, i.lastRelease, i.latestTag
+	previous, lastTools := i.snapshot, i.lastTools
 	i.mu.RUnlock()
 
 	tools := previous.Tools
@@ -198,38 +235,29 @@ func (i *Inspector) Refresh(ctx context.Context) Snapshot {
 		tools = i.collectTools(ctx)
 		lastTools = now
 	}
-	if lastRelease.IsZero() || now.Sub(lastRelease) >= i.releaseInterval {
-		latestTag = i.latestRelease(ctx)
-		lastRelease = now
-	}
+	host := collectHost()
+	host.PublicIP = i.publicIP(ctx)
 	snapshot := Snapshot{
 		CollectedAt: now,
-		Host:        collectHost(),
-		Runtime:     collectRuntime(latestTag),
+		Host:        host,
+		Runtime:     collectRuntime(i.release.get(ctx)),
 		Tools:       tools,
 		Dirs:        collectDirs(i.dirs),
 	}
 	i.mu.Lock()
 	i.snapshot, i.lastTools = snapshot, lastTools
-	i.lastRelease, i.latestTag = lastRelease, latestTag
 	i.mu.Unlock()
 	return snapshot
 }
 
-// latestRelease asks GitHub for the newest published tag. It is best effort: a box without a
-// route out returns nothing, and the caller stamps the attempt either way, so a refresh never
-// waits on the network more than once per interval.
-func (i *Inspector) latestRelease(ctx context.Context) string {
-	if i.latest == nil {
-		return ""
+// publicIP is the address an operator would point DNS at: the box's own routable address when
+// it has one, which is the normal case for a server and costs nothing, and otherwise the
+// address an echo service sees, so a box behind NAT still reports something usable.
+func (i *Inspector) publicIP(ctx context.Context) string {
+	if addr := interfacePublicIP(); addr != "" {
+		return addr
 	}
-	releaseCtx, cancel := context.WithTimeout(ctx, releaseTimeout)
-	defer cancel()
-	tag, err := i.latest(releaseCtx)
-	if err != nil {
-		return ""
-	}
-	return tag
+	return i.echo.get(ctx)
 }
 
 func (i *Inspector) collectTools(ctx context.Context) []Tool {

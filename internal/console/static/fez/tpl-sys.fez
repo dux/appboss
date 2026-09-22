@@ -87,6 +87,17 @@
       return `${minutes}m`
     }
 
+    async copyIP() {
+      const value = this.state.host.public_ip
+      if (!value) return
+      try {
+        await navigator.clipboard.writeText(value)
+        Toast.show('Public IP copied')
+      } catch (error) {
+        Toast.show(value)
+      }
+    }
+
     // '' while the two versions cannot be compared: no answer from GitHub yet, or a
     // from-source build, which reports "dev" and is never behind a release.
     releaseState() {
@@ -185,12 +196,25 @@
     <div class="datagrid">
       <div class="datagrid-item"><span class="subheader">Operating system</span><span class="datagrid-content">{state.host.os_name || state.host.os} {state.host.arch}</span></div>
       <div class="datagrid-item"><span class="subheader">Kernel</span><span class="datagrid-content">{state.host.kernel || '-'}</span></div>
+      <div class="datagrid-item">
+        <span class="subheader">Public IP</span>
+        <span class="datagrid-content sys-pair">
+          {#if state.host.public_ip}
+            <span>{state.host.public_ip}</span>
+            <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.copyIP()" title="Copy the public IP">
+              <svg class="icon"><use href="#i-copy"></use></svg>
+            </button>
+          {:else}
+            <span class="text-muted">-</span>
+          {/if}
+        </span>
+      </div>
       <div class="datagrid-item"><span class="subheader">Uptime</span><span class="datagrid-content">{duration(state.host.uptime_seconds)}</span></div>
       <div class="datagrid-item"><span class="subheader">CPUs</span><span class="datagrid-content">{state.host.cpus}</span></div>
       <div class="datagrid-item"><span class="subheader">dboss</span><span class="datagrid-content">{state.runtime.dboss || '-'}</span></div>
       <div class="datagrid-item">
         <span class="subheader">Latest release</span>
-        <span class="datagrid-content sys-release">
+        <span class="datagrid-content sys-pair">
           {#if state.runtime.dboss_latest}
             <a class="sys-tool-link" href={state.runtime.dboss_latest_url} target="_blank" rel="noopener noreferrer">{state.runtime.dboss_latest}</a>
             {#if releaseState()}

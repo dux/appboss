@@ -58,6 +58,23 @@ func TestButtonComponentIsLoaded(t *testing.T) {
 	}
 }
 
+// The vendored fez build must be 0.10.0 or newer. Older builds observe every attribute write on
+// a component root and feed it back into props, which re-enters any component that writes its own
+// root - ui-btn does - and they have no Fez(node).setAttribute, the channel the app cards use to
+// show an action as pending. Re-vendoring an older bundle froze the cards until a page reload.
+func TestVendoredFezIsCurrent(t *testing.T) {
+	bundle, err := assets.ReadFile("static/fez.min.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bundle), "onPropsChange") {
+		t.Error("fez.min.js still carries onPropsChange: vendor 0.10.0 or newer")
+	}
+	if !strings.Contains(string(bundle), "hpath") {
+		t.Error("fez.min.js has no Pjax.hpath: the console's hash routes need it")
+	}
+}
+
 // ui-tabs is a shared widget too: the PostgreSQL database page switches between Backup and SQL
 // with it, and an unregistered tag would leave the page stuck on whatever tab it loaded with.
 func TestTabsComponentIsLoaded(t *testing.T) {

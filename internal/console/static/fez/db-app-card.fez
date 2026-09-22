@@ -67,8 +67,19 @@
       return `${Math.floor(seconds / 86400)}d ago`
     }
 
-    act(action) {
-      Dboss.runAction(this.props.app.name, action)
+    // A stop drains first, so the daemon can take seconds to answer: the row shows the request
+    // as pending right away. A cancelled confirm and a failed call never reach a snapshot, and
+    // a card whose output did not change is never re-rendered, so the row is put back exactly
+    // as the last render left it. Logs and Config are links, not actions.
+    async act(action) {
+      const buttons = Array.from(this.root.querySelectorAll('.app-actions .fez-ui-btn:not([href])'))
+      const before = buttons.map((node) => Boolean(node.fez?.props.disabled))
+      for (const node of buttons) node.fez?.setAttribute('disabled', true)
+      try {
+        await Dboss.runAction(this.props.app.name, action)
+      } finally {
+        buttons.forEach((node, index) => node.fez?.setAttribute('disabled', before[index] ? true : null))
+      }
     }
 
     clock(value) {
@@ -280,7 +291,7 @@
           <span class="hook-url" title={hook.url}>{hook.url || 'management.host not set'}</span>
           <span class="hook-actions">
             <button class="btn btn-sm" type="button" onclick={() => fez.copy(hook.url)} disabled={!hook.url} title="Copy the ping URL">
-              <svg class="icon"><use href="#i-file-text"></use></svg>
+              <svg class="icon"><use href="#i-copy"></use></svg>
               Copy
             </button>
             <button class="btn btn-sm" type="button" onclick={() => fez.rotateHook(hook)} disabled={hook.source === 'config'} title={hook.source === 'config' ? 'The secret comes from the config; change it there' : 'Mint a new secret'}>

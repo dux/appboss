@@ -7,39 +7,86 @@
       icon: String,
       label: String,
       class: String,
-      disabled: Boolean,
+      // the state key is the live value: a parent toggles it with
+      // Fez(node).setAttribute('disabled', true) and the next parent render overwrites it
+      disabled: { type: Boolean, state: true },
     }
 
-    // No template block on purpose: the root is written once, here. Every attribute is
-    // part of an unkeyed component's identity, so a changed label or disabled state makes
-    // the differ drop this instance and connect a fresh one that paints the new state.
-    init(props) {
+    // Attributes that are copied to the root verbatim rather than rendered.
+    PLAIN = ['href', 'title', 'target', 'rel', 'onclick']
+
+    // No template block on purpose: the root is this button, and paint() is the only writer.
+    init() {
       const root = this.root
       this.on(root, 'keydown', (event) => this.onKeydown(event))
 
-      // onclick arrives already rewritten to Fez(<parent uid>).method(), so the
-      // attribute stays bound to the component that declared it.
-      this.copy('href', 'title', 'target', 'rel', 'onclick')
-      root.className = [root.className, 'btn', props.class, props.disabled ? 'disabled' : ''].filter(Boolean).join(' ')
+      // the fez classes are on the root already; keep them out of the painted part
+      this.state.baseClass = root.className
+
+      // a span is not focusable or keyboard-operable, unlike the <button> it replaces
+      if (root.tagName === 'SPAN') {
+        root.setAttribute('role', 'button')
+      }
+      this.paint()
+    }
+
+    // The placeholder carries a compiler key, so the differ preserves this instance and never
+    // syncs the new attributes onto the root - the parent's values are re-applied here. It is
+    // also what clears a pending state the parent pushed while a request was in flight.
+    onRefresh(props) {
+      this.state.disabled = Boolean(props.disabled)
+      this.paint()
+    }
+
+    // Fez(node).setAttribute('disabled', true) arrives here through the state-linked prop.
+    onStateChange(key) {
+      if (key === 'disabled') this.paint()
+    }
+
+    // One writer for everything the props put in the DOM, onclick included: it is rewritten to
+    // Fez(<parent uid>).method(<args>) on every parent render, so a preserved button that only
+    // repainted its label would keep calling the previous render's arguments. The signature
+    // keeps the five second poll from rebuilding a button that did not change.
+    paint() {
+      const root = this.root
+      const props = this.props
+      const disabled = Boolean(this.state.disabled)
+      const signature = [props.class, props.icon, props.label, disabled, ...this.PLAIN.map((name) => props[name])].join('|')
+      if (this.state.painted === signature) return
+      this.state.painted = signature
+
+      // copy() skips an undefined prop, so an attribute that went away is removed here
+      for (const name of this.PLAIN) {
+        if (props[name] === undefined) root.removeAttribute(name)
+      }
+      this.copy(...this.PLAIN)
+
+      root.className = [this.state.baseClass, 'btn', props.class].filter(Boolean).join(' ')
       root.textContent = props.label || ''
       if (props.icon) {
         root.insertAdjacentHTML('afterbegin', `<svg class="icon"><use href="#${props.icon}"></use></svg>`)
       }
 
-      // a span is not focusable or keyboard-operable, unlike the <button> it replaces
-      if (root.tagName === 'SPAN') {
-        root.setAttribute('role', 'button')
-        root.setAttribute('tabindex', props.disabled ? '-1' : '0')
-      }
-      if (props.disabled) {
+      // a span, an anchor and a label have no native disabled state, so the attribute is what
+      // the stylesheet and the keyboard path go by
+      root.toggleAttribute('disabled', disabled)
+      if (disabled) {
         root.setAttribute('aria-disabled', 'true')
+        root.setAttribute('tabindex', '-1')
+      } else {
+        root.removeAttribute('aria-disabled')
+        if (root.tagName === 'SPAN') {
+          root.setAttribute('tabindex', '0')
+        } else {
+          root.removeAttribute('tabindex')
+        }
       }
     }
 
     // A span carries no native activation, so Enter and Space have to fire the click.
     onKeydown(event) {
       if (event.key !== 'Enter' && event.key !== ' ') return
-      if (this.root.tagName !== 'SPAN' || this.props.disabled) return
+      if (this.root.tagName !== 'SPAN' || this.state.disabled) return
       event.preventDefault()
       this.root.click()
     }

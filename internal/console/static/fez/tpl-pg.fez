@@ -506,7 +506,7 @@
   </div>
   <section class="card">
     <div class="pg-detail-actions pg-backup-upload">
-      <label class="btn" class:disabled={state.busy}>
+      <label class="btn" disabled={state.busy}>
         <svg class="icon"><use href="#i-upload"></use></svg>
         Upload backup
         <input type="file" accept=".zip,application/zip" hidden fez:this="uploadNode" onchange="fez.uploadBackup()" disabled={state.busy}>

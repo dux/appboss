@@ -27,6 +27,7 @@
       // re-render restores them instead of resetting to the last saved values.
       this.state.drafts = {}
       this.state.revision = ''
+      this.state.loadedId = ''
       this.state.busy = false
       this.state.message = ''
       this.state.messageError = false
@@ -37,8 +38,11 @@
       this.load()
     }
 
-    onPropsChange(name) {
-      if (name !== 'file_id') return
+    // The parent swaps file_id when another file is picked; a preserved child only hears about
+    // it here, and onRefresh fires on every parent render, so the id it last loaded is the guard.
+    onRefresh(props) {
+      if (props.file_id === this.state.loadedId) return
+      this.state.loadedId = props.file_id
       this.state.message = ''
       this.state.messageError = false
       this.load()
@@ -47,6 +51,7 @@
     // --- data ---
 
     async load() {
+      this.state.loadedId = this.props.file_id
       if (!this.props.file_id) {
         this.state.ready = false
         return

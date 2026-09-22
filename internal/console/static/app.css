@@ -357,14 +357,14 @@ code {
 }
 
 .btn:disabled,
-.btn.disabled {
+.btn[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
 }
 
-/* A label used as a file picker cannot be :disabled, so the class also has to stop the click. */
-.btn.disabled {
+/* A span, an anchor or a label has no native disabled state, so the attribute stops the click. */
+.btn[disabled] {
   pointer-events: none;
 }
 
@@ -1444,12 +1444,13 @@ textarea.sql-editor {
   justify-self: start;
 }
 
-/* the release value pairs a tag with a state badge, so it lays the two out instead of
-   inheriting the single-line ellipsis of a plain datagrid value */
-.sys-release {
+/* a datagrid value that carries a badge or a button next to it lays the two out instead of
+   inheriting the single-line ellipsis of a plain value */
+.sys-pair {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 30px;
 }
 
 .sys-tool-link {
