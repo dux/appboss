@@ -55,6 +55,7 @@ func TestFirstLineSkipsBlanksAndTrims(t *testing.T) {
 func TestRefreshReusesToolsUntilInterval(t *testing.T) {
 	inspector := NewInspector(nil)
 	inspector.probes = []probe{{name: "alpha"}, {name: "beta"}}
+	inspector.latest = nil
 	inspector.lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 	probesRun := 0
 	inspector.run = func(context.Context, string, ...string) (string, error) {
@@ -75,10 +76,45 @@ func TestRefreshReusesToolsUntilInterval(t *testing.T) {
 	}
 }
 
+// The latest release leaves the box, so it is asked for once per interval and a failed lookup
+// backs off the same way rather than stalling every refresh.
+func TestRefreshCachesLatestRelease(t *testing.T) {
+	inspector := NewInspector(nil)
+	inspector.probes = nil
+	lookups, tag, lookupErr := 0, "v84", error(nil)
+	inspector.latest = func(context.Context) (string, error) {
+		lookups++
+		return tag, lookupErr
+	}
+
+	snapshot := inspector.Refresh(context.Background())
+	if snapshot.Runtime.DbossLatest != "v84" || snapshot.Runtime.DbossLatestURL == "" {
+		t.Fatalf("unexpected runtime: %+v", snapshot.Runtime)
+	}
+	inspector.Refresh(context.Background())
+	if lookups != 1 {
+		t.Fatalf("release looked up %d times, want 1 inside the interval", lookups)
+	}
+
+	tag, lookupErr = "", errors.New("no route to host")
+	inspector.mu.Lock()
+	inspector.lastRelease = time.Now().Add(-inspector.releaseInterval - time.Second)
+	inspector.mu.Unlock()
+	snapshot = inspector.Refresh(context.Background())
+	if snapshot.Runtime.DbossLatest != "" || snapshot.Runtime.DbossLatestURL != "" {
+		t.Fatalf("a failed lookup should leave the fields empty: %+v", snapshot.Runtime)
+	}
+	inspector.Refresh(context.Background())
+	if lookups != 2 {
+		t.Fatalf("release looked up %d times, want 2 after one failure", lookups)
+	}
+}
+
 func TestRefreshCollectsHostAndDirs(t *testing.T) {
 	dir := t.TempDir()
 	inspector := NewInspector([]DirSpec{{Name: "state", Path: dir}})
 	inspector.probes = nil
+	inspector.latest = nil
 	snapshot := inspector.Refresh(context.Background())
 	if snapshot.CollectedAt.IsZero() {
 		t.Fatal("snapshot has no collection time")

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,30 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"time"
 
+	"dboss/internal/release"
 	"dboss/internal/version"
 )
-
-// The release source. These are variables so a test can point the whole flow at a local
-// server instead of GitHub.
-var (
-	releaseRepo     = "dux/dboss"
-	releaseAPIBase  = "https://api.github.com"
-	releaseDownload = "https://github.com"
-)
-
-// updateTimeout covers the whole response body, which is a ~20 MB binary on whatever link the
-// box has.
-const updateTimeout = 5 * time.Minute
-
-var releaseClient = &http.Client{Timeout: updateTimeout}
 
 type updateResult struct {
 	Current string `json:"current"`
@@ -70,13 +55,13 @@ func (c CLI) update(args []string) error {
 
 	tag := *wanted
 	if tag == "" {
-		if tag, err = latestRelease(); err != nil {
+		if tag, err = release.Latest(context.Background()); err != nil {
 			return err
 		}
 	}
 
-	latest, haveLatest := releaseNumber(tag)
-	running, haveRunning := releaseNumber(current)
+	latest, haveLatest := release.Number(tag)
+	running, haveRunning := release.Number(current)
 	comparable := haveLatest && haveRunning
 	newer := comparable && latest > running
 	install := !*check && (!comparable || newer || *force)
@@ -112,7 +97,6 @@ func (c CLI) update(args []string) error {
 // on one filesystem rather than a copy across devices.
 func (c CLI) installRelease(target, tag string, quiet bool) error {
 	asset := "dboss_" + runtime.GOOS + "_" + runtime.GOARCH
-	base := fmt.Sprintf("%s/%s/releases/download/%s", releaseDownload, releaseRepo, tag)
 
 	dir, err := os.MkdirTemp(filepath.Dir(target), ".dboss-update-")
 	if err != nil {
@@ -121,7 +105,7 @@ func (c CLI) installRelease(target, tag string, quiet bool) error {
 	defer os.RemoveAll(dir)
 
 	sums := filepath.Join(dir, "checksums.txt")
-	if _, err := download(base+"/checksums.txt", sums); err != nil {
+	if _, err := download(release.AssetURL(tag, "checksums.txt"), sums); err != nil {
 		return err
 	}
 	listing, err := os.ReadFile(sums)
@@ -137,7 +121,7 @@ func (c CLI) installRelease(target, tag string, quiet bool) error {
 		fmt.Fprintf(c.Out, "downloading %s ... ", asset)
 	}
 	staged := filepath.Join(dir, asset)
-	actual, err := download(base+"/"+asset, staged)
+	actual, err := download(release.AssetURL(tag, asset), staged)
 	if err != nil {
 		if !quiet {
 			fmt.Fprintln(c.Out)
@@ -175,60 +159,9 @@ func executablePath() (string, error) {
 	return resolved, nil
 }
 
-func latestRelease() (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", releaseAPIBase, releaseRepo)
-	response, err := releaseGet(url)
-	if err != nil {
-		var status statusError
-		if errors.As(err, &status) && status.code == http.StatusNotFound {
-			return "", fmt.Errorf("%s has no published release yet", releaseRepo)
-		}
-		return "", err
-	}
-	defer response.Body.Close()
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&release); err != nil {
-		return "", fmt.Errorf("read the latest release of %s: %w", releaseRepo, err)
-	}
-	if release.TagName == "" {
-		return "", fmt.Errorf("%s has no published release", releaseRepo)
-	}
-	return release.TagName, nil
-}
-
-// releaseGet fails on anything but 200, so a GitHub error page never lands on disk as a
-// binary.
-func releaseGet(url string) (*http.Response, error) {
-	request, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	response, err := releaseClient.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != http.StatusOK {
-		response.Body.Close()
-		return nil, statusError{url: url, status: response.Status, code: response.StatusCode}
-	}
-	return response, nil
-}
-
-// statusError keeps the code, so a missing release reads as one rather than as a bare 404.
-type statusError struct {
-	url    string
-	status string
-	code   int
-}
-
-func (e statusError) Error() string { return fmt.Sprintf("GET %s: %s", e.url, e.status) }
-
 // download streams url into path and returns the sha256 of what it wrote.
 func download(url, path string) (string, error) {
-	response, err := releaseGet(url)
+	response, err := release.Get(context.Background(), url)
 	if err != nil {
 		return "", err
 	}
@@ -258,16 +191,6 @@ func checksumFor(listing, asset string) string {
 		}
 	}
 	return ""
-}
-
-// releaseNumber turns a v<count> tag into its number. Anything else, "dev" included, is not
-// comparable and never blocks an install.
-func releaseNumber(tag string) (int, bool) {
-	number, err := strconv.Atoi(strings.TrimPrefix(tag, "v"))
-	if err != nil || !strings.HasPrefix(tag, "v") {
-		return 0, false
-	}
-	return number, true
 }
 
 // updateWriteError turns a permission failure into the one instruction that fixes it.

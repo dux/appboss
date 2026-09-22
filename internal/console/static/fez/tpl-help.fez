@@ -308,7 +308,7 @@
         <h3>Around the features</h3>
         <ul>
           <li>Management console with live state, start, stop, restart and maintenance controls, a validated config editor, logs, audit and help.</li>
-          <li>The Sys tab inspects the host read-only: OS, kernel, load, memory, disks and the installed toolchains (Node, npm, Bun, Ruby, Python and more) with their versions.</li>
+          <li>The Sys tab inspects the host read-only: OS, kernel, load, memory, disks, the running dboss build against the latest GitHub release, and the installed toolchains (Node, npm, Bun, Ruby, Python and more) with their versions.</li>
           <li>AuthCog sign-in for admins, plus one-time <code>dboss login</code> links over the control socket for local work.</li>
           <li>Full CLI over the control socket, with <code>--json</code> on every command.</li>
           <li>Validate with <code>dboss check</code>, inspect with <code>dboss config [app] -d</code>, browse every key under Keys or in the annotated reference.</li>

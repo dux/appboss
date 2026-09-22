@@ -87,6 +87,15 @@
       return `${minutes}m`
     }
 
+    // '' while the two versions cannot be compared: no answer from GitHub yet, or a
+    // from-source build, which reports "dev" and is never behind a release.
+    releaseState() {
+      const current = this.state.runtime.dboss
+      const latest = this.state.runtime.dboss_latest
+      if (!current || !latest || current === 'dev') return ''
+      return current === latest ? 'current' : 'behind'
+    }
+
     load1() {
       const host = this.state.host || {}
       if (host.load1 === undefined) return '-'
@@ -179,6 +188,19 @@
       <div class="datagrid-item"><span class="subheader">Uptime</span><span class="datagrid-content">{duration(state.host.uptime_seconds)}</span></div>
       <div class="datagrid-item"><span class="subheader">CPUs</span><span class="datagrid-content">{state.host.cpus}</span></div>
       <div class="datagrid-item"><span class="subheader">dboss</span><span class="datagrid-content">{state.runtime.dboss || '-'}</span></div>
+      <div class="datagrid-item">
+        <span class="subheader">Latest release</span>
+        <span class="datagrid-content sys-release">
+          {#if state.runtime.dboss_latest}
+            <a class="sys-tool-link" href={state.runtime.dboss_latest_url} target="_blank" rel="noopener noreferrer">{state.runtime.dboss_latest}</a>
+            {#if releaseState()}
+              <span class="badge sys-badge" class:badge-success={releaseState() === 'current'} class:badge-warning={releaseState() === 'behind'}>{releaseState() === 'current' ? 'up to date' : 'update available'}</span>
+            {/if}
+          {:else}
+            <span class="text-muted">-</span>
+          {/if}
+        </span>
+      </div>
       <div class="datagrid-item"><span class="subheader">Go</span><span class="datagrid-content">{state.runtime.go_version || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">PID</span><span class="datagrid-content">{state.runtime.pid || '-'}</span></div>
       <div class="datagrid-item"><span class="subheader">Goroutines</span><span class="datagrid-content">{state.runtime.goroutines || '-'}</span></div>

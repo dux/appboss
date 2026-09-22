@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"dboss/internal/release"
 	"dboss/internal/version"
 )
 
@@ -28,11 +29,11 @@ func releaseServer(t *testing.T, tag string, payload []byte, corrupt bool) *http
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/" + releaseRepo + "/releases/latest":
+		case "/repos/" + release.Repo + "/releases/latest":
 			fmt.Fprintf(w, `{"tag_name": %q}`, tag)
-		case "/" + releaseRepo + "/releases/download/" + tag + "/checksums.txt":
+		case "/" + release.Repo + "/releases/download/" + tag + "/checksums.txt":
 			fmt.Fprintf(w, "%s  %s\n", listed, asset)
-		case "/" + releaseRepo + "/releases/download/" + tag + "/" + asset:
+		case "/" + release.Repo + "/releases/download/" + tag + "/" + asset:
 			w.Write(payload)
 		default:
 			http.NotFound(w, r)
@@ -40,10 +41,10 @@ func releaseServer(t *testing.T, tag string, payload []byte, corrupt bool) *http
 	}))
 	t.Cleanup(server.Close)
 
-	previousAPI, previousDownload, previousVersion := releaseAPIBase, releaseDownload, version.Version
-	releaseAPIBase, releaseDownload = server.URL, server.URL
+	previousAPI, previousDownload, previousVersion := release.APIBase, release.DownloadBase, version.Version
+	release.APIBase, release.DownloadBase = server.URL, server.URL
 	t.Cleanup(func() {
-		releaseAPIBase, releaseDownload, version.Version = previousAPI, previousDownload, previousVersion
+		release.APIBase, release.DownloadBase, version.Version = previousAPI, previousDownload, previousVersion
 	})
 	return server
 }
@@ -145,26 +146,6 @@ func TestUpdateRefusesSourceBuild(t *testing.T) {
 	err := (CLI{Out: &out, Err: &errOut}).update(nil)
 	if err == nil || !strings.Contains(err.Error(), "make build") {
 		t.Fatalf("a dev build was replaced: %v", err)
-	}
-}
-
-func TestReleaseNumber(t *testing.T) {
-	for _, item := range []struct {
-		tag    string
-		number int
-		ok     bool
-	}{
-		{"v81", 81, true},
-		{"v0", 0, true},
-		{"dev", 0, false},
-		{"81", 0, false},
-		{"v0.1.0", 0, false},
-		{"", 0, false},
-	} {
-		number, ok := releaseNumber(item.tag)
-		if number != item.number || ok != item.ok {
-			t.Errorf("releaseNumber(%q) = %d, %v; want %d, %v", item.tag, number, ok, item.number, item.ok)
-		}
 	}
 }
 

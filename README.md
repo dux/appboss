@@ -787,6 +787,8 @@ Each field shows a friendly label, its key, the description from the key referen
 A form save is written to the server-only `dboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
 The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, uptime, load, memory and disk use, the dboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
 It never starts, stops or changes anything; the `sysinfo` module keeps the snapshot warm and **Re-inspect** re-probes on demand.
+The **dboss** field names the running build and **Latest release** the newest tag published on GitHub, linked to its release page and badged `up to date` or `update available`, so a box that needs `sudo dboss update` says so.
+The tag is looked up at most once an hour and left empty when the box cannot reach GitHub, so the tab works offline.
 
 ### Signing in
 
@@ -880,6 +882,7 @@ internal/pg/          PostgreSQL inspection, scheduled dumps, retention and rest
 internal/metrics/     Prometheus text rendered from the app snapshots
 internal/notify/      debounced operator webhook for crash and failure events
 internal/version/     build version: the commit count in main, injected at build time
+internal/release/     the GitHub release source: the latest tag, its URLs and tag comparison
 internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console

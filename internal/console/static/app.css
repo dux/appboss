@@ -1444,6 +1444,14 @@ textarea.sql-editor {
   justify-self: start;
 }
 
+/* the release value pairs a tag with a state badge, so it lays the two out instead of
+   inheriting the single-line ellipsis of a plain datagrid value */
+.sys-release {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .sys-tool-link {
   color: var(--text);
   text-decoration: none;

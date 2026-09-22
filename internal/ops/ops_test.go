@@ -292,8 +292,8 @@ func (f *fakePG) Query(_ context.Context, database, sql string) (pg.QueryResult,
 	f.queried = sql
 	return pg.QueryResult{Database: database, Columns: []string{"one"}, Rows: [][]any{{"1"}}, RowCount: 1, Command: "SELECT 1"}, nil
 }
-func (f *fakePG) BackupConfig() config.PostgresBackup                { return config.PostgresBackup{} }
-func (f *fakePG) Apply(config.Config)                                { f.applied++ }
+func (f *fakePG) BackupConfig() config.PostgresBackup { return config.PostgresBackup{} }
+func (f *fakePG) Apply(config.Config)                 { f.applied++ }
 
 func TestPGActionsDispatch(t *testing.T) {
 	postgres := &fakePG{enabled: true, available: true, backups: []pg.Backup{{ID: "b1", Database: "app"}}}

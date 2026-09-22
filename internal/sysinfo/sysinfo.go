@@ -15,15 +15,19 @@ import (
 	"syscall"
 	"time"
 
+	"dboss/internal/release"
 	"dboss/internal/version"
 )
 
 const (
 	// defaultInterval is how often host and disk facts are re-sampled. Probing every installed
-	// tool is slower, so it runs at most every toolInterval.
-	defaultInterval    = 30 * time.Second
-	defaultToolRefresh = 10 * time.Minute
-	probeTimeout       = 2 * time.Second
+	// tool is slower, so it runs at most every toolInterval; asking GitHub for the latest
+	// release leaves the box, so it runs at most every releaseInterval.
+	defaultInterval       = 30 * time.Second
+	defaultToolRefresh    = 10 * time.Minute
+	defaultReleaseRefresh = time.Hour
+	probeTimeout          = 2 * time.Second
+	releaseTimeout        = 4 * time.Second
 )
 
 // toolEnv is the non-secret environment dboss forwards to the console for context.
@@ -76,14 +80,17 @@ type Host struct {
 	SwapFree  int64   `json:"swap_free,omitempty"`
 }
 
-// Runtime is the running dboss process itself.
+// Runtime is the running dboss process itself. DbossLatest is the newest tag published on
+// GitHub and is empty while the lookup has no answer, so an offline box just shows nothing.
 type Runtime struct {
-	Dboss      string            `json:"dboss"`
-	GoVersion  string            `json:"go_version"`
-	PID        int               `json:"pid"`
-	Goroutines int               `json:"goroutines"`
-	GOMAXPROCS int               `json:"gomaxprocs"`
-	Env        map[string]string `json:"env,omitempty"`
+	Dboss          string            `json:"dboss"`
+	DbossLatest    string            `json:"dboss_latest,omitempty"`
+	DbossLatestURL string            `json:"dboss_latest_url,omitempty"`
+	GoVersion      string            `json:"go_version"`
+	PID            int               `json:"pid"`
+	Goroutines     int               `json:"goroutines"`
+	GOMAXPROCS     int               `json:"gomaxprocs"`
+	Env            map[string]string `json:"env,omitempty"`
 }
 
 // Snapshot is one inspection result.
@@ -144,24 +151,30 @@ var defaultProbes = []probe{
 // Inspector collects and caches one Snapshot. Snapshot is cheap and safe for any goroutine;
 // Refresh re-samples the host and re-probes the tools when the tool interval has elapsed.
 type Inspector struct {
-	dirs         []DirSpec
-	probes       []probe
-	toolInterval time.Duration
-	lookPath     func(string) (string, error)
-	run          func(context.Context, string, ...string) (string, error)
+	dirs            []DirSpec
+	probes          []probe
+	toolInterval    time.Duration
+	releaseInterval time.Duration
+	lookPath        func(string) (string, error)
+	run             func(context.Context, string, ...string) (string, error)
+	latest          func(context.Context) (string, error)
 
-	mu        sync.RWMutex
-	snapshot  Snapshot
-	lastTools time.Time
+	mu          sync.RWMutex
+	snapshot    Snapshot
+	lastTools   time.Time
+	lastRelease time.Time
+	latestTag   string
 }
 
 func NewInspector(dirs []DirSpec) *Inspector {
 	return &Inspector{
-		dirs:         dirs,
-		probes:       defaultProbes,
-		toolInterval: defaultToolRefresh,
-		lookPath:     exec.LookPath,
-		run:          runCommand,
+		dirs:            dirs,
+		probes:          defaultProbes,
+		toolInterval:    defaultToolRefresh,
+		releaseInterval: defaultReleaseRefresh,
+		lookPath:        exec.LookPath,
+		run:             runCommand,
+		latest:          release.Latest,
 	}
 }
 
@@ -177,7 +190,7 @@ func (i *Inspector) Snapshot() Snapshot {
 func (i *Inspector) Refresh(ctx context.Context) Snapshot {
 	now := time.Now()
 	i.mu.RLock()
-	previous, lastTools := i.snapshot, i.lastTools
+	previous, lastTools, lastRelease, latestTag := i.snapshot, i.lastTools, i.lastRelease, i.latestTag
 	i.mu.RUnlock()
 
 	tools := previous.Tools
@@ -185,17 +198,38 @@ func (i *Inspector) Refresh(ctx context.Context) Snapshot {
 		tools = i.collectTools(ctx)
 		lastTools = now
 	}
+	if lastRelease.IsZero() || now.Sub(lastRelease) >= i.releaseInterval {
+		latestTag = i.latestRelease(ctx)
+		lastRelease = now
+	}
 	snapshot := Snapshot{
 		CollectedAt: now,
 		Host:        collectHost(),
-		Runtime:     collectRuntime(),
+		Runtime:     collectRuntime(latestTag),
 		Tools:       tools,
 		Dirs:        collectDirs(i.dirs),
 	}
 	i.mu.Lock()
 	i.snapshot, i.lastTools = snapshot, lastTools
+	i.lastRelease, i.latestTag = lastRelease, latestTag
 	i.mu.Unlock()
 	return snapshot
+}
+
+// latestRelease asks GitHub for the newest published tag. It is best effort: a box without a
+// route out returns nothing, and the caller stamps the attempt either way, so a refresh never
+// waits on the network more than once per interval.
+func (i *Inspector) latestRelease(ctx context.Context) string {
+	if i.latest == nil {
+		return ""
+	}
+	releaseCtx, cancel := context.WithTimeout(ctx, releaseTimeout)
+	defer cancel()
+	tag, err := i.latest(releaseCtx)
+	if err != nil {
+		return ""
+	}
+	return tag
 }
 
 func (i *Inspector) collectTools(ctx context.Context) []Tool {
@@ -225,21 +259,26 @@ func (i *Inspector) probe(ctx context.Context, p probe) Tool {
 	return tool
 }
 
-func collectRuntime() Runtime {
+func collectRuntime(latest string) Runtime {
 	env := map[string]string{}
 	for _, name := range toolEnv {
 		if value := os.Getenv(name); value != "" {
 			env[name] = value
 		}
 	}
-	return Runtime{
-		Dboss:      version.String(),
-		GoVersion:  runtime.Version(),
-		PID:        os.Getpid(),
-		Goroutines: runtime.NumGoroutine(),
-		GOMAXPROCS: runtime.GOMAXPROCS(0),
-		Env:        env,
+	info := Runtime{
+		Dboss:       version.String(),
+		DbossLatest: latest,
+		GoVersion:   runtime.Version(),
+		PID:         os.Getpid(),
+		Goroutines:  runtime.NumGoroutine(),
+		GOMAXPROCS:  runtime.GOMAXPROCS(0),
+		Env:         env,
 	}
+	if latest != "" {
+		info.DbossLatestURL = release.TagURL(latest)
+	}
+	return info
 }
 
 func collectDirs(refs []DirSpec) []Dir {
