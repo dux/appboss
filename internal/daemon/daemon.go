@@ -24,6 +24,7 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/console"
 	"dboss/internal/ctl"
+	"dboss/internal/devtls"
 	"dboss/internal/diskusage"
 	"dboss/internal/ingest"
 	"dboss/internal/logstore"
@@ -51,6 +52,8 @@ type Daemon struct {
 	notifier       *notify.Notifier
 	servers        []*http.Server
 	listen         []string
+	devHTTPS       string // actual address of the dev session's HTTPS listener
+	devTLS         *devtls.Authority
 	echo           *super.Echo
 	managementPort int
 }
@@ -58,6 +61,9 @@ type Daemon struct {
 // netListen is the test seam for the privileged-port fallback: a test cannot provoke a real
 // EACCES portably.
 var netListen = net.Listen
+
+// devCADir is the test seam for where a dev session keeps its certificate authority.
+var devCADir = devtls.DefaultDir
 
 // Build prepares the session: directories, port range, supervisor, modules, the proxy pipeline,
 // the console and the control socket. Listeners bind here, so a returned error leaves nothing
@@ -125,7 +131,9 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 			return nil, err
 		}
 		var certs *proxy.ACME
-		if cfg.Proxy.TLS.Enabled() {
+		if cfg.Dev() {
+			d.startDevHTTPS(edge, allocator)
+		} else if cfg.Proxy.TLS.Enabled() {
 			certs, err = proxy.NewACME(cfg, manager)
 			if err != nil {
 				d.Close()
@@ -144,7 +152,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 			if certs != nil && cfg.Proxy.TLS.Redirect {
 				handler = certs.HTTPHandler(nil)
 			}
-			listener, bound, err := bindProxy(address, proxyProcess(index), allocator, echo != nil)
+			listener, bound, err := bindProxy("proxy", "proxy.listen", address, proxyProcess(index), allocator, echo != nil)
 			if err != nil {
 				d.Close()
 				return nil, err
@@ -290,33 +298,60 @@ func bindError(name, address, key string, err error) error {
 	return fmt.Errorf("%s listen %s: %w", name, address, err)
 }
 
-// bindProxy is bind for a plain proxy address, with the terminal fallback: a hand-run session
-// that may not hold the configured port moves to the first free port of ports.range instead of
-// exiting, so developing against an app needs no sudo. Under systemd stdout is a pipe, so a
-// service start still fails.
-func bindProxy(address, process string, allocator *ports.Allocator, interactive bool) (net.Listener, string, error) {
+// bindProxy is bind for a proxy address, with the terminal fallback: a hand-run session that may
+// not hold the configured port moves to the first free port of ports.range instead of exiting,
+// so developing against an app needs no sudo. Under systemd stdout is a pipe, so a service start
+// still fails. name and key label the listener and the config key that moves it in errors.
+func bindProxy(name, key, address, process string, allocator *ports.Allocator, interactive bool) (net.Listener, string, error) {
 	listener, err := netListen("tcp", address)
 	if err == nil {
 		return listener, address, nil
 	}
 	if !interactive || !errors.Is(err, syscall.EACCES) {
-		return nil, "", bindError("proxy", address, "proxy.listen", err)
+		return nil, "", bindError(name, address, key, err)
 	}
 	port, allocErr := allocator.Allocate("dboss", process)
 	if allocErr != nil {
-		return nil, "", bindError("proxy", address, "proxy.listen", err)
+		return nil, "", bindError(name, address, key, err)
 	}
 	host, _, splitErr := net.SplitHostPort(address)
 	if splitErr != nil {
-		return nil, "", bindError("proxy", address, "proxy.listen", err)
+		return nil, "", bindError(name, address, key, err)
 	}
 	fallback := net.JoinHostPort(host, strconv.Itoa(port))
 	listener, err = netListen("tcp", fallback)
 	if err != nil {
-		return nil, "", fmt.Errorf("proxy listen %s: %w", fallback, err)
+		return nil, "", fmt.Errorf("%s listen %s: %w", name, fallback, err)
 	}
-	logx.Warnf("proxy: %s needs root or CAP_NET_BIND_SERVICE; this terminal session listens on %s instead", address, fallback)
+	logx.Warnf("%s: %s needs root or CAP_NET_BIND_SERVICE; this terminal session listens on %s instead", name, address, fallback)
 	return listener, fallback, nil
+}
+
+// startDevHTTPS serves the proxy over HTTPS in a dev session, on proxy.tls.listen or :443, with
+// certificates from the user's local authority. It is a convenience, so a missing authority or a
+// taken port only logs and the session keeps its plain HTTP listener.
+func (d *Daemon) startDevHTTPS(edge http.Handler, allocator *ports.Allocator) {
+	dir, err := devCADir()
+	if err == nil {
+		d.devTLS, err = devtls.Open(dir)
+	}
+	if err != nil {
+		logx.Warnf("dev https: %v", err)
+		return
+	}
+	address := d.cfg.Proxy.TLS.Listen
+	if address == "" {
+		address = ":443"
+	}
+	listener, _, err := bindProxy("dev-https", "proxy.tls.listen", address, "proxy-tls", allocator, d.echo != nil)
+	if err != nil {
+		logx.Warnf("dev https: %v", err)
+		d.devTLS = nil
+		return
+	}
+	d.servers = append(d.servers, startHTTPSServer("dev-https", listener, edge, d.devTLS.TLSConfig()))
+	d.devHTTPS = listener.Addr().String()
+	logx.Infof("dev https: %s (local certificate authority %s)", d.devHTTPS, d.devTLS.RootPath())
 }
 
 // proxyProcess is the allocator key for the nth proxy.listen entry, so several addresses that

@@ -212,6 +212,7 @@ The suffix works at every depth and inside free-form maps such as `procfile`, `e
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
 `dboss config --keys [filter]` lists every key grouped by block, with a one-line description, its default and, when useful, an example; the same list is behind the Help button in the console's Configuration view.
 `dboss config --reference` prints the long annotated reference, and `dboss config [app] -d` prints a resolved config with every default filled in.
+A dev session also serves HTTPS, so an app that needs a secure origin (secure cookies, service workers, OAuth callbacks) works locally: `:443`, or `proxy.tls.listen`, moving into `ports.range` when the port is refused, with certificates from a local certificate authority dboss keeps in your user config directory and shares across projects. Nothing is issued by Let's Encrypt and plain http keeps working. The first dev start on a terminal asks whether to trust that root (`[Y/n]`, it may ask for your password) and starts either way; `dboss trust` does the same at any time, adding it to the macOS login keychain or the Debian/Fedora store through `sudo`. Until it is trusted the banner says so and the browser warns.
 `dboss init` prints a fully commented starter config, service or app, with every key shown with its default or an example; save it with `dboss init > dboss.yaml`.
 
 ```

@@ -2,12 +2,15 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -106,7 +109,7 @@ func TestBindProxyFallsBackOnATerminal(t *testing.T) {
 	port := freePort(t)
 	allocator := ports.New([2]int{port, port})
 
-	listener, address, err := bindProxy(":80", proxyProcess(0), allocator, true)
+	listener, address, err := bindProxy("proxy", "proxy.listen", ":80", proxyProcess(0), allocator, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +127,7 @@ func TestBindProxyKeepsTheHost(t *testing.T) {
 	port := freePort(t)
 	allocator := ports.New([2]int{port, port})
 
-	listener, address, err := bindProxy("127.0.0.1:80", proxyProcess(1), allocator, true)
+	listener, address, err := bindProxy("proxy", "proxy.listen", "127.0.0.1:80", proxyProcess(1), allocator, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +143,7 @@ func TestBindProxyKeepsTheHost(t *testing.T) {
 func TestBindProxyStaysFatalWithoutATerminal(t *testing.T) {
 	refuseListen(t, ":80")
 
-	_, _, err := bindProxy(":80", proxyProcess(0), ports.New([2]int{3100, 3990}), false)
+	_, _, err := bindProxy("proxy", "proxy.listen", ":80", proxyProcess(0), ports.New([2]int{3100, 3990}), false)
 	if err == nil {
 		t.Fatal("a non-interactive session must not fall back")
 	}
@@ -187,4 +190,48 @@ func TestDevConsoleIsServedWithoutTheProxy(t *testing.T) {
 	if _, _, err := session.LoginURL(); err != nil {
 		t.Fatalf("LoginURL = %v", err)
 	}
+}
+
+// A dev session serves the proxy over HTTPS with a leaf from the local authority, so a client
+// that trusts the root completes the handshake for any app host.
+func TestDevSessionServesHTTPS(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dboss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	caDir := filepath.Join(dir, "ca")
+	previous := devCADir
+	devCADir = func() (string, error) { return caDir, nil }
+	defer func() { devCADir = previous }()
+	cfg := config.Default()
+	cfg.SourcePath = dir + "/" + config.FileName
+	if err := os.WriteFile(cfg.SourcePath, []byte("procfile: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
+	cfg.Ports.Range = [2]int{0, 0}
+	cfg.Proxy.Listen = config.List{"127.0.0.1:0"}
+	cfg.Proxy.TLS.Listen = "127.0.0.1:0"
+	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}
+	session, err := Build(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	address := session.devHTTPS
+	if address == "" || session.devTLS == nil {
+		t.Fatal("dev session has no https listener")
+	}
+	rootPEM, err := os.ReadFile(session.devTLS.RootPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(rootPEM)
+	conn, err := tls.Dial("tcp", address, &tls.Config{RootCAs: roots, ServerName: "demo.lvh.me"})
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	_ = conn.Close()
 }

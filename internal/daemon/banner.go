@@ -18,7 +18,8 @@ func (d *Daemon) printBanner() {
 		return
 	}
 	scheme := "http"
-	if d.cfg.Proxy.TLS.Enabled() {
+	// A dev session keeps plain http on proxy.listen; its HTTPS gets its own row below.
+	if d.cfg.Proxy.TLS.Enabled() && !d.cfg.Dev() {
 		scheme = "https"
 	}
 	console, note := "", ""
@@ -35,7 +36,14 @@ func (d *Daemon) printBanner() {
 			console, note = link, "signed in for an hour"
 		}
 	}
-	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, bannerPort(d.listen[0], scheme), d.echo) {
+	secure := devHTTPS{}
+	if d.devHTTPS != "" {
+		secure = devHTTPS{port: bannerPort(d.devHTTPS, "https"), note: "run `dboss trust` once so the browser accepts it"}
+		if d.devTLS.Trusted() {
+			secure.note = "trusted local certificate"
+		}
+	}
+	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, bannerPort(d.listen[0], scheme), secure, d.echo) {
 		d.echo.Print(line)
 	}
 }
@@ -44,14 +52,18 @@ func (d *Daemon) printBanner() {
 // same colored prefix that process logs under, so the address and its later output line up.
 // Web processes carry a clickable URL, workers say so, and every row ends in the app's state,
 // which is how an app that has not started yet is still visible.
-func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, port string, echo *super.Echo) []string {
+func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, port string, secure devHTTPS, echo *super.Echo) []string {
 	rows := make([]bannerRow, 0, len(snapshots))
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
+	secureURL := ""
 	for _, app := range snapshots {
 		web := map[string]bool{}
 		for _, process := range app.WebProcesses {
 			web[process.Name] = true
 			rows = append(rows, newRow(echo, app.Name, process.Name, webURL(process, scheme, port), stateLabel(app, true), true))
+			if secureURL == "" && displayHost(process) != "" {
+				secureURL = webURL(process, "https", secure.port)
+			}
 		}
 		for _, process := range app.Processes {
 			if web[process.Name] {
@@ -59,6 +71,9 @@ func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, por
 			}
 			rows = append(rows, newRow(echo, app.Name, process.Name, "worker", stateLabel(app, false), true))
 		}
+	}
+	if secure.note != "" && secureURL != "" {
+		rows = append(rows, newRow(echo, "dboss", "https", secureURL, secure.note, true))
 	}
 	if console != "" {
 		// A sign-in link carries a token, so it is far longer than any hostname. Keeping it out
@@ -81,6 +96,13 @@ func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, por
 		lines = append(lines, row.key+strings.Repeat(" ", keyWidth-row.keyWidth)+address+"  "+row.note)
 	}
 	return lines
+}
+
+// devHTTPS is the dev session's HTTPS listener as the banner shows it: the port to print and
+// whether the browser will trust it. A zero value prints nothing.
+type devHTTPS struct {
+	port string
+	note string
 }
 
 // bannerRow is one line. key carries the color escapes, so its printed width has to be tracked

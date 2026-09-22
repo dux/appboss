@@ -97,7 +97,7 @@ func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
 			Processes:    []super.ProcessSnapshot{{Name: "web"}},
 		},
 	}
-	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "signed in for an hour", "http", "", echo)
+	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "signed in for an hour", "http", "", devHTTPS{}, echo)
 	if len(lines) != 4 {
 		t.Fatalf("want a row per process plus the console, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
@@ -137,11 +137,28 @@ func stripANSI(line string) string {
 // A dev session admits this machine without a session, so its console row is the plain address.
 func TestBannerConsoleRowCarriesItsNote(t *testing.T) {
 	echo := super.NewEcho(io.Discard)
-	lines := banner(nil, "http://127.0.0.1:3100", "open on this machine", "http", "", echo)
+	lines := banner(nil, "http://127.0.0.1:3100", "open on this machine", "http", "", devHTTPS{}, echo)
 	if len(lines) != 1 || !strings.Contains(lines[0], "http://127.0.0.1:3100") || !strings.Contains(lines[0], "open on this machine") {
 		t.Fatalf("console row = %v", lines)
 	}
 	if strings.Contains(lines[0], "token=") {
 		t.Fatalf("a dev console link must carry no token: %q", lines[0])
+	}
+}
+
+// A dev session's HTTPS listener gets one row with the first web host and the trust hint.
+func TestBannerShowsDevHTTPSRow(t *testing.T) {
+	echo := super.NewEcho(io.Discard)
+	snapshots := []super.Snapshot{{Name: "shop", State: super.Running, WebProcesses: []super.WebProcessSnapshot{{Name: "web", Hosts: []string{"shop.lvh.me"}}}}}
+	lines := banner(snapshots, "", "", "http", "", devHTTPS{port: "3101", note: "run `dboss trust` once"}, echo)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %v", lines)
+	}
+	row := stripANSI(lines[1])
+	if !strings.Contains(row, "https://shop.lvh.me:3101") || !strings.Contains(row, "dboss trust") {
+		t.Fatalf("https row = %q", row)
+	}
+	if lines := banner(snapshots, "", "", "http", "", devHTTPS{}, echo); len(lines) != 1 {
+		t.Fatalf("no dev https should print no https row: %v", lines)
 	}
 }

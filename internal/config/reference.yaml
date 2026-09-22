@@ -119,6 +119,9 @@ proxy:
   # hosts of the current apps and the console; nothing else may get a certificate, so a stranger
   # cannot exhaust the authority's rate limit. Certificates are cached under state_dir/acme and
   # renewed automatically. Leave listen empty to keep TLS at the edge (Cloudflare) as before.
+  # A dev session (dboss start in an app folder) never uses ACME: it always serves HTTPS on
+  # listen (default :443) with certificates from a local authority in the user config
+  # directory, and plain http stays on. `dboss trust` adds that root to the system store.
   tls:
     # Address of the HTTPS listener. Empty disables built-in TLS.
     listen: ""              # e.g. ":443"
