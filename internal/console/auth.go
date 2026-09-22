@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +41,6 @@ type authenticator struct {
 	admins     map[string]bool
 	mu         sync.Mutex
 	cliTokens  map[string]cliToken
-	localPort  string // console's own loopback port
 	dev        bool
 	devSession authSession // the one local session a dev run hands out, minted at startup
 }
@@ -52,15 +50,15 @@ func newAuthenticator(cfg config.Config) (*authenticator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return consoleAuthenticator(flow, cfg.Management, strconv.Itoa(cfg.Ports.Range[0]), cfg.Dev())
+	return consoleAuthenticator(flow, cfg.Management, cfg.Dev())
 }
 
-func consoleAuthenticator(flow *authcog.Flow, management config.Management, localPort string, dev bool) (*authenticator, error) {
+func consoleAuthenticator(flow *authcog.Flow, management config.Management, dev bool) (*authenticator, error) {
 	hosts := make(map[string]bool, len(management.Host))
 	for _, host := range management.Host {
 		hosts[strings.ToLower(host)] = true
 	}
-	auth := &authenticator{flow: flow, admins: map[string]bool{}, localPort: localPort, dev: dev}
+	auth := &authenticator{flow: flow, admins: map[string]bool{}, dev: dev}
 	for _, email := range management.Auth.AdminEmails {
 		auth.admins[strings.ToLower(email)] = true
 	}
@@ -124,7 +122,7 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 		_, _ = io.WriteString(w, cliLoginPage)
 		return authSession{}, false
 	}
-	a.flow.Start(w, r, a.gate, a.loginHost(r))
+	a.flow.Start(w, r, a.gate)
 	return authSession{}, false
 }
 
@@ -155,19 +153,6 @@ func loopbackPeer(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// loginHost is the host AuthCog is asked to return to. AuthCog releases over http only to a
-// local host with a port above 999, so a plain-http sign-in on port 80 goes through the
-// console's own port.
-func (a *authenticator) loginHost(r *http.Request) string {
-	if authcog.Secure(r) || strings.Contains(r.Host, ":") {
-		return r.Host
-	}
-	if port, _ := strconv.Atoi(a.localPort); port <= 999 {
-		return r.Host
-	}
-	return r.Host + ":" + a.localPort
 }
 
 // cliToken is one pending login link. A `dboss login` link is spent on first use; the banner

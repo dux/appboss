@@ -3,9 +3,14 @@ procfile:
     command: ./start.sh
     hosts:
       - button.lvh.me
-    # Serves a realtime hub at http://button.lvh.me/socketio; open /socketio/_test for the live test.
+    # Serves a realtime hub at http://button.lvh.me/socketio; /chat is a small app page using it,
+    # /socketio/_test the built-in self-test.
     pubsub:
       path: /socketio
       test: true
     health: /up
 autostart: button
+
+# Any AuthCog account may sign in; the page shows the X-Dboss-User header dboss sets.
+auth:
+  allow_emails: ["*"]

@@ -4,6 +4,17 @@ procfile:
     hosts:
       - bun.lvh.me
     health: /up
+  # A second web process in the same app: its own port, host and health check.
+  admin:
+    command: ./start.sh
+    hosts:
+      - admin.bun.lvh.me
+    health: /up
+
+# .env sets GREETING too and wins; SOURCE comes only from here. The page at / prints both.
+env:
+  GREETING: from-config
+  SOURCE: config
 
 cron:
   heartbeat:
@@ -17,3 +28,9 @@ hooks:
   deploy:
     command: ./deploy.sh
     timeout: 1m
+
+# create runs once before the first start, start before every start (the web process waits for
+# it). Delete .dboss/demo.db and restart to see a failed start leave the app crashed.
+lifecycle:
+  create: ./lifecycle.sh create
+  start: ./lifecycle.sh start

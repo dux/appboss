@@ -3,6 +3,7 @@ package apps
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"dboss/internal/config"
@@ -98,5 +99,32 @@ func writeTestFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDiscoverFindsAppFileUnderConfig(t *testing.T) {
+	root := t.TempDir()
+	appsDir := filepath.Join(root, "apps")
+	nested := filepath.Join(appsDir, "rails", config.ConfigDir)
+	both := filepath.Join(appsDir, "both")
+	for _, dir := range []string{nested, filepath.Join(both, config.ConfigDir)} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestFile(t, filepath.Join(nested, config.FileName), "procfile:\n  web: ./server\n")
+	writeTestFile(t, filepath.Join(both, config.FileName), "procfile:\n  web: ./server\n")
+	writeTestFile(t, filepath.Join(both, config.ConfigDir, config.FileName), "procfile:\n  web: ./server\n")
+	cfg := config.Default()
+	cfg.Apps = appsDir
+	found, invalid, err := Discover(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Name != "rails" || found[0].Dir != filepath.Join(appsDir, "rails") {
+		t.Fatalf("found = %+v", found)
+	}
+	if len(invalid) != 1 || !strings.Contains(invalid[0].Error(), "keep one") {
+		t.Fatalf("invalid = %v, want the both-folders error", invalid)
 	}
 }

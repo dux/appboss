@@ -127,7 +127,7 @@ var keySpecs = map[string]KeySpec{
 	"error_page_path":   {Block: "web", Name: "Error page", Description: "static HTML served for proxy errors and app 5xx answers, relative to the app", Example: "public/error_500.html"},
 
 	// --- Sign-in ---
-	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},
+	"auth.allow_emails": {Block: "auth", Name: "Allowed emails", Description: "emails and *@domain patterns let in through AuthCog, * for any account; empty leaves the app open", Example: "[ana@example.com, \"*@example.com\"]"},
 	"auth.session_ttl":  {Block: "auth", Name: "Session lifetime", Description: "how long an app sign-in lasts before AuthCog is asked again", Example: "8h"},
 
 	// --- AuthCog login service ---

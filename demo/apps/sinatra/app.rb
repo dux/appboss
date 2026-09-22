@@ -33,3 +33,8 @@ get "/up" do
   content_type :json
   JSON.generate(service: "sinatra", status: "ok")
 end
+
+# Always fails, to show error_page_path and the error-rate alert.
+get "/boom" do
+  halt 500, "boom"
+end

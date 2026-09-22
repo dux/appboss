@@ -331,7 +331,7 @@
     {#if state.topic === 'config'}
       <section>
         <h2>Config files</h2>
-        <p><code>dboss.yaml</code> has two roles. A file with <code>apps:</code> is a host; a file with <code>procfile:</code> is an app. Never both. <code>dboss.local.yaml</code> next to a host file wins over it, is gitignored, and is where server-only values (secrets, admin emails, absolute paths) live.</p>
+        <p><code>dboss.yaml</code> has two roles. A file with <code>apps:</code> is a host; a file with <code>procfile:</code> is an app. Never both. <code>dboss.local.yaml</code> next to a host file wins over it, is gitignored, and is where server-only values (secrets, admin emails, absolute paths) live. Either file may also sit in the folder's <code>config/</code> subfolder; paths still resolve against the folder itself, and files in both places are an error.</p>
         <p><code>defaults:</code> in the host file applies to every app. An app's top-level key overrides it key by key, and <code>processes.&#60;name&#62;</code> overrides it once more for a single process.</p>
         <p>A <code>$NAME</code> in a value is replaced from the daemon's environment before it loads, so <code>url: $ALERT_WEBHOOK_URL</code> keeps the secret out of the file. Only all-uppercase names expand, an unset name is left as written, and <code>procfile</code> and cron commands are never expanded because they are runtime shell lines.</p>
         <h3>Host</h3>
@@ -438,14 +438,13 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.access" />
         <h3>Details</h3>
-        <p><code>auth</code> sends a visitor without a session to AuthCog (the realm is <code>management.auth.realm</code>). They return to <code>/.well-known/dboss/auth</code> and get a signed, host-only cookie; <code>/.well-known/dboss/logout</code> signs out. <code>allow_emails</code> takes exact addresses and <code>*@domain</code> patterns, and is checked on every request, so removing an entry ends that session on the next rescan.</p>
+        <p><code>auth</code> sends a visitor without a session to AuthCog (the realm is <code>management.auth.realm</code>). They return to <code>/.well-known/dboss/auth</code> and get a signed, host-only cookie; <code>/.well-known/dboss/logout</code> signs out. <code>allow_emails</code> takes exact addresses, <code>*@domain</code> patterns and <code>"*"</code> for any account, and is checked on every request, so removing an entry ends that session on the next rescan.</p>
         <p><code>authcog</code> is a login service, not a gate: the app links to <code>authcog.path</code> (default <code>/authcog</code>), dboss signs the visitor in to <code>authcog.realm</code> and then forwards one request to that path with the profile in <code>X-Dboss-User</code>, and the app reads it and creates its own session. Any AuthCog account is admitted, logout is the app's job, and the login path is never gated by <code>auth</code>.</p>
         <ul>
           <li>The app receives the signed-in email as <code>X-Dboss-User</code>. dboss removes that header from every inbound request, so the app can trust it.</li>
           <li>A request that does not accept <code>text/html</code> gets <code>401</code> instead of a redirect.</li>
           <li>A session is issued for one app: it opens neither another app nor the console.</li>
           <li><code>basic_auth</code> is independent: when both are set, both must pass.</li>
-          <li>AuthCog returns over plain http only to a local host on a port above 999, so local testing needs a <code>proxy.listen</code> port such as <code>:8080</code>.</li>
         </ul>
         <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs, matched against the client IP from <code>proxy.client_ip_headers</code>.</p>
         <p><code>proxy.trusted_cidrs</code> refuses connections from any other source; point it at the Cloudflare ranges. <code>proxy.cloudflare_only</code> is the header-only alternative that refuses requests without <code>CF-Ray</code> and <code>CF-Connecting-IP</code>; headers are spoofable, so also lock the origin at the firewall.</p>

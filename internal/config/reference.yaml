@@ -10,7 +10,9 @@
 # An app file may also carry host keys so `dboss start` inside the app folder runs it
 # standalone (single mode); the same file under a host must not, or the app is invalid.
 # Whenever a folder is resolved to its config, dboss.local.yaml is used when it exists,
-# dboss.yaml otherwise. The local file is server-only and gitignored.
+# dboss.yaml otherwise. The local file is server-only and gitignored. A folder with neither is
+# searched in its config/ subfolder (config/dboss.yaml); relative paths still resolve against
+# the folder itself, and config files in both places are an error.
 #
 # Rules that apply everywhere:
 #   - Durations are Go duration strings: 30s, 20m, 6h, 72h. No days suffix; use 72h.
@@ -647,11 +649,9 @@ lifecycle: {}
 #     session never wakes a stopped app.
 #   - A pubsub publisher presenting the publish secret passes without a session.
 #   - basic_auth is independent: when both are set, both must pass.
-#   - AuthCog returns over plain http only to a local host on a port above 999, so local
-#     testing needs a proxy.listen port like :8080.
 # Valid at the app top level and under host `defaults:`, which gates every app on a staging box.
 auth:
-  # Exact addresses and *@domain patterns. Empty leaves the app open.
+  # Exact addresses, *@domain patterns, or "*" for any AuthCog account. Empty leaves the app open.
   allow_emails: []
   #   - ana@example.com
   #   - "*@example.com"

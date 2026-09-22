@@ -62,7 +62,7 @@ func (s *Store) Files() ([]ConfigFile, error) {
 	if err != nil {
 		hostPath = s.root.SourcePath
 	}
-	_, localErr := os.Stat(filepath.Join(s.root.Dir, config.LocalFileName))
+	_, localErr := os.Stat(filepath.Join(filepath.Dir(hostPath), config.LocalFileName))
 	files := []ConfigFile{{ID: "host", Path: hostPath, Source: filepath.Base(hostPath), HasLocal: localErr == nil}}
 	if s.root.App != nil {
 		// Single mode: the host file is the app file, and the app is named after its folder.
@@ -82,7 +82,7 @@ func (s *Store) Files() ([]ConfigFile, error) {
 		if err != nil {
 			continue
 		}
-		_, localErr := os.Stat(filepath.Join(dir, config.LocalFileName))
+		_, localErr := os.Stat(filepath.Join(filepath.Dir(path), config.LocalFileName))
 		files = append(files, ConfigFile{ID: "app:" + name, App: name, Path: path, Source: filepath.Base(path), HasLocal: localErr == nil})
 	}
 	return s.stat(files)
@@ -330,7 +330,7 @@ func (s *Store) EnsureLocal(app string) (ConfigFile, error) {
 // CreateHostLocal copies the host config to dboss.local.yaml so console writes there survive a
 // deploy. It is a no-op when the local file already exists.
 func (s *Store) CreateHostLocal() (ConfigFile, error) {
-	target := filepath.Join(s.root.Dir, config.LocalFileName)
+	target := filepath.Join(filepath.Dir(s.root.SourcePath), config.LocalFileName)
 	if _, err := os.Stat(target); err == nil {
 		return s.Read("host")
 	}

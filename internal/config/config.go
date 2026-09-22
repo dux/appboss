@@ -162,20 +162,55 @@ func (l *List) UnmarshalYAML(node *yaml.Node) error {
 
 // FileName and LocalFileName are the two config file names looked up in a folder.
 // The local file is server-only and, when present, replaces the committed one entirely.
+// ConfigDir is the subfolder searched when the folder itself has neither, so an app can keep
+// its dboss.yaml under config/ next to the rest of its configuration.
 const (
 	FileName      = "dboss.yaml"
 	LocalFileName = "dboss.local.yaml"
+	ConfigDir     = "config"
 )
 
-// FindInDir returns the config file to use for dir: dboss.local.yaml when it exists, else dboss.yaml.
+// ErrNoConfig is FindInDir's answer for a folder with no config file in either place.
+var ErrNoConfig = errors.New("no config file")
+
+// FindInDir returns the config file to use for dir: dboss.local.yaml, else dboss.yaml, looked up
+// in dir and then in dir/config. Files in both places are an error, so only one can be live.
 func FindInDir(dir string) (string, error) {
+	nestedDir := filepath.Join(dir, ConfigDir)
+	root, nested := findConfigFile(dir), findConfigFile(nestedDir)
+	switch {
+	case root != "" && nested != "":
+		return "", fmt.Errorf("both %s and %s exist; keep one", root, nested)
+	case root != "":
+		return root, nil
+	case nested != "":
+		return nested, nil
+	}
+	return "", fmt.Errorf("%w: no %s in %s or %s", ErrNoConfig, FileName, dir, nestedDir)
+}
+
+func findConfigFile(dir string) string {
 	for _, name := range []string{LocalFileName, FileName} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err == nil {
-			return path, nil
+			return path
 		}
 	}
-	return "", fmt.Errorf("no %s in %s", FileName, dir)
+	return ""
+}
+
+// BaseDir is the folder a config file belongs to, which relative paths resolve against: the
+// parent of config/ when that is where FindInDir found it, else the file's own folder.
+func BaseDir(path string) string {
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) != ConfigDir {
+		return dir
+	}
+	parent := filepath.Dir(dir)
+	if found, err := FindInDir(parent); err == nil && found == path {
+		return parent
+	}
+	return dir
 }
 
 // Config is the root dboss.yaml: either a host that runs the apps found in Apps, or a single app (App set).
@@ -391,8 +426,8 @@ func (a AuthCog) RealmHost() string {
 	return realm + ".authcog.com"
 }
 
-// Auth puts an AuthCog sign-in in front of the app. AllowEmails holds exact addresses and
-// *@domain patterns; an empty list leaves the app open.
+// Auth puts an AuthCog sign-in in front of the app. AllowEmails holds exact addresses,
+// *@domain patterns and a bare * for any account; an empty list leaves the app open.
 type Auth struct {
 	AllowEmails List     `yaml:"allow_emails" json:"allow_emails"`
 	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
@@ -410,7 +445,7 @@ func (a Auth) Allows(email string) bool {
 	}
 	for _, entry := range a.AllowEmails {
 		entry = strings.ToLower(entry)
-		if entry == email || entry == "*@"+domain {
+		if entry == "*" || entry == email || entry == "*@"+domain {
 			return true
 		}
 	}
@@ -597,7 +632,7 @@ func Parse(data []byte, path string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SourcePath = absolutePath
-	cfg.Dir = filepath.Dir(absolutePath)
+	cfg.Dir = BaseDir(absolutePath)
 	hasApp := keys["procfile"]
 	if hasApp && keys["apps"] {
 		return Config{}, located(&Error{Message: "a file is either an app (procfile) or a host (apps), not both", Hint: "move the host keys to the root dboss.yaml or drop apps"}, path, root)
@@ -989,12 +1024,14 @@ func validateAuth(a Auth) error {
 	}
 	seen := map[string]bool{}
 	for _, entry := range a.AllowEmails {
-		if domain, pattern := strings.CutPrefix(entry, "*@"); pattern {
+		if entry == "*" {
+			// any signed-in AuthCog account
+		} else if domain, pattern := strings.CutPrefix(entry, "*@"); pattern {
 			if !validHostname(domain) {
 				return keyErr("auth.allow_emails", "invalid domain pattern %q", entry)
 			}
 		} else if address, err := mail.ParseAddress(entry); err != nil || !strings.EqualFold(address.Address, entry) {
-			return &Error{Key: "auth.allow_emails", Message: fmt.Sprintf("invalid entry %q", entry), Hint: "use an address like ana@example.com or a whole domain like *@example.com"}
+			return &Error{Key: "auth.allow_emails", Message: fmt.Sprintf("invalid entry %q", entry), Hint: "use an address like ana@example.com, a whole domain like *@example.com, or * for anyone"}
 		}
 		if seen[strings.ToLower(entry)] {
 			return keyErr("auth.allow_emails", "duplicate entry %q", entry)

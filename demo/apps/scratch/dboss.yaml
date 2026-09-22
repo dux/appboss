@@ -1,0 +1,22 @@
+# A throwaway app: destroy it from the console or with `dboss destroy scratch` to see the
+# destroy lifecycle step. Destroy removes this folder; `git checkout demo/apps/scratch` brings it back.
+procfile:
+  web:
+    command: ./start.sh
+    hosts:
+      - scratch.lvh.me
+    health: /up
+
+deletable: true
+
+# Browser asks for demo / demo (hash from `printf demo | dboss password`), and every response
+# carries the header below.
+basic_auth:
+  demo: "$2a$10$sQ6B5qGkRCSRyLNRdW8mSeyIwkun.qYi/Hvp9umtxGcBJztuIB/P2"
+headers:
+  X-Frame-Options: DENY
+
+lifecycle:
+  create: ../bun/lifecycle.sh create
+  start: ../bun/lifecycle.sh start
+  destroy: ../bun/lifecycle.sh destroy

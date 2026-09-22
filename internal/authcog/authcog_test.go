@@ -52,7 +52,7 @@ func signIn(t *testing.T, flow *Flow, gate Gate) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080/cart?step=2", nil)
 	start := httptest.NewRecorder()
-	flow.Start(start, request, gate, request.Host)
+	flow.Start(start, request, gate)
 	login, err := url.Parse(start.Header().Get("Location"))
 	if err != nil || start.Code != http.StatusFound {
 		t.Fatalf("start: %d %v", start.Code, err)
@@ -111,7 +111,7 @@ func TestAuthenticateReturnsTheProfileWithoutASession(t *testing.T) {
 	gate := testGate("app:shop", "ana@example.com")
 	request := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080/", nil)
 	start := httptest.NewRecorder()
-	flow.Start(start, request, gate, request.Host)
+	flow.Start(start, request, gate)
 	login, _ := url.Parse(start.Header().Get("Location"))
 	callback := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080"+gate.CallbackPath+"?callback=verified&state="+url.QueryEscape(login.Query().Get("state")), nil)
 	callback.AddCookie(cookieNamed(t, start, gate.StateCookie))
@@ -139,7 +139,7 @@ func TestCallbackIsBoundToStateAndGate(t *testing.T) {
 	gate := testGate("app:shop", "ana@example.com")
 	request := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080/", nil)
 	start := httptest.NewRecorder()
-	flow.Start(start, request, gate, request.Host)
+	flow.Start(start, request, gate)
 	login, _ := url.Parse(start.Header().Get("Location"))
 	target := "http://shop.lvh.me:8080" + gate.CallbackPath + "?callback=verified&state=" + url.QueryEscape(login.Query().Get("state"))
 

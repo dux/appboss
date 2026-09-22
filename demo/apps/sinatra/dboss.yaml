@@ -9,3 +9,21 @@ procfile:
   job: ./job.sh
 
 autostart: false
+
+# Sleeps after 2 minutes without requests (the host default is never); the next request wakes it.
+idle_stop: 2m
+
+# Replaces the proxy's own error page and app 5xx bodies for browsers; try /boom.
+error_page_path: ./public/500.html
+
+# Posts error-rate to the notify webhook once 5 requests in a minute are more than 10% errors.
+alerts:
+  window: 1m
+  min_requests: 5
+  error_rate: 10
+
+# Per-process overrides: the job worker stops fast and always comes back; web keeps the app values.
+processes:
+  job:
+    stop_timeout: 1s
+    restart: always

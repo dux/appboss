@@ -15,7 +15,7 @@ import (
 )
 
 func TestCLILoginLinkSignsInOnce(t *testing.T) {
-	auth := testAuthenticator("", "dboss.lvh.me")
+	auth := testAuthenticator("dboss.lvh.me")
 	handler := &Handler{auth: auth, managementPort: "3100", publicHost: "dboss.lvh.me"}
 	link, public, err := handler.LoginURL()
 	if err != nil {
@@ -67,7 +67,7 @@ func TestCLILoginLinkSignsInOnce(t *testing.T) {
 // The banner prints its link once and the operator clicks it whenever they get to it, so unlike
 // a `dboss login` link it has to survive being used.
 func TestDevLoginLinkIsReusableUntilItExpires(t *testing.T) {
-	auth := testAuthenticator("", "dboss.lvh.me")
+	auth := testAuthenticator("dboss.lvh.me")
 	handler := &Handler{auth: auth, managementPort: "3100", publicHost: "dboss.lvh.me"}
 	link, err := handler.DevLoginURL()
 	if err != nil {
@@ -155,7 +155,7 @@ func TestLoopbackHostOnlySignsInThroughCLI(t *testing.T) {
 }
 
 func TestDevSignsInLoopbackPeer(t *testing.T) {
-	auth := devAuthenticator(true, "3100", "dboss.lvh.me")
+	auth := devAuthenticator(true, "dboss.lvh.me")
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
 	request.RemoteAddr = "127.0.0.1:54321"
 	session, ok := auth.authenticate(httptest.NewRecorder(), request)
@@ -171,7 +171,7 @@ func TestDevSignsInLoopbackPeer(t *testing.T) {
 }
 
 func TestDevStillAuthenticatesRemotePeer(t *testing.T) {
-	auth := devAuthenticator(true, "3100", "dboss.lvh.me")
+	auth := devAuthenticator(true, "dboss.lvh.me")
 	api := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/api/bootstrap", nil)
 	api.RemoteAddr = "203.0.113.7:54321"
 	response := httptest.NewRecorder()
@@ -194,7 +194,7 @@ func TestDevStillAuthenticatesRemotePeer(t *testing.T) {
 }
 
 func TestAuthCogRejectsCLIEmail(t *testing.T) {
-	auth := testAuthenticator("", "dboss.lvh.me")
+	auth := testAuthenticator("dboss.lvh.me")
 	auth.flow.Exchange = func(_ context.Context, _, _, _ string) (authcog.Profile, error) {
 		return authcog.Profile{Email: cliEmail}, nil
 	}
@@ -214,7 +214,7 @@ func TestAuthCogRejectsCLIEmail(t *testing.T) {
 }
 
 func TestAuthCogLoginAndSession(t *testing.T) {
-	auth := testAuthenticator("", "dboss.lvh.me")
+	auth := testAuthenticator("dboss.lvh.me")
 	auth.flow.Exchange = func(_ context.Context, _, destination, callback string) (authcog.Profile, error) {
 		if destination != "/d:dboss.lvh.me/p:8081" || callback != "verified-callback" {
 			t.Fatalf("unexpected exchange: %s %s", destination, callback)
@@ -268,7 +268,7 @@ func TestAuthCogLoginAndSession(t *testing.T) {
 }
 
 func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
-	auth := testAuthenticator("", "dboss.lvh.me")
+	auth := testAuthenticator("dboss.lvh.me")
 	request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/api/apps", nil)
 	response := httptest.NewRecorder()
 	if _, ok := auth.authenticate(response, request); ok {
@@ -281,14 +281,14 @@ func TestAPIAuthenticationFailureIsJSON(t *testing.T) {
 
 // testAuthenticator is the console gate for the given management hosts with one admin and a
 // fixed signing key, so no test touches the disk.
-func testAuthenticator(localPort string, hosts ...string) *authenticator {
-	return devAuthenticator(false, localPort, hosts...)
+func testAuthenticator(hosts ...string) *authenticator {
+	return devAuthenticator(false, hosts...)
 }
 
 // devAuthenticator is the same gate with the dev flag set either way.
-func devAuthenticator(dev bool, localPort string, hosts ...string) *authenticator {
+func devAuthenticator(dev bool, hosts ...string) *authenticator {
 	management := config.Management{Host: hosts, Auth: config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)}}
-	auth, err := consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, localPort, dev)
+	auth, err := consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, dev)
 	if err != nil {
 		panic(err)
 	}
@@ -318,50 +318,4 @@ func TestSessionCookieIsLaxForCrossSiteCallback(t *testing.T) {
 	if cookie.SameSite != http.SameSiteLaxMode || !cookie.HttpOnly {
 		t.Fatalf("session cookie = %+v", cookie)
 	}
-}
-
-// AuthCog returns over http only to a local port above 999, so a port 80 sign-in is routed
-// through the console port and then sent back to the address it started on.
-func TestAuthCogLocalHTTPUsesConsolePort(t *testing.T) {
-	auth := testAuthenticator("3100", "dboss.lvh.me", "dboss.example.com")
-	auth.flow.Exchange = func(context.Context, string, string, string) (authcog.Profile, error) {
-		return authcog.Profile{Email: "admin@example.com"}, nil
-	}
-
-	response := httptest.NewRecorder()
-	auth.authenticate(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/?view=fleet", nil))
-	login, err := url.Parse(response.Header().Get("Location"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if login.Path != "/d:dboss.lvh.me/p:3100" {
-		t.Fatalf("local http destination = %s", login.Path)
-	}
-	callbackRequest := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:3100/authcog?callback=verified&state="+url.QueryEscape(login.Query().Get("state")), nil)
-	callbackRequest.AddCookie(cookieNamed(t, response.Result().Cookies(), authStateCookie))
-	callbackResponse := httptest.NewRecorder()
-	auth.authenticate(callbackResponse, callbackRequest)
-	if callbackResponse.Code != http.StatusSeeOther || callbackResponse.Header().Get("Location") != "http://dboss.lvh.me/?view=fleet" {
-		t.Fatalf("unexpected callback response: %d %s", callbackResponse.Code, callbackResponse.Header().Get("Location"))
-	}
-
-	for name, request := range map[string]*http.Request{
-		"public host":     httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil),
-		"forwarded https": forwardedHTTPS(httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)),
-	} {
-		response := httptest.NewRecorder()
-		auth.authenticate(response, request)
-		login, err := url.Parse(response.Header().Get("Location"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(login.Path, "/p:") {
-			t.Fatalf("%s: destination = %s", name, login.Path)
-		}
-	}
-}
-
-func forwardedHTTPS(r *http.Request) *http.Request {
-	r.Header.Set("X-Forwarded-Proto", "https")
-	return r
 }

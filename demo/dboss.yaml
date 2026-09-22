@@ -10,3 +10,8 @@ ports:
 
 defaults:
   idle_stop: 0s
+
+# Events land in the bun app's stdout through its /notify route.
+notify:
+  url: http://bun.lvh.me/notify
+  min_interval: 1m

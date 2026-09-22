@@ -33,7 +33,7 @@ func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app super.Snap
 	}
 	gate := authCogGate(app)
 	if r.URL.Query().Get("callback") == "" {
-		h.signin.Start(w, r, gate, r.Host)
+		h.signin.Start(w, r, gate)
 		return
 	}
 	profile, ok := h.signin.Authenticate(w, r, gate)

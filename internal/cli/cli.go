@@ -970,7 +970,7 @@ func appArgument(args []string, configPath string) (string, error) {
 func loadHostConfig(explicit string) (config.Config, error) {
 	path, err := findConfig(explicit)
 	if err != nil {
-		if explicit != "" || os.Getenv("DBOSS_CONFIG") != "" {
+		if explicit != "" || os.Getenv("DBOSS_CONFIG") != "" || !errors.Is(err, config.ErrNoConfig) {
 			return config.Config{}, err
 		}
 		dir, wdErr := os.Getwd()

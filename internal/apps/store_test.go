@@ -216,3 +216,22 @@ func TestStoreSingleModeHasOneEntry(t *testing.T) {
 		t.Fatalf("effective = %q, %v", effective, err)
 	}
 }
+
+func TestStoreCreatesLocalNextToAConfigFolderFile(t *testing.T) {
+	store, root := storeFixture(t)
+	appDir := filepath.Join(root, "apps", "sinatra")
+	if err := os.MkdirAll(filepath.Join(appDir, config.ConfigDir), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(appDir, config.FileName), filepath.Join(appDir, config.ConfigDir, config.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	file, err := store.CreateLocal("sinatra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(appDir, config.ConfigDir, config.LocalFileName)
+	if file.Path != want || !file.HasLocal {
+		t.Fatalf("local file = %+v, want %s", file, want)
+	}
+}

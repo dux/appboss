@@ -157,6 +157,7 @@ The startup banner names the address every app ended up on, so when the demo fal
 `dboss.yaml` is the only configuration file.
 A file with `procfile` describes an app; any other file describes a host that runs a directory of apps (default `./apps`).
 `dboss.local.yaml` next to it wins when it exists and is meant for server-only overrides (gitignored).
+A folder without either file is also searched in its `config/` subfolder, so an app (a Rails app, say) can keep `config/dboss.yaml`; relative paths still resolve against the app folder, and files in both places are an error.
 Every command looks for the config as `-c path`, then `$DBOSS_CONFIG`, then the current folder.
 
 Every host key has a sane default - `apps: ./apps`, `proxy.listen: ":80"`, `ports.range: [3100, 3990]`, the runtime paths under `./.dboss`, the AuthCog realm, session lifetime, metrics, upstream timeouts, wake pages and the log cadence - so a host file only names what deviates. With no config file at all, `dboss start` runs the default host: `:80`, `./apps`, console off.
@@ -667,10 +668,9 @@ auth:
 ```
 
 A visitor without a session is sent to AuthCog (`management.auth.realm`), returns to `/.well-known/dboss/auth` and gets a signed, host-only cookie; `/.well-known/dboss/logout` signs out.
-Only the listed emails and `*@domain` patterns get in, and the list is checked on every request, so removing an entry ends that session on the next `dboss rescan`.
+Only the listed emails and `*@domain` patterns get in (`"*"` admits any AuthCog account), and the list is checked on every request, so removing an entry ends that session on the next `dboss rescan`.
 The app receives the signed-in email as `X-Dboss-User`; dboss strips that header from every inbound request, so the app can trust it.
 A request that does not accept `text/html` gets `401` instead of a redirect.
-AuthCog returns over plain http only to a local host on a port above 999, so local testing needs a `proxy.listen` port such as `:8080`.
 `basic_auth` and `auth` are independent: when both are set, both must pass.
 
 `authcog` is the app-level login service: dboss runs the whole AuthCog round trip so the app needs no AuthCog code of its own.
@@ -765,7 +765,7 @@ A dev session does not sign in at all: a request whose peer is a loopback addres
 The check is the connecting address and never a forwarded-for header, so a request from off-box cannot claim to be local; a reverse proxy on the same host can, which is why nginx, caddy or `cloudflared` does not belong in front of an app run this way.
 
 Production sign-in goes through AuthCog: the console redirects to `management.auth.realm`, and only the addresses in `admin_emails` are admitted.
-AuthCog returns over `http` only to a local host (`localhost`, `*.lvh.me`, an IP) on a port above 999, so a plain-http sign-in started on port 80 is routed through the console's own port (the first of `ports.range`) and then sent back to the address it started on.
+AuthCog sends the browser back to the address the sign-in started on, over http or https and on any port.
 
 For local work there is `dboss login`:
 

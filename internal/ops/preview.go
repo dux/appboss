@@ -96,7 +96,12 @@ func (s *Service) deployPreview(cfg config.Config, hook config.Hook, appName, re
 		s.Audit(actor, appName, "config-write", detail, err)
 		return err
 	}
-	configPath := filepath.Join(appDir, config.FileName)
+	// A checkout that keeps its app file under config/ gets the rendered one there too.
+	configDir := appDir
+	if found, err := config.FindInDir(appDir); err == nil {
+		configDir = filepath.Dir(found)
+	}
+	configPath := filepath.Join(configDir, config.FileName)
 	// Validate before writing, so a bad template is a clear error rather than a broken app on rescan.
 	if _, err := config.ParseApp(rendered, configPath, cfg.Defaults); err != nil {
 		s.Audit(actor, appName, "config-write", detail, err)

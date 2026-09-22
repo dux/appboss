@@ -68,7 +68,6 @@ type Gate struct {
 type challenge struct {
 	audience    string
 	destination string
-	returnBase  string
 	redirectTo  string
 	expiresAt   time.Time
 }
@@ -109,10 +108,9 @@ func NewWithKey(key []byte) *Flow {
 	return flow
 }
 
-// Start redirects the browser to AuthCog. host is where AuthCog sends it back; when that is not
-// the request host, the callback returns the browser to the origin it started on.
-func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate, host string) {
-	destination, err := Destination(host, gate.Hosts)
+// Start redirects the browser to AuthCog, which sends it back to the request host.
+func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate) {
+	destination, err := Destination(r.Host, gate.Hosts)
 	if err != nil {
 		http.Error(w, "invalid authentication destination", http.StatusBadRequest)
 		return
@@ -135,11 +133,7 @@ func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate, host str
 		http.Error(w, "authentication is busy", http.StatusServiceUnavailable)
 		return
 	}
-	returnBase := ""
-	if host != r.Host {
-		returnBase = "http://" + r.Host
-	}
-	f.challenges[state] = challenge{audience: gate.Audience, destination: destination, returnBase: returnBase, redirectTo: redirectTo, expiresAt: now.Add(stateTTL)}
+	f.challenges[state] = challenge{audience: gate.Audience, destination: destination, redirectTo: redirectTo, expiresAt: now.Add(stateTTL)}
 	f.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: gate.StateCookie, Value: state, Path: "/", MaxAge: int(stateTTL.Seconds()), HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
 	login := url.URL{Scheme: "https", Host: gate.Realm, Path: destination}
@@ -161,7 +155,7 @@ func (f *Flow) Callback(w http.ResponseWriter, r *http.Request, gate Gate) {
 		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, pending.returnBase+pending.redirectTo, http.StatusSeeOther)
+	http.Redirect(w, r, pending.redirectTo, http.StatusSeeOther)
 }
 
 // Authenticate finishes a sign-in without issuing a session: it verifies the state, exchanges

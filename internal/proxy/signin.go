@@ -82,5 +82,5 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app super.Snaps
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	h.signin.Start(w, r, gate, r.Host)
+	h.signin.Start(w, r, gate)
 }

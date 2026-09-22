@@ -526,6 +526,10 @@ func TestAuthAllowsEmailsAndDomains(t *testing.T) {
 	if !app.Auth.Enabled() || app.Auth.SessionTTL.Value() != 24*time.Hour {
 		t.Fatalf("unexpected auth: %+v", app.Auth)
 	}
+	anyone, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: [\"*\"]\n"), "dboss.yaml", defaults)
+	if err != nil || !anyone.Auth.Allows("eve@example.com") || anyone.Auth.Allows("not-an-email") {
+		t.Fatalf("* must admit any signed-in address: %v %+v", err, anyone.Auth)
+	}
 	for email, want := range map[string]bool{"ana@example.com": true, "ANA@example.com": true, "bo@team.test": true, "bo@sub.team.test": false, "ops@host.test": false, "eve@example.com": false, "team.test": false} {
 		if got := app.Auth.Allows(email); got != want {
 			t.Errorf("Allows(%q) = %v, want %v", email, got, want)
@@ -888,5 +892,39 @@ func TestSingleAppModeBindsDevHost(t *testing.T) {
 	}
 	if got := cfg.App.Process("web").Health; got != "/up" {
 		t.Fatalf("single-mode health = %q, want /up", got)
+	}
+}
+
+func TestConfigFolderLookupAndBaseDir(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, ConfigDir)
+	if err := os.MkdirAll(nested, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeConfigFile(t, filepath.Join(nested, FileName), "procfile:\n  web: ./server\n")
+	found, err := FindInDir(dir)
+	if err != nil || found != filepath.Join(nested, FileName) {
+		t.Fatalf("FindInDir = %q, %v", found, err)
+	}
+	// Relative paths of a file found under config/ resolve against the app folder.
+	cfg, err := Load(found)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dir != dir || cfg.StateDir != filepath.Join(dir, ".dboss", "state") {
+		t.Fatalf("Dir = %q, StateDir = %q, want them under %s", cfg.Dir, cfg.StateDir, dir)
+	}
+	// The local override beats the base in the same folder.
+	writeConfigFile(t, filepath.Join(nested, LocalFileName), "procfile:\n  web: ./local\n")
+	if found, _ := FindInDir(dir); found != filepath.Join(nested, LocalFileName) {
+		t.Fatalf("FindInDir with local = %q", found)
+	}
+	writeConfigFile(t, filepath.Join(dir, FileName), "procfile:\n  web: ./server\n")
+	if _, err := FindInDir(dir); err == nil || !strings.Contains(err.Error(), "keep one") {
+		t.Fatalf("both folders: %v", err)
+	}
+	// A folder that merely happens to be called config keeps its own base.
+	if got := BaseDir(filepath.Join(nested, FileName)); got != nested {
+		t.Fatalf("BaseDir with a root file present = %q, want %q", got, nested)
 	}
 }
