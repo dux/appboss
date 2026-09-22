@@ -6,6 +6,7 @@
 
     init() {
       this.state.hookMeta = {}
+      this.state.pending = false
     }
 
     onMount() {
@@ -67,18 +68,15 @@
       return `${Math.floor(seconds / 86400)}d ago`
     }
 
-    // A stop drains first, so the daemon can take seconds to answer: the row shows the request
-    // as pending right away. A cancelled confirm and a failed call never reach a snapshot, and
-    // a card whose output did not change is never re-rendered, so the row is put back exactly
-    // as the last render left it. Logs and Config are links, not actions.
+    // A stop drains first, so the daemon can take seconds to answer: the row reads as pending
+    // from the click. A cancelled confirm and a failed call never reach a snapshot, so the flag,
+    // not the next render, is what gives the buttons back.
     async act(action) {
-      const buttons = Array.from(this.root.querySelectorAll('.app-actions .fez-ui-btn:not([href])'))
-      const before = buttons.map((node) => Boolean(node.fez?.props.disabled))
-      for (const node of buttons) node.fez?.setAttribute('disabled', true)
+      this.state.pending = true
       try {
         await Dboss.runAction(this.props.app.name, action)
       } finally {
-        buttons.forEach((node, index) => node.fez?.setAttribute('disabled', before[index] ? true : null))
+        this.state.pending = false
       }
     }
 
@@ -198,12 +196,12 @@
     <div class="btn-list app-actions">
       <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="/#/logs?app={props.app.name}" target="_blank" rel="noreferrer" />
       <ui-btn class="btn-sm" icon="i-settings" label="Config" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml" />
-      <ui-btn class="btn-sm {props.app.maintenance ? 'btn-warning' : ''}" icon="i-tool" label={props.app.maintenance ? 'End maintenance' : 'Maintenance'} onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'} />
-      <ui-btn class="btn-sm" icon="i-play" label="Start" onclick="fez.act('start')" disabled={props.app.state === 'running' || props.app.state === 'starting'} />
-      <ui-btn class="btn-sm" icon="i-rotate" label="Restart" onclick="fez.act('restart')" disabled={state.changing || props.app.state === 'stopped'} />
-      <ui-btn class="btn-sm btn-outline-danger" icon="i-stop" label="Stop" onclick="fez.act('stop')" disabled={state.changing || props.app.state === 'stopped'} />
+      <ui-btn class="btn-sm {props.app.maintenance ? 'btn-warning' : ''}" icon="i-tool" label={props.app.maintenance ? 'End maintenance' : 'Maintenance'} onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" disabled={state.pending} title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'} />
+      <ui-btn class="btn-sm" icon="i-play" label="Start" onclick="fez.act('start')" disabled={state.pending || props.app.state === 'running' || props.app.state === 'starting'} />
+      <ui-btn class="btn-sm" icon="i-rotate" label="Restart" onclick="fez.act('restart')" disabled={state.pending || state.changing || props.app.state === 'stopped'} />
+      <ui-btn class="btn-sm btn-outline-danger" icon="i-stop" label="Stop" onclick="fez.act('stop')" disabled={state.pending || state.changing || props.app.state === 'stopped'} />
       {#if props.app.deletable}
-        <ui-btn class="btn-sm btn-outline-danger" icon="i-trash" label="Destroy" onclick="fez.act('destroy')" disabled={state.changing} title="Permanently remove this app from dboss and disk" />
+        <ui-btn class="btn-sm btn-outline-danger" icon="i-trash" label="Destroy" onclick="fez.act('destroy')" disabled={state.pending || state.changing} title="Permanently remove this app from dboss and disk" />
       {/if}
     </div>
   </div>

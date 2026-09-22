@@ -7,9 +7,7 @@
       icon: String,
       label: String,
       class: String,
-      // the state key is the live value: a parent toggles it with
-      // Fez(node).setAttribute('disabled', true) and the next parent render overwrites it
-      disabled: { type: Boolean, state: true },
+      disabled: Boolean,
     }
 
     // Attributes that are copied to the root verbatim rather than rendered.
@@ -31,16 +29,9 @@
     }
 
     // The placeholder carries a compiler key, so the differ preserves this instance and never
-    // syncs the new attributes onto the root - the parent's values are re-applied here. It is
-    // also what clears a pending state the parent pushed while a request was in flight.
-    onRefresh(props) {
-      this.state.disabled = Boolean(props.disabled)
+    // syncs the new attributes onto the root; the parent's values are re-applied here.
+    onRefresh() {
       this.paint()
-    }
-
-    // Fez(node).setAttribute('disabled', true) arrives here through the state-linked prop.
-    onStateChange(key) {
-      if (key === 'disabled') this.paint()
     }
 
     // One writer for everything the props put in the DOM, onclick included: it is rewritten to
@@ -50,7 +41,7 @@
     paint() {
       const root = this.root
       const props = this.props
-      const disabled = Boolean(this.state.disabled)
+      const disabled = Boolean(props.disabled)
       const signature = [props.class, props.icon, props.label, disabled, ...this.PLAIN.map((name) => props[name])].join('|')
       if (this.state.painted === signature) return
       this.state.painted = signature
@@ -86,7 +77,7 @@
     // A span carries no native activation, so Enter and Space have to fire the click.
     onKeydown(event) {
       if (event.key !== 'Enter' && event.key !== ' ') return
-      if (this.root.tagName !== 'SPAN' || this.state.disabled) return
+      if (this.root.tagName !== 'SPAN' || this.props.disabled) return
       event.preventDefault()
       this.root.click()
     }
