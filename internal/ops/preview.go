@@ -117,21 +117,6 @@ func (s *Service) deployPreview(cfg config.Config, hook config.Hook, appName, re
 		return fmt.Errorf("app %s did not load after rescan: %w", appName, err)
 	}
 
-	if hook.Setup != nil && strings.TrimSpace(hook.Setup.Command) != "" {
-		timeout := hook.Setup.Timeout.Value()
-		if timeout == 0 {
-			timeout = config.DefaultSetupTimeout
-		}
-		result, err := s.runtime.Exec(appName, []string{"/bin/sh", "-c", hook.Setup.Command}, timeout)
-		if err == nil && result.ExitCode != 0 {
-			err = fmt.Errorf("exited %d: %s", result.ExitCode, tailOutput(result.Output))
-		}
-		if err != nil {
-			s.Audit(actor, appName, "setup-failed", detail, err)
-			return fmt.Errorf("setup: %w", err)
-		}
-	}
-
 	if err := s.runtime.Start(appName); err != nil {
 		s.Audit(actor, appName, "deploy", detail, err)
 		return err
@@ -189,15 +174,6 @@ func (s *Service) checkout(appDir, repo, branch string, cfg config.Config) error
 		return err
 	}
 	return git("clone", "--branch", branch, repo, appDir)
-}
-
-// tailOutput keeps the last of a setup command's output for the audit error.
-func tailOutput(out string) string {
-	out = strings.TrimSpace(out)
-	if len(out) > 400 {
-		out = out[len(out)-400:]
-	}
-	return out
 }
 
 // renderTemplate expands every string in the template and drops the preview-only `name` key,

@@ -33,6 +33,8 @@ type App struct {
 	Commands map[string]Command `json:"commands"`
 	Cron     map[string]CronJob `json:"cron"`
 	Hooks    map[string]Hook    `json:"hooks"`
+	// Lifecycle holds the create, start and destroy steps that are set.
+	Lifecycle map[string]Step `json:"lifecycle"`
 	// Env is the daemon environment plus mise; FileEnv is .env overlaid by .env.local. Config
 	// env sits between them at process start, so it is applied when the process env is built.
 	Env     map[string]string `json:"-"`
@@ -58,6 +60,12 @@ type Hook struct {
 	Overlap  bool          `json:"overlap"`
 	Disabled bool          `json:"disabled"`
 	Pull     bool          `json:"pull,omitempty"`
+}
+
+// Step is one lifecycle command with its timeout resolved.
+type Step struct {
+	Command Command       `json:"command"`
+	Timeout time.Duration `json:"timeout"`
 }
 
 type ScanError struct {
@@ -248,7 +256,7 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		}
 		merge(fileEnv, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Env: env, FileEnv: fileEnv, Config: appCfg}, nil
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg}, nil
 }
 
 // buildCron parses every schedule once so the supervisor only has to work with next run times.
@@ -284,6 +292,20 @@ func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
 		}
 	}
 	return result, nil
+}
+
+// buildLifecycle parses each step once and applies the default timeout.
+func buildLifecycle(steps map[string]config.LifecycleCommand) map[string]Step {
+	result := make(map[string]Step, len(steps))
+	for name, step := range steps {
+		timeout := step.Timeout.Value()
+		if timeout == 0 {
+			timeout = config.DefaultLifecycleTimeout
+		}
+		line := strings.TrimSpace(step.Command)
+		result[name] = Step{Command: Command{Name: name, Line: line, Argv: strings.Fields(line)}, Timeout: timeout}
+	}
+	return result
 }
 
 func ParseProcfile(procfile map[string]config.ProcessSpec) (map[string]Command, error) {

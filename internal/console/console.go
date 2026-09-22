@@ -456,7 +456,7 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHostHook runs a host-level hook (the github_pr built-in). It answers 202 at once and
-// deploys in the background, since a checkout and setup can take minutes.
+// deploys in the background, since a checkout can take minutes.
 func (h *Handler) handleHostHook(w http.ResponseWriter, r *http.Request, name string, body []byte) {
 	secret, err := h.service.HostHookSecret(name)
 	if err != nil {

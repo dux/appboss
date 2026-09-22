@@ -162,6 +162,7 @@ type Manager struct {
 	desiredMu       sync.Mutex
 	desired         map[string]bool
 	maintenance     map[string]bool
+	created         map[string]bool
 	activities      map[string]time.Time
 	inflightMu      sync.Mutex
 	inflight        map[string]*atomic.Int64
@@ -196,6 +197,10 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 	if err != nil {
 		return nil, invalid, err
 	}
+	created, err := loadNames(filepath.Join(cfg.StateDir, "created.json"))
+	if err != nil {
+		return nil, invalid, err
+	}
 	activities, err := loadActivities(cfg.StateDir)
 	if err != nil {
 		return nil, invalid, err
@@ -209,7 +214,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, created: created, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -282,11 +287,15 @@ func selectCgroup(cfg config.Config) res.Backend {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, sink: m.sink, restart: m.Restart, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
+	m.desiredMu.Lock()
+	runtime.created = m.created[spec.Name]
+	m.desiredMu.Unlock()
 	runtime.syncCron(time.Now())
 	runtime.syncHooks()
+	runtime.syncLifecycle()
 	m.apps[spec.Name] = runtime
 	go runtime.loop()
 }
@@ -379,12 +388,46 @@ func (m *Manager) Destroy(name string) error {
 	m.inflightMu.Unlock()
 	runtime.cancel()
 	<-runtime.closed
+	m.runDestroyStep(runtime.spec)
 	_ = os.Remove(filepath.Join(m.cfg.StateDir, name))
 	if err := apps.Destroy(m.cfg.Apps, name); err != nil {
 		return fmt.Errorf("destroy %s: %w", name, err)
 	}
 	m.syncHookSecrets(remaining)
 	return nil
+}
+
+// runDestroyStep runs the app's destroy step once the app is stopped and detached, while its
+// folder still exists. It is cleanup, so a failure is logged and notified but never blocks the
+// destroy.
+func (m *Manager) runDestroyStep(spec *apps.App) {
+	step, ok := spec.Lifecycle["destroy"]
+	if !ok {
+		return
+	}
+	argv := step.Command.Argv
+	if spec.Config.Shell {
+		argv = []string{"/bin/sh", "-c", step.Command.Line}
+	}
+	result, err := m.run(spec, stepName("destroy"), argv, step.Timeout)
+	if err == nil && result.ExitCode != 0 {
+		err = fmt.Errorf("exited with code %d", result.ExitCode)
+	}
+	if err != nil {
+		logx.Warnf("%s: lifecycle destroy: %v: %s", spec.Name, err, lastBytes(result.Output, 400))
+		m.emit(notify.Event{Type: "hook-failed", App: spec.Name, Error: "lifecycle destroy: " + err.Error(), Time: time.Now()})
+		return
+	}
+	logx.Infof("%s: lifecycle destroy finished", spec.Name)
+}
+
+// lastBytes keeps the last n bytes of s, trimmed, for a one-line log of a command's output.
+func lastBytes(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		s = s[len(s)-n:]
+	}
+	return s
 }
 
 // drain marks the app as draining so the proxy stops sending new requests, then waits for the
@@ -566,8 +609,13 @@ func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecR
 	if response.err != nil {
 		return ExecResult{}, response.err
 	}
-	spec := response.app
-	env := processEnv(spec, "exec", 0, m.cfg.Socket, spec.Config.Env)
+	return m.run(response.app, "exec", argv, timeout)
+}
+
+// run is Exec for a spec already in hand: one command in the app folder with the app
+// environment, combined output, and the process group killed on timeout.
+func (m *Manager) run(spec *apps.App, procType string, argv []string, timeout time.Duration) (ExecResult, error) {
+	env := processEnv(spec, procType, 0, m.cfg.Socket, spec.Config.Env)
 	resolved, err := resolveExecutable(argv[0], spec.Dir, env["PATH"])
 	if err != nil {
 		return ExecResult{}, err
@@ -917,6 +965,9 @@ type appRuntime struct {
 	processes        map[string]*process
 	cron             map[string]*jobState
 	hooks            map[string]*jobState
+	lifecycle        map[string]*jobState
+	created          bool
+	markCreated      func(string)
 	secrets          *hook.Store
 	sink             notify.Sink
 	restart          func(string) error
@@ -1005,6 +1056,7 @@ func (a *appRuntime) handle(req request) response {
 		a.spec = req.spec
 		a.syncCron(time.Now())
 		a.syncHooks()
+		a.syncLifecycle()
 	case requestMaintenance:
 		a.maintenance = req.on
 	case requestSealLogs:
@@ -1071,6 +1123,53 @@ func (a *appRuntime) start() error {
 	a.failures = map[string]int{}
 	a.ready = map[string]bool{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
+	return a.continueStart("")
+}
+
+// continueStart runs the lifecycle steps still due after the step named after ("" before the
+// first), one at a time: jobExited calls back in when a step exits. With none left it spawns.
+// create runs only until it has succeeded once for this app.
+func (a *appRuntime) continueStart(after string) error {
+	steps := []string{"create", "start"}
+	if after != "" {
+		steps = steps[slices.Index(steps, after)+1:]
+	}
+	for _, step := range steps {
+		state := a.lifecycle[step]
+		if state == nil || step == "create" && a.created {
+			continue
+		}
+		if err := a.startJob(state, time.Now(), true); err != nil {
+			a.lastErrorProcess = state.channel
+			return a.failStart(fmt.Errorf("lifecycle %s: %w", step, err))
+		}
+		return nil
+	}
+	return a.spawnAll()
+}
+
+// stepExited moves a start along once its create or start step exits. A step whose start was
+// cancelled meanwhile is ignored: stop kills the run before the app leaves Starting.
+func (a *appRuntime) stepExited(state *jobState, exitCode int) {
+	if a.state != Starting {
+		return
+	}
+	if exitCode != 0 {
+		a.lastErrorProcess = state.channel
+		_ = a.failStart(fmt.Errorf("lifecycle %s: %s", state.name, state.lastError))
+		return
+	}
+	if state.name == "create" {
+		a.created = true
+		if a.markCreated != nil {
+			a.markCreated(a.spec.Name)
+		}
+	}
+	_ = a.continueStart(state.name)
+}
+
+// spawnAll starts every process, web processes first, and hands the web ones to their monitor.
+func (a *appRuntime) spawnAll() error {
 	for _, name := range a.startOrder() {
 		command := a.spec.Commands[name]
 		port, err := a.allocator.Allocate(a.spec.Name, name)
@@ -1161,6 +1260,7 @@ func (a *appRuntime) stop() error {
 		return nil
 	}
 	a.state = Stopping
+	a.stopSteps()
 	err := a.stopProcesses()
 	a.state = Stopped
 	return err

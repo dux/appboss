@@ -1095,6 +1095,24 @@ func validateCron(jobs map[string]CronJob) error {
 	return nil
 }
 
+// LifecycleSteps are the lifecycle entries an app may declare, in the order they can run.
+var LifecycleSteps = []string{"create", "start", "destroy"}
+
+func validateLifecycle(lifecycle map[string]LifecycleCommand) error {
+	for name, step := range lifecycle {
+		if !slices.Contains(LifecycleSteps, name) {
+			return &Error{Key: "lifecycle", Message: fmt.Sprintf("unknown step %q", name), Hint: "valid steps: " + strings.Join(LifecycleSteps, ", ")}
+		}
+		if strings.TrimSpace(step.Command) == "" {
+			return keyErr("lifecycle."+name+".command", "must not be empty")
+		}
+		if step.Timeout < 0 {
+			return keyErr("lifecycle."+name+".timeout", "cannot be negative")
+		}
+	}
+	return nil
+}
+
 func validateHooks(hooks map[string]Hook) error {
 	for name, hook := range hooks {
 		if !cronName.MatchString(name) {
@@ -1118,7 +1136,7 @@ const BuiltinGithubPR = "github_pr"
 
 // hasBuiltinFields reports whether a hook uses options that only the github_pr built-in reads.
 func hasBuiltinFields(hook Hook) bool {
-	return hook.Repo != "" || hook.Setup != nil || hook.Template != nil
+	return hook.Repo != "" || hook.Template != nil
 }
 
 // validateHostHooks checks the host-level hooks block: only the github_pr built-in is supported
@@ -1139,14 +1157,6 @@ func validateHostHooks(hooks map[string]Hook) error {
 		}
 		if _, ok := hook.Template["name"]; !ok {
 			return keyErr("hooks."+name+".template.name", "is required")
-		}
-		if hook.Setup != nil {
-			if strings.TrimSpace(hook.Setup.Command) == "" {
-				return keyErr("hooks."+name+".setup.command", "must not be empty")
-			}
-			if hook.Setup.Timeout < 0 {
-				return keyErr("hooks."+name+".setup.timeout", "cannot be negative")
-			}
 		}
 	}
 	return nil
@@ -1417,8 +1427,10 @@ type App struct {
 	Deletable    bool               `yaml:"deletable" json:"deletable"`
 	Cron         map[string]CronJob `yaml:"cron" json:"cron"`
 	Hooks        map[string]Hook    `yaml:"hooks" json:"hooks"`
-	Defaults     `yaml:",inline"`
-	Processes    map[string]ProcessOverrides `yaml:"processes" json:"processes"`
+	// Lifecycle maps a step (create, start, destroy) to the command dboss runs at that point.
+	Lifecycle map[string]LifecycleCommand `yaml:"lifecycle" json:"lifecycle,omitempty"`
+	Defaults  `yaml:",inline"`
+	Processes map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
 
 // processNames lists procfile names sorted, so every derived choice and error is deterministic.
@@ -1583,19 +1595,39 @@ type Hook struct {
 	// The fields below configure the built-in github_pr host hook. They are invalid on an app
 	// hook and on any other host hook name.
 	Repo     string         `yaml:"repo"`
-	Setup    *SetupSpec     `yaml:"setup"`
 	Template map[string]any `yaml:"template"`
 }
 
-// Setup is the command the built-in github_pr hook runs in the checkout after the branch is
-// pulled and before the app is started. A non-zero exit fails the deploy and the app stays down.
-type SetupSpec struct {
+// LifecycleCommand is one lifecycle step: create runs once before the app's first start, start
+// before every start, destroy after the app is stopped and detached, before its folder goes.
+// A scalar is the command alone; a zero Timeout means DefaultLifecycleTimeout.
+type LifecycleCommand struct {
 	Command string   `yaml:"command" json:"command"`
-	Timeout Duration `yaml:"timeout" json:"timeout"`
+	Timeout Duration `yaml:"timeout" json:"timeout,omitempty"`
 }
 
-// DefaultSetupTimeout is how long a github_pr setup_command may run when it sets no timeout.
-const DefaultSetupTimeout = 3 * time.Minute
+// DefaultLifecycleTimeout bounds a lifecycle step that sets no timeout.
+const DefaultLifecycleTimeout = 3 * time.Minute
+
+// UnmarshalYAML accepts a bare command or a {command, timeout} mapping.
+func (l *LifecycleCommand) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		l.Command = node.Value
+		return nil
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			switch key := node.Content[i].Value; key {
+			case "command", "timeout":
+			default:
+				return &Error{Line: node.Content[i].Line, Key: "lifecycle", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout"}
+			}
+		}
+		type plain LifecycleCommand
+		return node.Decode((*plain)(l))
+	}
+	return &Error{Line: node.Line, Key: "lifecycle", Message: "must be a command or a {command, timeout} mapping"}
+}
 
 // UnmarshalYAML accepts a bare true, shorthand for pulling the current branch and restarting, or
 // a {command, timeout, restart, overlap, disabled, secret} mapping. The keys are checked here
@@ -1614,7 +1646,7 @@ func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
 			case "command", "timeout", "restart", "overlap", "disabled", "secret",
-				"repo", "setup", "template":
+				"repo", "template":
 			default:
 				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled, secret"}
 			}
@@ -1626,11 +1658,12 @@ func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type appFile struct {
-	Procfile  map[string]ProcessSpec `yaml:"procfile"`
-	Autostart Autostart              `yaml:"autostart"`
-	Deletable bool                   `yaml:"deletable"`
-	Cron      map[string]CronJob     `yaml:"cron"`
-	Hooks     map[string]Hook        `yaml:"hooks"`
+	Procfile  map[string]ProcessSpec      `yaml:"procfile"`
+	Autostart Autostart                   `yaml:"autostart"`
+	Deletable bool                        `yaml:"deletable"`
+	Cron      map[string]CronJob          `yaml:"cron"`
+	Hooks     map[string]Hook             `yaml:"hooks"`
+	Lifecycle map[string]LifecycleCommand `yaml:"lifecycle"`
 	Overrides `yaml:",inline"`
 	Processes map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -1668,7 +1701,7 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Lifecycle: raw.Lifecycle, Defaults: defaults, Processes: raw.Processes}
 	if err := app.deriveWeb(); err != nil {
 		return App{}, err
 	}
@@ -1703,6 +1736,9 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 		return App{}, err
 	}
 	if err := validateHooks(app.Hooks); err != nil {
+		return App{}, err
+	}
+	if err := validateLifecycle(app.Lifecycle); err != nil {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)

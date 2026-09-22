@@ -6,7 +6,7 @@
 
 Make PR previews a first-class dboss feature instead of a GitHub Actions plus SSH script.
 
-One reserved hook, `github_pr`, handles the whole lifecycle: interpolate an app template from the request params, check out the branch, run a setup command, start the app, and tear it down when the PR closes.
+One reserved hook, `github_pr`, handles the whole lifecycle: interpolate an app template from the request params, check out the branch, start the app, and tear it down when the PR closes. Per-preview setup and cleanup live in the template's `lifecycle` steps.
 
 The odoo-docker repo then keeps only a tiny Action that curls dboss; no runner script, no SSH keys, no per-PR container logic.
 
@@ -37,15 +37,14 @@ hooks:
   github_pr:
     # secret: $GITHUB_WEBHOOK_SECRET   # optional; generated under state_dir when omitted
     repo: https://github.com/rudex/odoo-docker.git   # fallback when the request omits repo
-    setup:
-      command: ./bin/dboss/setup.sh
-      timeout: 3m
     template:
       name: $QS_BRANCH
       hosts: [pr-$QS_BRANCH.staging.erpxo.rudex.hr]
       autostart: false
       deletable: true
       idle_stop: 6h
+      lifecycle:
+        create: ./bin/dboss/setup.sh
       procfile:
         web: {command: ./start.sh, health: /web/health}
 ```
@@ -60,9 +59,8 @@ hooks:
   * Interpolation supports `$NAME` and `${NAME}`.
 * `github_pr` is reserved. Mixing it with `command:` is an error. The built-in is host-level only; an app hook named `github_pr` stays a generic command hook. Any other host hook name is a generic command hook.
 * `secret` is optional. When omitted, dboss generates a 64-character secret under `state_dir/hook-secrets.json`, and `dboss hooks --host github_pr` prints the ready-made URL.
-* dboss owns git. It fetches the branch tip (`git fetch` then `git reset --hard origin/<branch>`, or clone) over HTTPS, authenticated with the server's `github_token`. `setup` never touches git.
-* `setup.command` runs after checkout and before start, in the app dir with the app env, with `setup.timeout` (default `3m`). A non-zero exit fails the deploy and leaves the app stopped.
-* dboss does not manage the preview's databases; the app's `setup` creates what it needs and owns its cleanup.
+* dboss owns git. It fetches the branch tip (`git fetch` then `git reset --hard origin/<branch>`, or clone) over HTTPS, authenticated with the server's `github_token`.
+* dboss does not manage the preview's databases; the template's `lifecycle` steps create what the app needs and clean it up.
 * Concurrency is per branch: events for one branch queue, different branches run in parallel.
 * Preview apps live in the same apps dir with the checkout inside the app dir, symlinked in like today's `deploy.sh` layout.
 
@@ -74,8 +72,7 @@ Deploy (`opened`, `synchronize`, `reopened`):
 2. Clone the repo at the branch if the dir is missing, else fetch and reset to the branch tip.
 3. Render `dboss.local.yaml` (written through the config store, so config history and a `config-write` audit row happen).
 4. Symlink into the apps dir and `rescan`.
-5. Run `setup.command` with the app env and the timeout, output to the `github_pr` channel.
-6. Start the app.
+5. Start the app, which runs its `create` (first deploy) and `start` steps.
 
 Teardown (`closed`):
 
@@ -88,28 +85,27 @@ The `_dboss.audit` table (`ts, actor, app, action, detail, result, error`) gets 
 
 * `hook-run` is the ping itself.
 * `deploy` for a successful create or update.
-* `setup-failed` when `setup.command` exits non-zero, with the error.
 * `config-write` when the app file is written.
 * `stop` and `destroy` on teardown.
 
 ## dboss changes
 
-* Config (`./internal/config`): host `hooks:` (`Hooks` on `Config`, added to `hostKeys`), built-in `github_pr` validation (reserved name, required fields, the `setup` sub-struct with a `3m` default timeout), the template struct, and `$VAR`/`${VAR}` interpolation with per-context sanitization. Add the block and key specs, update the reference, and revise the no-deploy-logic note.
+* Config (`./internal/config`): host `hooks:` (`Hooks` on `Config`, added to `hostKeys`), built-in `github_pr` validation (reserved name, required fields), the template struct, and `$VAR`/`${VAR}` interpolation with per-context sanitization. Add the block and key specs, update the reference, and revise the no-deploy-logic note.
 * Endpoint (`./internal/console/console.go`): `handleHook` splits on `/`, one segment is a host hook and two is an app hook, and `/hooks/github_pr` routes to the built-in. Query params become `QS_*`.
-* Engine (`./internal/preview`, new): params, interpolation, the per-branch lock map, checkout, setup run, config render, start and teardown. It depends on narrow interfaces for the runtime, the app config writer, the auditor and the log sink.
+* Engine (`./internal/preview`, new): params, interpolation, the per-branch lock map, checkout, config render, start and teardown. It depends on narrow interfaces for the runtime, the app config writer, the auditor and the log sink.
 * Wiring (`./internal/daemon/daemon.go`): build the preview engine and pass it to `ops.New`, so `ops.Service.Do` dispatches `github_pr` and audit work is first-class rather than shell side effects. The config writer reuses the `apps.NewStore` semantics with config history.
 * CLI and console: `dboss hooks --host <hook>` to list, run and rotate, and the Hooks panel shows host hooks.
 * Tests: interpolation and sanitization table, reserved-name validation, host and app endpoint routing, checkout at the branch tip, teardown, audit rows, and per-branch serialization.
 
 ## odoo-docker changes
 
-* `bin/dboss/setup.sh`: the per-branch setup, reusing `upgrade-addons.sh`, with no git.
+* `bin/dboss/setup.sh`: the per-branch `create` step, reusing `upgrade-addons.sh`, with no git.
 * One workflow with the curl plus the existing PR comment. Delete the three SSH workflows.
 
 ## Rollout
 
 1. Query params to env, host-level hooks, the split endpoint, secrets and CLI, all generic.
-2. Template interpolation plus the `github_pr` checkout, setup and start.
+2. Template interpolation plus the `github_pr` checkout and start.
 3. Teardown, audit, console and logs.
 4. Swap the odoo-docker workflow, remove the old ones, update the docs.
 

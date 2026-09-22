@@ -33,7 +33,7 @@ Read `./README.md` for usage and the embedded configuration reference (`./intern
 * Config is real YAML on disk. Never introduce a database copy of the config.
 * `dboss.yaml` is the only config file name; `dboss.local.yaml` is the server-only override and is gitignored.
 * A new config key needs an entry in `keySpecs` in `./internal/config/keyspecs.go` naming its block, a short name and a one-line description (plus an enum, an example when a second value helps, and the required/secret flags when they apply); the test fails otherwise. Path, type, types, per-process and default are read from the structs and `Default()`. Blocks and their scope live in `./internal/config/schema.go`. Add the key to `reference.yaml` for the long-form text; `reference_test.go` fails until it appears.
-* State files under `state_dir` (`running.json`, `maintenance.json`, `last_activity.json`) are written by the daemon only.
+* State files under `state_dir` (`running.json`, `maintenance.json`, `last_activity.json`, `created.json`) are written by the daemon only.
 
 ## Modules and the request pipeline
 
@@ -125,6 +125,7 @@ The database page is split by a `<ui-tabs>` strip into **Backup** (everything ab
 * Hooks are named one-shot commands under `hooks:` in the app file, triggered by a signed POST to `/hooks/<app>/<hook>` on the management host. The endpoint lives in `./internal/console/console.go:handleHook` and runs before the session auth; its own secret is the credential (query token, bearer, `X-Gitlab-Token`, or a GitHub HMAC over the raw body).
 * A hook with no config `secret` gets a 64-character generated one in `state_dir/hook-secrets.json`, owned by `./internal/hook`. The config secret wins; `RotateHook` rejects a config secret. `hookInfos` is the only path that carries secrets and is kept off the regular snapshot.
 * Hooks reuse the cron runner (`jobState`/`jobRun` in `./internal/super/cron.go`); both live in `a.cron` and `a.hooks`. Output goes to a `hook-<name>` channel. `restart: true` restarts (or starts) the app after a clean exit.
+* `lifecycle:` in the app file holds the `create`, `start` and `destroy` steps (`config.LifecycleCommand`, parsed to `apps.Step`). `create` and `start` are `jobState`s of kind `lifecycle` in `a.lifecycle`, run by the cron runner: `appRuntime.start` sets `Starting` and calls `continueStart`, which runs create (only while the app is not in `state_dir/created.json`), then start, then `spawnAll`; `jobExited` hands a finished step to `stepExited`, which records create through `Manager.markCreated` or calls `failStart`. `stop` kills a running step with `stopSteps`. `destroy` runs in `Manager.runDestroyStep` after the runtime is closed and before the folder is removed, through `Manager.run` (the body `Exec` shares); a failure is logged and notified as `hook-failed`, never blocking the destroy. The github_pr hook has no setup step: a preview's template declares its own `lifecycle`.
 * `dboss exec` runs off the app goroutine via `Manager.Exec`; it only reads the immutable spec through `requestExecInfo`, so a slow command cannot stall the supervisor.
 
 ## Console auth

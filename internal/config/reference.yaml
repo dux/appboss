@@ -588,8 +588,8 @@ cron:
 # A host can declare one built-in hook, `github_pr`, in the root file. Its ping is
 # <management.url>/hooks/github_pr (one path segment is a host hook, two are an app hook) with
 # query params action, branch, repo and num. dboss itself checks out the branch, writes the app
-# from `template` (an app file with $VAR and ${VAR} from the params), runs `setup` and starts the
-# app; action=closed removes it. See README "GitHub PR previews".
+# from `template` (an app file with $VAR and ${VAR} from the params) and starts the app, which
+# runs the template's lifecycle steps; action=closed destroys it. The template sets deletable: true. See README "GitHub PR previews".
 #
 # Deploy hooks: named one-shot commands a signed HTTP POST can trigger, independent of the app's
 # run state. The ping URL is <management.url>/hooks/<app>/<hook>. Auth is a token: either
@@ -615,6 +615,24 @@ hooks:
     # leave it empty and let dboss generate one under state_dir (rotate it with
     # `dboss hooks rotate`). A secret set here wins over the generated one.
     secret: $DEPLOY_SECRET
+
+# Lifecycle steps: commands dboss runs at fixed points of the app's life, so the app can set up
+# and clean up what it owns, such as its database. Each step is a command or a
+# {command, timeout} mapping; the timeout defaults to 3m. Steps run in the app folder with the
+# cron and hook environment (no PORT) and log to the lifecycle-<step> channel.
+#   create   once, before the app's first start. The app is recorded in
+#            state_dir/created.json only when it exits 0, so a failure retries on the next
+#            start; destroy clears the record. An app that already existed runs it once on its
+#            next start, so write it to be idempotent.
+#   start    before every start and restart, including a wake by the proxy; the processes are
+#            spawned only after it exits 0. A process restarted after a crash does not rerun it.
+#            A failed create or start leaves the app crashed and sends the crash event.
+#   destroy  after `dboss destroy` has stopped the app and detached it, before its folder is
+#            removed. It is cleanup: a failure is logged and audited, and the destroy completes.
+lifecycle: {}
+#   create: bin/setup-db
+#   start: {command: bundle exec rake db:migrate, timeout: 10m}
+#   destroy: bin/drop-db
 
 # --- Sign-in: AuthCog in front of the app ---------------------------------------------------
 # With allow_emails set, a visitor without a session is sent to AuthCog (the realm is

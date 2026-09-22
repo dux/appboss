@@ -84,7 +84,8 @@ var keySpecs = map[string]KeySpec{
 	"cron": {Block: "cron", Name: "Scheduled commands", Description: "scheduled one-shot commands by name, run on an every interval or a cron expression", Example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
 
 	// --- Hooks ---
-	"hooks": {Block: "hooks", Name: "Deploy hooks", Description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>; a bare true pulls the current branch and restarts", Example: "{deploy: true}"},
+	"lifecycle": {Block: "lifecycle", Name: "Lifecycle commands", Description: "commands run at a lifecycle step: create once before the first start, start before every start (the processes wait for it), destroy after the app is stopped, before its folder is removed; a command or {command, timeout}, default timeout 3m", Example: "{create: bin/setup-db, start: {command: bin/migrate, timeout: 10m}, destroy: bin/cleanup}"},
+	"hooks":     {Block: "hooks", Name: "Deploy hooks", Description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>; a bare true pulls the current branch and restarts", Example: "{deploy: true}"},
 
 	// --- Deploy ---
 	"github_token": {Block: "deploy", Name: "GitHub token", Description: "personal access token a `deploy: true` hook uses to pull a private repo; consumed from the pull process environment only", Example: "$GITHUB_TOKEN", Secret: true},

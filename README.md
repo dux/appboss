@@ -441,6 +441,26 @@ With no `secret` in the config, dboss generates a 64-character secret under `sta
 
 `dboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes dboss's exit code.
 
+## Lifecycle steps
+
+An app can name the commands dboss runs at three points of its life, so it sets up and cleans up what it owns, such as its database:
+
+```yaml
+lifecycle:
+  create: bin/setup-db              # once, before the first start
+  start:                            # before every start; processes wait for it
+    command: bundle exec rake db:migrate
+    timeout: 10m                    # default 3m
+  destroy: bin/drop-db              # after dboss destroy stops the app
+```
+
+Each step runs in the app folder with the cron and hook environment (no `PORT`) and logs to a `lifecycle-<step>` channel.
+
+* `create` runs inside the first start, before `start`. The app is recorded in `state_dir/created.json` only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.
+* `start` runs on every start and restart, including a wake by the proxy. The app stays `starting` meanwhile and its processes spawn only after a clean exit. A process restarted after a crash does not rerun it.
+* A failed or timed-out `create` or `start` leaves the app `crashed` with the step's output in the error log and sends the `crash` event. Stopping the app kills a step still running.
+* `destroy` runs after `dboss destroy` has stopped and detached the app, before its folder is removed. It is cleanup: a failure is logged and sends `hook-failed`, and the destroy still completes.
+
 ## GitHub PR previews
 
 A host can declare one built-in `github_pr` hook that turns a branch into a short-lived app, so a Git host webhook creates, updates and tears down PR previews with no runner and no SSH deploy script.
@@ -451,14 +471,14 @@ hooks:
   github_pr:
     # secret: $GITHUB_WEBHOOK_SECRET   # optional; generated under state_dir when omitted
     repo: https://github.com/owner/repo.git       # fallback when the ping omits repo
-    setup:
-      command: ./bin/setup.sh     # after checkout, before start; non-zero fails the deploy
-      timeout: 3m                 # default
     template:
       name: $QS_BRANCH
       hosts: [pr-$QS_BRANCH.example.com]
       autostart: false
       deletable: true
+      lifecycle:
+        create: bin/setup-db      # once, on the first deploy
+        destroy: bin/drop-db      # when the PR closes
       procfile:
         web: {command: ./start.sh, health: /up}
 ```
@@ -471,7 +491,7 @@ curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=${{ github.event
 ```
 
 Every query param becomes `QS_<NAME>` for the hook.
-`action=closed` stops the app and removes the checkout; any other action checks out the branch tip, writes the app config from `template`, runs `setup`, and starts the app.
+`action=closed` destroys the app, which runs its `destroy` step and removes the checkout, so the template needs `deletable: true`; any other action checks out the branch tip, writes the app config from `template`, and restarts the app, which runs its `create` and `start` steps.
 A private `repo` over HTTPS is pulled with `github_token`; a fork PR works because the caller passes the head repo's clone URL.
 Events for one branch are serialized, so two pushes cannot race the same checkout, while different branches deploy in parallel.
 
@@ -480,7 +500,7 @@ A value in a `hosts` or `canonical_host` field is sanitized as a DNS label (`/` 
 A top-level `hosts` is the default for every procfile entry that declares none.
 The preview-only `name` key names the app folder, sanitized the same way, and `main` and `development` are refused.
 
-Every step is audited under actor `hook:github_pr` (`config-write`, `deploy`, `setup-failed`, `stop`, `destroy`).
+Every step is audited under actor `hook:github_pr` (`config-write`, `deploy`, `stop`, `destroy`).
 The preview runs like any other app, so the console, request log, metrics and `dboss ls` all see it.
 
 ## PubSub channels

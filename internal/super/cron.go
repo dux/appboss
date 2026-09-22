@@ -97,6 +97,7 @@ type jobRun struct {
 // cronName and hookName are the log channel and file basename of a job.
 func cronName(job string) string  { return "cron-" + job }
 func hookName(name string) string { return "hook-" + name }
+func stepName(step string) string { return "lifecycle-" + step }
 
 // syncCron reconciles the runtime's schedule with the current app spec: new jobs are added, a
 // changed schedule gets a new next run, removed jobs are killed and dropped.
@@ -144,6 +145,39 @@ func (a *appRuntime) syncHooks() {
 		}
 		a.stopJob(state)
 		delete(a.hooks, name)
+	}
+}
+
+// syncLifecycle reconciles the create and start steps the supervisor runs itself. destroy is
+// run by the manager after the runtime is gone, so it never gets a job here.
+func (a *appRuntime) syncLifecycle() {
+	if a.lifecycle == nil {
+		a.lifecycle = map[string]*jobState{}
+	}
+	for _, name := range []string{"create", "start"} {
+		step, ok := a.spec.Lifecycle[name]
+		state := a.lifecycle[name]
+		if !ok {
+			if state != nil {
+				a.stopJob(state)
+				delete(a.lifecycle, name)
+			}
+			continue
+		}
+		if state == nil {
+			a.lifecycle[name] = &jobState{kind: "lifecycle", name: name, channel: stepName(name), command: step.Command, timeout: step.Timeout, runs: map[*jobRun]bool{}}
+			continue
+		}
+		state.command, state.timeout = step.Command, step.Timeout
+	}
+}
+
+// stopSteps kills a create or start step still running, so a stop never leaves one behind.
+func (a *appRuntime) stopSteps() {
+	for _, state := range a.lifecycle {
+		if len(state.runs) > 0 {
+			a.stopJob(state)
+		}
 	}
 }
 
@@ -286,6 +320,10 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 		state.lastError = fmt.Sprintf("exit code %d", exitCode)
 	}
 	_, _ = run.log.Write(jobLine(state.kind, state.name, "exit", exitCode, duration, err))
+	if state.kind == "lifecycle" {
+		a.stepExited(state, exitCode)
+		return
+	}
 	if state.kind == "hook" && exitCode != 0 {
 		a.emit("hook-failed", fmt.Sprintf("hook %s exited with code %d", state.name, exitCode))
 	}
@@ -320,6 +358,10 @@ func (a *appRuntime) stopJobs() {
 	for name, state := range a.hooks {
 		a.stopJob(state)
 		delete(a.hooks, name)
+	}
+	for name, state := range a.lifecycle {
+		a.stopJob(state)
+		delete(a.lifecycle, name)
 	}
 }
 
@@ -358,9 +400,9 @@ func (a *appRuntime) jobLog(state *jobState) (*logWriter, error) {
 	return writer, nil
 }
 
-// sealJobLogs seals every cron and hook log so the ingestion module picks up finished runs.
+// sealJobLogs seals every cron, hook and lifecycle log so the ingestion module picks up finished runs.
 func (a *appRuntime) sealJobLogs() error {
-	for _, states := range []map[string]*jobState{a.cron, a.hooks} {
+	for _, states := range []map[string]*jobState{a.cron, a.hooks, a.lifecycle} {
 		for _, name := range slices.Sorted(maps.Keys(states)) {
 			state := states[name]
 			if state.log == nil {

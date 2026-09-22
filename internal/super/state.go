@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+
+	"dboss/internal/logx"
 )
 
 func (m *Manager) setDesired(name string, running bool) error {
@@ -28,8 +30,22 @@ func (m *Manager) clearAppState(name string) error {
 	if err := saveNames(filepath.Join(m.cfg.StateDir, "running.json"), m.desired); err != nil {
 		return err
 	}
+	delete(m.created, name)
+	if err := saveNames(filepath.Join(m.cfg.StateDir, "created.json"), m.created); err != nil {
+		return err
+	}
 	delete(m.maintenance, name)
 	return saveNames(filepath.Join(m.cfg.StateDir, "maintenance.json"), m.maintenance)
+}
+
+// markCreated records that name's create step succeeded, so it never runs again for that app.
+func (m *Manager) markCreated(name string) {
+	m.desiredMu.Lock()
+	defer m.desiredMu.Unlock()
+	m.created[name] = true
+	if err := saveNames(filepath.Join(m.cfg.StateDir, "created.json"), m.created); err != nil {
+		logx.Warnf("%s: record lifecycle create: %v", name, err)
+	}
 }
 
 // saveNames writes the sorted keys of set to path as a JSON list.

@@ -22,6 +22,7 @@
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
         { id: 'hooks', title: 'Deploy hooks', summary: 'Commands a signed HTTP ping triggers, plus one-off exec.' },
+        { id: 'lifecycle', title: 'Lifecycle', summary: 'Commands run when an app is created, started and destroyed.' },
         { id: 'previews', title: 'GitHub PR previews', summary: 'One built-in host hook turns a branch into a short-lived app, with teardown on close.' },
         { id: 'pubsub', title: 'PubSub', summary: 'Realtime channels over WebSocket and SSE on the app hosts.' },
         { id: 'audit', title: 'Audit & history', summary: 'Who did what, and every saved config revision.' },
@@ -155,16 +156,25 @@
       github_pr:
         # secret: $GITHUB_WEBHOOK_SECRET   # generated under state_dir when omitted
         repo: https://github.com/owner/repo.git   # fallback when the ping omits repo
-        setup:
-          command: ./bin/setup.sh   # after checkout, before start
-          timeout: 3m
         template:
           name: $QS_BRANCH
           hosts: [pr-$QS_BRANCH.example.com]
           autostart: false
           deletable: true
+          lifecycle:
+            create: bin/setup-db     # once, before the first start
+            destroy: bin/drop-db     # when the PR closes
           procfile:
             web: {command: ./start.sh, health: /up}
+    `,
+    lifecycle: `
+    # in the app's dboss.yaml
+    lifecycle:
+      create: bin/setup-db              # once, before the first start
+      start:                            # before every start; processes wait for it
+        command: bundle exec rake db:migrate
+        timeout: 10m
+      destroy: bin/drop-db              # after dboss destroy stops the app
     `,
     previewsPing: `
     curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=\${{ github.event.action }}&branch=\${{ github.head_ref }}&repo=\${{ github.event.pull_request.head.repo.clone_url }}&num=\${{ github.event.number }}"
@@ -566,15 +576,40 @@
       </section>
     {/if}
 
+    {#if state.topic === 'lifecycle'}
+      <section>
+        <h2>Lifecycle</h2>
+        <p><code>lifecycle:</code> names the commands dboss runs at three points of an app's life: <code>create</code> once before its first start, <code>start</code> before every start, and <code>destroy</code> when it is removed. The app sets up and cleans up what it owns, such as its database, and dboss only decides when.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Creating an app's database or seed data once, without a manual step on the box.</li>
+          <li>Running migrations before the new processes take traffic, on every deploy restart and every wake.</li>
+          <li>Dropping databases, logs or other stale data when a preview or a retired app is destroyed.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-lifecycle"><db-config-keys paths="lifecycle" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.lifecycle" />
+        <h3>Details</h3>
+        <ul>
+          <li>Each step is a command or a <code>&#123;command, timeout&#125;</code> mapping; the timeout defaults to 3m. It runs in the app folder with the cron and hook environment (no <code>PORT</code>) and logs to the <code>lifecycle-&#60;step&#62;</code> channel.</li>
+          <li><code>create</code> runs inside the first start, before <code>start</code>. The app is recorded in <code>state_dir/created.json</code> only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.</li>
+          <li><code>start</code> runs on every start and restart, including a wake by the proxy. The app is <code>starting</code> meanwhile and its processes spawn only after a clean exit. A process restarted after a crash does not rerun it.</li>
+          <li>A failed or timed-out <code>create</code> or <code>start</code> leaves the app <code>crashed</code> with the step's output in the error log and sends the <code>crash</code> event. Stopping the app kills a step still running.</li>
+          <li><code>destroy</code> runs after <code>dboss destroy</code> has stopped and detached the app, before its folder is removed. It is cleanup: a failure is logged and sends <code>hook-failed</code>, and the destroy still completes.</li>
+        </ul>
+      </section>
+    {/if}
+
     {#if state.topic === 'previews'}
       <section>
         <h2>GitHub PR previews</h2>
-        <p>One built-in host hook, <code>github_pr</code>, turns a branch into a short-lived app. A Git host webhook pings <code>https://&#60;management.host&#62;/hooks/github_pr</code>; dboss checks out the branch, writes an app config from a <code>template</code>, runs <code>setup</code> and starts it. The close action stops it, drops its databases and removes the checkout - no runner and no SSH deploy script.</p>
+        <p>One built-in host hook, <code>github_pr</code>, turns a branch into a short-lived app. A Git host webhook pings <code>https://&#60;management.host&#62;/hooks/github_pr</code>; dboss checks out the branch, writes an app config from a <code>template</code> and starts it. The close action destroys it - no runner and no SSH deploy script.</p>
         <h3>What it helps with</h3>
         <ul>
-          <li>A live URL per pull request on the box that already runs the apps: every open PR gets its own app, hosts and databases.</li>
+          <li>A live URL per pull request on the box that already runs the apps: every open PR gets its own app and hosts.</li>
           <li>Fitting many previews on one host: <code>autostart: false</code> keeps a preview down until its first request, so only the ones in use hold memory.</li>
-          <li>Seeded preview databases from a template, thrown away when the PR closes.</li>
+          <li>Per-preview setup and cleanup through the template's <code>lifecycle</code> steps, such as a database created on the first deploy and dropped when the PR closes.</li>
           <li>Clean teardown, with no orphaned processes or checkouts left behind.</li>
         </ul>
         <h3>Config keys</h3>
@@ -587,8 +622,8 @@
         <ul>
           <li>The hook is host-level: <code>hooks.github_pr</code> in the root <code>dboss.yaml</code>, not under an app. One path segment is a host hook and two are an app hook, so its URL is <code>/hooks/github_pr</code>.</li>
           <li><code>action</code>, <code>branch</code>, <code>repo</code> and <code>num</code> become <code>QS_ACTION</code>, <code>QS_BRANCH</code>, <code>QS_REPO</code> and <code>QS_NUM</code> for the hook; <code>repo</code> falls back to the hook's own <code>repo</code>.</li>
-          <li><code>action=closed</code> stops the app and removes the checkout. Any other action checks out the branch tip, writes the app from <code>template</code>, runs <code>setup</code> (default timeout 3m; a non-zero exit fails the deploy) and starts it.</li>
-          <li><code>template</code> is an app file with <code>$VAR</code> and <code>$&#123;VAR&#125;</code> interpolation. Its <code>name</code> is required and names the app folder and database prefix; <code>main</code> and <code>development</code> are refused.</li>
+          <li><code>action=closed</code> destroys the app, which runs its <code>destroy</code> step and removes the checkout; the template needs <code>deletable: true</code>. Any other action checks out the branch tip, writes the app from <code>template</code> and restarts it, which runs its <code>create</code> and <code>start</code> steps.</li>
+          <li><code>template</code> is an app file with <code>$VAR</code> and <code>$&#123;VAR&#125;</code> interpolation. Its <code>name</code> is required and names the app folder; <code>main</code> and <code>development</code> are refused.</li>
           <li>A value in <code>hosts</code> or <code>canonical_host</code> is sanitized as a DNS label (<code>/</code> and <code>_</code> become <code>-</code>); everywhere else it is an identifier (<code>/</code> becomes <code>_</code>). A top-level <code>hosts</code> is the default for every procfile entry that declares none.</li>
           <li>A private <code>repo</code> over HTTPS is pulled with <code>github_token</code>; a fork PR works because the ping passes the head repo's clone URL. Pings for one branch run one at a time, while different branches deploy in parallel.</li>
           <li>Every step is audited under actor <code>hook:github_pr</code>. The preview is a normal app, so the console, <code>dboss ls</code>, the request log and <code>/metrics</code> all see it.</li>
