@@ -43,6 +43,21 @@ func TestConfigFormComponentIsLoaded(t *testing.T) {
 	}
 }
 
+// ui-btn is a shared widget, so it loads from index.html rather than per route. Every action
+// button on the Overview cards is one, and they all vanish if the tag is never registered.
+func TestButtonComponentIsLoaded(t *testing.T) {
+	index, err := assets.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `fez="/assets/fez/ui-btn.fez"`) {
+		t.Error("index.html must load ui-btn.fez")
+	}
+	if _, err := assets.ReadFile("static/fez/ui-btn.fez"); err != nil {
+		t.Fatalf("ui-btn.fez is not embedded: %v", err)
+	}
+}
+
 // Help feature pages list their config keys by path and render them from the registry,
 // so a renamed or removed key must fail here instead of silently vanishing from the page.
 func TestHelpKeyPathsExist(t *testing.T) {

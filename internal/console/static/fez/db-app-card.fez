@@ -185,35 +185,14 @@
       {/if}
     </div>
     <div class="btn-list app-actions">
-      <a class="btn btn-sm" href="/#/logs?app={props.app.name}" target="_blank" rel="noreferrer">
-        <svg class="icon"><use href="#i-file-text"></use></svg>
-        Logs
-      </a>
-      <a class="btn btn-sm" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml">
-        <svg class="icon"><use href="#i-settings"></use></svg>
-        Config
-      </a>
-      <button class="btn btn-sm" class:btn-warning={props.app.maintenance} type="button" onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'}>
-        <svg class="icon"><use href="#i-tool"></use></svg>
-        {props.app.maintenance ? 'End maintenance' : 'Maintenance'}
-      </button>
-      <button class="btn btn-sm" type="button" onclick="fez.act('start')" disabled={props.app.state === 'running' || props.app.state === 'starting'}>
-        <svg class="icon"><use href="#i-play"></use></svg>
-        Start
-      </button>
-      <button class="btn btn-sm" type="button" onclick="fez.act('restart')" disabled={state.changing || props.app.state === 'stopped'}>
-        <svg class="icon"><use href="#i-rotate"></use></svg>
-        Restart
-      </button>
-      <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.act('stop')" disabled={state.changing || props.app.state === 'stopped'}>
-        <svg class="icon"><use href="#i-stop"></use></svg>
-        Stop
-      </button>
+      <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="/#/logs?app={props.app.name}" target="_blank" rel="noreferrer" />
+      <ui-btn class="btn-sm" icon="i-settings" label="Config" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml" />
+      <ui-btn class="btn-sm {props.app.maintenance ? 'btn-warning' : ''}" icon="i-tool" label={props.app.maintenance ? 'End maintenance' : 'Maintenance'} onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'} />
+      <ui-btn class="btn-sm" icon="i-play" label="Start" onclick="fez.act('start')" disabled={props.app.state === 'running' || props.app.state === 'starting'} />
+      <ui-btn class="btn-sm" icon="i-rotate" label="Restart" onclick="fez.act('restart')" disabled={state.changing || props.app.state === 'stopped'} />
+      <ui-btn class="btn-sm btn-outline-danger" icon="i-stop" label="Stop" onclick="fez.act('stop')" disabled={state.changing || props.app.state === 'stopped'} />
       {#if props.app.deletable}
-        <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.act('destroy')" disabled={state.changing} title="Permanently remove this app from dboss and disk">
-          <svg class="icon"><use href="#i-trash"></use></svg>
-          Destroy
-        </button>
+        <ui-btn class="btn-sm btn-outline-danger" icon="i-trash" label="Destroy" onclick="fez.act('destroy')" disabled={state.changing} title="Permanently remove this app from dboss and disk" />
       {/if}
     </div>
   </div>
