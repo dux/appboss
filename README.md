@@ -431,6 +431,10 @@ hooks:
     # secret: $DEPLOY_HOOK_SECRET
 ```
 
+A hook can also be written as the bare boolean `deploy: true`, shorthand for `git pull --ff-only` in the app folder plus `restart: true`; `git` must be on the service user's `PATH`, and a non-fast-forward update or a dirty tree fails the hook without restarting. `dboss hooks [app]` shows the resolved command.
+
+For a private repo, set `github_token` (a PAT) under the host's `defaults:` or at the top level of an app's `dboss.yaml`; the app value wins. Write `$GITHUB_TOKEN` to keep it out of the file. dboss hands it to the pull through the environment only, via a credential helper (git 2.31+), so it never lands in argv, the repo's config or the app's processes; with no token the pull stays anonymous.
+
 The ping URL is `https://<management.url>/hooks/<app>/<hook>`. Authentication is a token, accepted as `?token=<secret>` in the URL (paste the whole URL into GitHub), `Authorization: Bearer`, `X-Gitlab-Token`, or a GitHub `X-Hub-Signature-256` HMAC over the raw body. `X-GitHub-Event: ping` (sent when the webhook is created) is acknowledged without running anything.
 
 With no `secret` in the config, dboss generates a 64-character secret under `state_dir/hook-secrets.json` on first use and never writes it to the config. `dboss hooks [app]` lists hooks with their last result and the ready-made ping URL; `dboss hooks run [app] <hook>` starts one now; `dboss hooks rotate [app] <hook>` mints a new secret, invalidating the old URL. Hooks run in the app folder with the app environment, log to a `hook-<name>` channel, and leave the app alone unless `restart: true`.

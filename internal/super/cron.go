@@ -72,6 +72,7 @@ type jobState struct {
 	overlap   bool
 	disabled  bool
 	restart   bool
+	pull      bool
 	next      time.Time
 	runs      map[*jobRun]bool
 	lastStart time.Time
@@ -132,10 +133,10 @@ func (a *appRuntime) syncHooks() {
 	for name, hook := range a.spec.Hooks {
 		state := a.hooks[name]
 		if state == nil {
-			a.hooks[name] = &jobState{kind: "hook", name: name, channel: hookName(name), command: hook.Command, timeout: hook.Timeout, overlap: hook.Overlap, disabled: hook.Disabled, restart: hook.Restart, runs: map[*jobRun]bool{}}
+			a.hooks[name] = &jobState{kind: "hook", name: name, channel: hookName(name), command: hook.Command, timeout: hook.Timeout, overlap: hook.Overlap, disabled: hook.Disabled, restart: hook.Restart, pull: hook.Pull, runs: map[*jobRun]bool{}}
 			continue
 		}
-		state.command, state.timeout, state.overlap, state.disabled, state.restart = hook.Command, hook.Timeout, hook.Overlap, hook.Disabled, hook.Restart
+		state.command, state.timeout, state.overlap, state.disabled, state.restart, state.pull = hook.Command, hook.Timeout, hook.Overlap, hook.Disabled, hook.Restart, hook.Pull
 	}
 	for name, state := range a.hooks {
 		if _, ok := a.spec.Hooks[name]; ok {
@@ -200,6 +201,9 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return err
 	}
 	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env, generated)
+	if state.pull && a.spec.Config.GithubToken != "" {
+		gitAuthEnv(env, a.spec.Config.GithubToken)
+	}
 	var cmd *exec.Cmd
 	if a.spec.Config.Shell {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)
@@ -258,6 +262,17 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		})
 	}
 	return nil
+}
+
+// gitAuthEnv points git at the app's github_token through a credential helper carried in the
+// environment, so the token reaches neither argv nor the repository's config. The helper answers
+// only the credential "get"; GIT_TERMINAL_PROMPT=0 makes a bad token fail instead of hanging.
+func gitAuthEnv(env map[string]string, token string) {
+	env["GITHUB_TOKEN"] = token
+	env["GIT_TERMINAL_PROMPT"] = "0"
+	env["GIT_CONFIG_COUNT"] = "1"
+	env["GIT_CONFIG_KEY_0"] = "credential.helper"
+	env["GIT_CONFIG_VALUE_0"] = `!f() { if [ "$1" = get ]; then printf 'username=x-access-token\npassword=%s\n' "$GITHUB_TOKEN"; fi; }; f`
 }
 
 func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {

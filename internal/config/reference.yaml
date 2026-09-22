@@ -214,6 +214,13 @@ ports:
 # Every key here can be overridden per app in the app's dboss.yaml with the same name.
 
 defaults:
+  # Personal access token for the built-in `deploy: true` hook: `git pull --ff-only` then restart.
+  # The pull process gets it through the environment only (a credential helper dboss injects reads
+  # it), never argv and never the repo's config. Set it here on the host, or at the top level of
+  # an app's dboss.yaml to override it for that app. Write `$GITHUB_TOKEN` to keep the secret out
+  # of the file. Empty leaves the pull anonymous. Needs git 2.31+ for the env-injected helper.
+  github_token: $GITHUB_TOKEN
+
   # Stop the whole app after this long without a proxied HTTP request.
   # 0 means never. Websocket connections count as activity while open.
   idle_stop: 6h
@@ -630,6 +637,8 @@ cron:
 # GitHub X-Hub-Signature-256 HMAC over the raw body. With no secret here, dboss generates a
 # 64-character secret under state_dir on first use; `dboss hooks` prints the full URL.
 hooks:
+  # A bare true is shorthand for `git pull --ff-only` in the app folder (git discovers the
+  # repository upward) plus restart on exit 0: `deploy: true`. The mapping form follows.
   # Hook name, unique in the app; matches [a-z][a-z0-9_-]*.
   deploy:
     # Command run once per trigger in the app folder with the app environment (no PORT).

@@ -317,6 +317,7 @@ type Ports struct {
 type Defaults struct {
 	Process `yaml:",inline"`
 	Web     `yaml:",inline"`
+	Deploy  `yaml:",inline"`
 }
 
 type Process struct {
@@ -1659,10 +1660,15 @@ type CronJob struct {
 	Disabled bool     `yaml:"disabled" json:"disabled"`
 }
 
+// pullCommand is what a scalar `hook: true` runs: fast-forward the branch checked out in the
+// repository that contains the app. The existing restart path rolls the app when git exits 0.
+const pullCommand = "git pull --ff-only"
+
 // Hook is one named one-shot command triggered by a signed HTTP ping to
 // /hooks/<app>/<hook>. Restart restarts the app when the command exits 0. Secret is the token
 // the caller must present; when empty, dboss generates one under state_dir and it never
-// belongs in the committed config.
+// belongs in the committed config. A scalar true is shorthand for {command: git pull --ff-only,
+// restart: true}.
 type Hook struct {
 	Command  string   `yaml:"command" json:"command"`
 	Timeout  Duration `yaml:"timeout" json:"timeout"`
@@ -1670,6 +1676,35 @@ type Hook struct {
 	Overlap  bool     `yaml:"overlap" json:"overlap"`
 	Disabled bool     `yaml:"disabled" json:"disabled"`
 	Secret   string   `yaml:"secret" json:"-"`
+	// Pull marks the scalar shorthand; the pull job then authenticates with github_token.
+	Pull bool `yaml:"-" json:"pull,omitempty"`
+}
+
+// UnmarshalYAML accepts a bare true, shorthand for pulling the current branch and restarting, or
+// a {command, timeout, restart, overlap, disabled, secret} mapping. The keys are checked here
+// because a custom decoder is a leaf as far as the schema walk is concerned.
+func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag != "!!bool" || node.Value != "true" {
+			return &Error{Line: node.Line, Key: "hooks", Message: "must be true or a mapping", Hint: "delete the hook or write disabled: true"}
+		}
+		h.Command = pullCommand
+		h.Restart = true
+		h.Pull = true
+		return nil
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			switch key := node.Content[i].Value; key {
+			case "command", "timeout", "restart", "overlap", "disabled", "secret":
+			default:
+				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled, secret"}
+			}
+		}
+		type plain Hook
+		return node.Decode((*plain)(h))
+	}
+	return &Error{Line: node.Line, Key: "hooks", Message: "must be true or a {command, timeout, restart, overlap, disabled, secret} mapping"}
 }
 
 type appFile struct {

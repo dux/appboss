@@ -49,13 +49,15 @@ type CronJob struct {
 	Disabled bool              `json:"disabled"`
 }
 
-// Hook is one named one-shot command with its command line parsed once at load time.
+// Hook is one named one-shot command with its command line parsed once at load time. Pull marks
+// the `deploy: true` shorthand, whose git command authenticates with the app's github_token.
 type Hook struct {
 	Command  Command       `json:"command"`
 	Timeout  time.Duration `json:"timeout"`
 	Restart  bool          `json:"restart"`
 	Overlap  bool          `json:"overlap"`
 	Disabled bool          `json:"disabled"`
+	Pull     bool          `json:"pull,omitempty"`
 }
 
 type ScanError struct {
@@ -278,6 +280,7 @@ func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
 			Restart:  hook.Restart,
 			Overlap:  hook.Overlap,
 			Disabled: hook.Disabled,
+			Pull:     hook.Pull,
 		}
 	}
 	return result, nil

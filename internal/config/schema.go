@@ -34,6 +34,7 @@ var blocks = []Block{
 	{ID: "app", Title: "App", Summary: "Processes, hostnames and start policy.", Scope: ScopeApp},
 	{ID: "cron", Title: "Cron", Summary: "Scheduled one-shot commands.", Scope: ScopeApp},
 	{ID: "hooks", Title: "Hooks", Summary: "Signed one-shot commands triggered over HTTP.", Scope: ScopeApp},
+	{ID: "deploy", Title: "Deploy", Summary: "GitHub credentials for the built-in pull hook.", Scope: ScopeBoth},
 	{ID: "runtime", Title: "Runtime", Summary: "How a process is checked, restarted, limited and logged.", Scope: ScopeBoth},
 	{ID: "web", Title: "Web", Summary: "Proxy behaviour in front of the app.", Scope: ScopeBoth},
 	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, for the listed emails only.", Scope: ScopeBoth},

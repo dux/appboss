@@ -50,6 +50,7 @@ func Keys() []Key {
 	})
 	walk(reflect.ValueOf(defaults.Defaults.Process), "", true, func(key Key) { keys = append(keys, key) })
 	walk(reflect.ValueOf(defaults.Defaults.Web), "", false, func(key Key) { keys = append(keys, key) })
+	walk(reflect.ValueOf(defaults.Defaults.Deploy), "", false, func(key Key) { keys = append(keys, key) })
 	return keys
 }
 

@@ -85,7 +85,10 @@ var keySpecs = map[string]KeySpec{
 	"cron": {Block: "cron", Name: "Scheduled commands", Description: "scheduled one-shot commands by name, run on an every interval or a cron expression", Example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},
 
 	// --- Hooks ---
-	"hooks": {Block: "hooks", Name: "Deploy hooks", Description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>", Example: "{deploy: {command: git pull, restart: true}}"},
+	"hooks": {Block: "hooks", Name: "Deploy hooks", Description: "named one-shot commands triggered by a signed HTTP ping to /hooks/<app>/<hook>; a bare true pulls the current branch and restarts", Example: "{deploy: true}"},
+
+	// --- Deploy ---
+	"github_token": {Block: "deploy", Name: "GitHub token", Description: "personal access token a `deploy: true` hook uses to pull a private repo; consumed from the pull process environment only", Example: "$GITHUB_TOKEN", Secret: true},
 
 	// --- Runtime ---
 	"idle_stop":           {Block: "runtime", Name: "Idle stop", Description: "stop the app after this long without proxied requests; 0 never", Example: "30m"},

@@ -10,6 +10,18 @@ import (
 type Overrides struct {
 	ProcessOverrides `yaml:",inline"`
 	WebOverrides     `yaml:",inline"`
+	DeployOverrides  `yaml:",inline"`
+}
+
+// Deploy is the shared deploy block: the credentials the built-in pull hook uses. It is set
+// under defaults: on the host and at the top level of an app file.
+type Deploy struct {
+	GithubToken string `yaml:"github_token,omitempty" json:"-"`
+}
+
+// DeployOverrides is the deploy block as pointers, merged key by key like pubsub.
+type DeployOverrides struct {
+	GithubToken *string `yaml:"github_token,omitempty" json:"-"`
 }
 
 // ProcessOverrides is the subset allowed under processes.<name>. Decoding is strict, so a Web

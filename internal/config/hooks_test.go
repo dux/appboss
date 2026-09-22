@@ -36,6 +36,40 @@ hooks:
 	}
 }
 
+func TestHookPullShorthand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nhooks:\n  deploy: true\n"), path, Default().Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deploy := app.Hooks["deploy"]; deploy.Command != pullCommand || !deploy.Restart || !deploy.Pull {
+		t.Fatalf("deploy = %+v", deploy)
+	}
+	if _, err := ParseApp([]byte("procfile:\n  web: ./server\nhooks:\n  deploy: false\n"), path, Default().Defaults); err == nil {
+		t.Fatal("scalar false was accepted")
+	}
+}
+
+func TestGithubTokenDefaultsAndOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	defaults := Default().Defaults
+	defaults.GithubToken = "host-token"
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.GithubToken != "host-token" {
+		t.Fatalf("inherited token = %q", app.GithubToken)
+	}
+	app, err = ParseApp([]byte("procfile:\n  web: ./server\ngithub_token: app-token\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.GithubToken != "app-token" {
+		t.Fatalf("override token = %q", app.GithubToken)
+	}
+}
+
 func TestHookValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	base := "procfile:\n  web: ./server\nhooks:\n  deploy:\n"
