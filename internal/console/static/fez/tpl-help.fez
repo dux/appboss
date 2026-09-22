@@ -28,7 +28,7 @@
         { id: 'health', title: 'Health & metrics', summary: 'Health endpoints, Prometheus metrics and the doctor preflight.' },
         { id: 'notify', title: 'Notifications', summary: 'One operator webhook for crashes and failures.' },
         { id: 'alerts', title: 'Alerts', summary: 'Posts to the webhook when an app answers with too many errors or too slowly.' },
-        { id: 'postgres', title: 'PostgreSQL', summary: 'Databases created for an app and handed to it as a URL, plus daily dumps kept for a week or a month.' },
+        { id: 'postgres', title: 'PostgreSQL', summary: 'Inspect the host server, run SQL, and keep daily dumps for a week or a month.' },
       ],
     },
   ]
@@ -158,14 +158,11 @@
         setup:
           command: ./bin/setup.sh   # after checkout, before start
           timeout: 3m
-        drop_database_on_close: false
         template:
           name: $QS_BRANCH
           hosts: [pr-$QS_BRANCH.example.com]
           autostart: false
           deletable: true
-          pg_db:
-            db_url: \${QS_BRANCH}_db
           procfile:
             web: {command: ./start.sh, health: /up}
     `,
@@ -236,16 +233,6 @@
             rotation: week    # keep 7 days; month keeps 30
           reports:
             rotation: month
-    `,
-    pgdb: `
-    # in the app's dboss.yaml
-    pg_db:
-      db_main: myapp_production   # on this host's server
-      db_cache: myapp_cache
-      db_report: $REPORTS_URL     # a full postgres:// URL, anywhere else
-      db_fresh:                   # starts as a copy of another database
-        database: myapp_pr222
-        template: template_myapp
     `,
   }
 
@@ -344,7 +331,7 @@
         <h3>Dev values</h3>
         <p>Any key can be written twice, once with a <code>_dev</code> suffix. A dev session - one app run from its own folder, <code>dboss s</code> where the config file has <code>procfile</code> - takes the <code>_dev</code> value; every other session drops it, so one committed app file serves both.</p>
         <db-preview-yaml :text="state.examples.configDev" />
-        <p>The suffix works at every depth and inside free-form maps such as <code>procfile</code>, <code>env</code>, <code>headers</code> and <code>pg_db</code>. The value replaces the base key outright, so a block override names the leaf key it changes (<code>proxy.listen_dev</code>) rather than restating the block. A <code>&#60;key&#62;_dev</code> is checked against the schema in both modes, so a typo is still caught by <code>dboss check</code> on the host.</p>
+        <p>The suffix works at every depth and inside free-form maps such as <code>procfile</code>, <code>env</code> and <code>headers</code>. The value replaces the base key outright, so a block override names the leaf key it changes (<code>proxy.listen_dev</code>) rather than restating the block. A <code>&#60;key&#62;_dev</code> is checked against the schema in both modes, so a typo is still caught by <code>dboss check</code> on the host.</p>
         <p>A dev session also gets this console on <code>127.0.0.1:&#60;first port of ports.range&#62;</code> with no <code>management</code> block, and a request coming from that machine is signed in without <code>dboss login</code>, so <code>admin_emails</code> is not needed either. The check is the connecting address and never a forwarded-for header, so an app run this way does not belong behind a reverse proxy on the same box.</p>
       </section>
     {/if}
@@ -600,7 +587,7 @@
         <ul>
           <li>The hook is host-level: <code>hooks.github_pr</code> in the root <code>dboss.yaml</code>, not under an app. One path segment is a host hook and two are an app hook, so its URL is <code>/hooks/github_pr</code>.</li>
           <li><code>action</code>, <code>branch</code>, <code>repo</code> and <code>num</code> become <code>QS_ACTION</code>, <code>QS_BRANCH</code>, <code>QS_REPO</code> and <code>QS_NUM</code> for the hook; <code>repo</code> falls back to the hook's own <code>repo</code>.</li>
-          <li><code>action=closed</code> stops the app, drops its <code>pg_db</code> databases when <code>drop_database_on_close</code> is true, and removes the checkout. Any other action checks out the branch tip, writes the app from <code>template</code>, runs <code>setup</code> (default timeout 3m; a non-zero exit fails the deploy) and starts it.</li>
+          <li><code>action=closed</code> stops the app and removes the checkout. Any other action checks out the branch tip, writes the app from <code>template</code>, runs <code>setup</code> (default timeout 3m; a non-zero exit fails the deploy) and starts it.</li>
           <li><code>template</code> is an app file with <code>$VAR</code> and <code>$&#123;VAR&#125;</code> interpolation. Its <code>name</code> is required and names the app folder and database prefix; <code>main</code> and <code>development</code> are refused.</li>
           <li>A value in <code>hosts</code> or <code>canonical_host</code> is sanitized as a DNS label (<code>/</code> and <code>_</code> become <code>-</code>); everywhere else it is an identifier (<code>/</code> becomes <code>_</code>). A top-level <code>hosts</code> is the default for every procfile entry that declares none.</li>
           <li>A private <code>repo</code> over HTTPS is pulled with <code>github_token</code>; a fork PR works because the ping passes the head repo's clone URL. Pings for one branch run one at a time, while different branches deploy in parallel.</li>
@@ -733,28 +720,21 @@
     {#if state.topic === 'postgres'}
       <section>
         <h2>PostgreSQL</h2>
-        <p>dboss gives an app the databases it declares, inspects the host's server read-only, and dumps the databases you select on a daily run, as zips of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/</code> next to the apps. The PostgreSQL tab appears only when a server is reachable.</p>
+        <p>dboss inspects the host's server read-only and dumps the databases you select on a daily run, as zips of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/</code> next to the apps. The PostgreSQL tab appears only when a server is reachable.</p>
         <h3>What it helps with</h3>
         <ul>
-          <li>No hand-written <code>DATABASE_URL</code>: name the databases an app owns and every process gets a connection URL, the same way it gets <code>PORT</code>.</li>
           <li>Backups without a cron script: pick databases in the console, set their rotation, done.</li>
           <li>Bounded storage: one daily run, scheduled dumps kept for a week or a month, a manual backup kept until you remove it.</li>
           <li>Restoring, deleting or dropping a database from the console, and seeing sizes and connections at a glance.</li>
           <li>A SQL prompt without an SSH session: the <b>SQL</b> tab on a database runs statements against it from the browser.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases,pg_db" /></div>
+        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.postgres" />
-        <db-preview-yaml :text="state.examples.pgdb" />
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
-          <li><code>pg_db</code> lives in the app's own file. Each key is uppercased to make the variable name, so <code>db_main</code> becomes <code>DB_MAIN</code>. A database that does not exist yet is created.</li>
-          <li>A value is either a database name or a full <code>postgres://</code> URL; a name has no scheme, so the two can never be confused. A name lives on this host's server and dboss builds the URL from that connection, so the app connects as whatever identity dboss connects as, and every app using a bare name shares it.</li>
-          <li>A <code>&#123;database, template&#125;</code> mapping starts the database as a copy of another one on the same server, through <code>CREATE DATABASE &#60;database&#62; TEMPLATE &#60;template&#62;</code> - a seeded throwaway environment in seconds instead of one built from scratch each deploy. The template is read only when dboss creates the database, so changing it later does nothing. PostgreSQL copies a template only while nothing is connected to it, so a session left open on it fails the start; <code>datallowconn = false</code> on a template nobody should connect to makes that impossible.</li>
-          <li>A URL lives wherever it says. dboss creates the database on that server and passes the URL through exactly as written, so a password or an option in it survives. Keep credentials out of the committed file with <code>$REPORTS_URL</code> or <code>dboss.local.yaml</code>. A managed provider usually will not let you create a database, so create it there first and dboss just passes the URL on.</li>
-          <li>Web processes, workers, cron jobs, hooks and <code>dboss exec</code> all get the variables, injected like <code>PORT</code>, so they win over <code>env:</code> and over <code>.env</code>. While this host's server is unreachable, an app with <code>pg_db</code> refuses to start and retries under its restart policy, even when every entry is a URL pointing elsewhere.</li>
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><b>Download</b> serves that zip as it is, and <b>Upload backup</b> stores one you picked as a manual entry, so a database moves between hosts: download here, upload there, restore there.</li>

@@ -15,7 +15,7 @@ func TestExpandContexts(t *testing.T) {
 		want string
 	}{
 		"identifier":   {key: "name", want: "feature_x"},
-		"braces":       {key: "pg_db", want: "feature_x_erpx"},
+		"braces":       {key: "name", want: "feature_x_erpx"},
 		"host slashes": {key: "hosts", want: "pr-feature-x.lvh.me"},
 	}
 	for name, want := range cases {

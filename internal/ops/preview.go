@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -77,7 +76,7 @@ func (s *Service) runGithubPR(hookName string, params map[string]string) error {
 	actor := "hook:" + hookName
 	detail := fmt.Sprintf("branch=%s num=%s", branch, num)
 	if action == "closed" {
-		return s.teardownPreview(cfg, appName, actor, detail, hook.DropDatabaseOnClose)
+		return s.teardownPreview(cfg, appName, actor, detail)
 	}
 	return s.deployPreview(cfg, hook, appName, repo, branch, actor, detail, vars)
 }
@@ -141,24 +140,13 @@ func (s *Service) deployPreview(cfg config.Config, hook config.Hook, appName, re
 	return nil
 }
 
-func (s *Service) teardownPreview(cfg config.Config, appName, actor, detail string, dropDB bool) error {
+func (s *Service) teardownPreview(cfg config.Config, appName, actor, detail string) error {
 	appDir := filepath.Join(cfg.Apps, appName)
 	if _, err := os.Stat(appDir); err != nil {
 		return nil
 	}
-	var databases []string
-	if dropDB {
-		databases = previewDatabases(appDir, cfg.Defaults)
-	}
 	_ = s.runtime.Stop(appName)
 	s.Audit(actor, appName, "stop", detail, nil)
-	for _, db := range databases {
-		err := s.DropDatabase(db, db)
-		s.Audit(actor, appName, "db-drop", "database="+db, err)
-		if err != nil {
-			return err
-		}
-	}
 	if err := s.runtime.Destroy(appName); err != nil {
 		s.Audit(actor, appName, "destroy", detail, err)
 		return err
@@ -209,33 +197,6 @@ func tailOutput(out string) string {
 	if len(out) > 400 {
 		out = out[len(out)-400:]
 	}
-	return out
-}
-
-// previewDatabases lists the databases the app file names, before it is removed.
-func previewDatabases(appDir string, defaults config.Defaults) []string {
-	configPath := filepath.Join(appDir, config.FileName)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil
-	}
-	app, err := config.ParseApp(data, configPath, defaults)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, entry := range app.PgDB {
-		name := entry.Database
-		if config.PgDBIsURL(name) {
-			if parsed, err := config.PgDBDatabase(name); err == nil {
-				name = parsed
-			}
-		}
-		if name != "" {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
 	return out
 }
 

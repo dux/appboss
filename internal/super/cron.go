@@ -195,12 +195,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return nil
 	}
 	command := state.command
-	generated, err := a.appDatabases()
-	if err != nil {
-		state.lastError = err.Error()
-		return err
-	}
-	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env, generated)
+	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env)
 	if state.pull && a.spec.Config.GithubToken != "" {
 		GitAuthEnv(env, a.spec.Config.GithubToken)
 	}

@@ -40,7 +40,6 @@ hooks:
     setup:
       command: ./bin/dboss/setup.sh
       timeout: 3m
-    drop_database_on_close: false
     template:
       name: $QS_BRANCH
       hosts: [pr-$QS_BRANCH.staging.erpxo.rudex.hr]
@@ -49,8 +48,6 @@ hooks:
       idle_stop: 6h
       procfile:
         web: {command: ./start.sh, health: /web/health}
-      pg_db:
-        odoo_db_url: {database: ${QS_BRANCH}_erpx}
 ```
 
 ## Semantics
@@ -58,14 +55,14 @@ hooks:
 * Params `action`, `branch`, `repo`, `num` become `QS_ACTION`, `QS_BRANCH`, `QS_REPO`, `QS_NUM`. A missing `branch` or `repo` fails the hook.
 * Normalization happens per interpolation context:
   * The raw `QS_BRANCH` value replaces `/` with `_`.
-  * Identifier fields (`name`, `pg_db.database`, env values) lowercase, replace `/` with `_`, and drop characters outside `[a-z0-9_]`.
+  * Identifier fields (`name`, env values) lowercase, replace `/` with `_`, and drop characters outside `[a-z0-9_]`.
   * Host fields lowercase, replace `/` and `_` with `-`, drop characters outside `[a-z0-9-]`, and cap the label at 63 characters. A literal `_` in the template host also becomes `-`.
   * Interpolation supports `$NAME` and `${NAME}`.
 * `github_pr` is reserved. Mixing it with `command:` is an error. The built-in is host-level only; an app hook named `github_pr` stays a generic command hook. Any other host hook name is a generic command hook.
 * `secret` is optional. When omitted, dboss generates a 64-character secret under `state_dir/hook-secrets.json`, and `dboss hooks --host github_pr` prints the ready-made URL.
 * dboss owns git. It fetches the branch tip (`git fetch` then `git reset --hard origin/<branch>`, or clone) over HTTPS, authenticated with the server's `github_token`. `setup` never touches git.
-* `setup.command` runs after checkout and before start, in the app dir with the app env (the database URL is injected), with `setup.timeout` (default `3m`). A non-zero exit fails the deploy and leaves the app stopped.
-* Databases are created empty. `template_erpx` is not copied. `drop_database_on_close` defaults to `false`; when true, `closed` drops the preview's databases.
+* `setup.command` runs after checkout and before start, in the app dir with the app env, with `setup.timeout` (default `3m`). A non-zero exit fails the deploy and leaves the app stopped.
+* dboss does not manage the preview's databases; the app's `setup` creates what it needs and owns its cleanup.
 * Concurrency is per branch: events for one branch queue, different branches run in parallel.
 * Preview apps live in the same apps dir with the checkout inside the app dir, symlinked in like today's `deploy.sh` layout.
 
@@ -77,15 +74,13 @@ Deploy (`opened`, `synchronize`, `reopened`):
 2. Clone the repo at the branch if the dir is missing, else fetch and reset to the branch tip.
 3. Render `dboss.local.yaml` (written through the config store, so config history and a `config-write` audit row happen).
 4. Symlink into the apps dir and `rescan`.
-5. Resolve `pg_db`, which creates the empty database and returns the env.
-6. Run `setup.command` with that env and the timeout, output to the `github_pr` channel.
-7. Start the app.
+5. Run `setup.command` with the app env and the timeout, output to the `github_pr` channel.
+6. Start the app.
 
 Teardown (`closed`):
 
 1. Stop the app.
-2. If `drop_database_on_close`, drop the app's `pg_db` databases.
-3. Remove the symlink, app dir and state.
+2. Remove the symlink, app dir and state.
 
 ## Audit
 
@@ -95,16 +90,16 @@ The `_dboss.audit` table (`ts, actor, app, action, detail, result, error`) gets 
 * `deploy` for a successful create or update.
 * `setup-failed` when `setup.command` exits non-zero, with the error.
 * `config-write` when the app file is written.
-* `stop`, `db-drop` (one per database) and `destroy` on teardown.
+* `stop` and `destroy` on teardown.
 
 ## dboss changes
 
-* Config (`./internal/config`): host `hooks:` (`Hooks` on `Config`, added to `hostKeys`), built-in `github_pr` validation (reserved name, required fields, the `setup` sub-struct with a `3m` default timeout, `drop_database_on_close`), the template struct, and `$VAR`/`${VAR}` interpolation with per-context sanitization. Add the block and key specs, update the reference, and revise the no-deploy-logic note.
+* Config (`./internal/config`): host `hooks:` (`Hooks` on `Config`, added to `hostKeys`), built-in `github_pr` validation (reserved name, required fields, the `setup` sub-struct with a `3m` default timeout), the template struct, and `$VAR`/`${VAR}` interpolation with per-context sanitization. Add the block and key specs, update the reference, and revise the no-deploy-logic note.
 * Endpoint (`./internal/console/console.go`): `handleHook` splits on `/`, one segment is a host hook and two is an app hook, and `/hooks/github_pr` routes to the built-in. Query params become `QS_*`.
-* Engine (`./internal/preview`, new): params, interpolation, the per-branch lock map, checkout, setup run, config render, start, teardown and database drop. It depends on narrow interfaces for the runtime, the app config writer, the `pg` service, the auditor and the log sink.
-* Wiring (`./internal/daemon/daemon.go`): build the preview engine and pass it to `ops.New`, so `ops.Service.Do` dispatches `github_pr` and audit and database work are first-class rather than shell side effects. The config writer reuses the `apps.NewStore` semantics with config history.
+* Engine (`./internal/preview`, new): params, interpolation, the per-branch lock map, checkout, setup run, config render, start and teardown. It depends on narrow interfaces for the runtime, the app config writer, the auditor and the log sink.
+* Wiring (`./internal/daemon/daemon.go`): build the preview engine and pass it to `ops.New`, so `ops.Service.Do` dispatches `github_pr` and audit work is first-class rather than shell side effects. The config writer reuses the `apps.NewStore` semantics with config history.
 * CLI and console: `dboss hooks --host <hook>` to list, run and rotate, and the Hooks panel shows host hooks.
-* Tests: interpolation and sanitization table, reserved-name validation, host and app endpoint routing, checkout at the branch tip, teardown with and without database drop, audit rows, and per-branch serialization.
+* Tests: interpolation and sanitization table, reserved-name validation, host and app endpoint routing, checkout at the branch tip, teardown, audit rows, and per-branch serialization.
 
 ## odoo-docker changes
 
@@ -115,7 +110,7 @@ The `_dboss.audit` table (`ts, actor, app, action, detail, result, error`) gets 
 
 1. Query params to env, host-level hooks, the split endpoint, secrets and CLI, all generic.
 2. Template interpolation plus the `github_pr` checkout, setup and start.
-3. Teardown, optional database drop, audit, console and logs.
+3. Teardown, audit, console and logs.
 4. Swap the odoo-docker workflow, remove the old ones, update the docs.
 
 ## Out of scope

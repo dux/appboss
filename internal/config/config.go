@@ -777,159 +777,6 @@ func validatePostgres(p Postgres) error {
 	return nil
 }
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// injectedEnv is the set dboss writes into every process itself; see processEnv in
-// ./internal/super. A pg_db entry may not claim one of these names.
-var injectedEnv = map[string]bool{"PORT": true, "APP_NAME": true, "PROC_TYPE": true, "DBOSS_SOCKET": true}
-
-// PgDBSpec is one pg_db entry: the database the app owns, and optionally the template PostgreSQL
-// copies when it has to create it. A scalar value is the database alone, so the common entry stays
-// a one-liner; a mapping adds the template.
-type PgDBSpec struct {
-	Database string
-	// Template is a database on the same server, copied by CREATE DATABASE ... TEMPLATE. It is
-	// read only when dboss creates the database; an existing one is never touched.
-	Template string
-}
-
-// UnmarshalYAML accepts a bare database name or URL, or a {database, template} mapping.
-func (p *PgDBSpec) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		if node.Tag == "!!null" {
-			return nil
-		}
-		p.Database = node.Value
-		return nil
-	case yaml.MappingNode:
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			switch key := node.Content[i].Value; key {
-			case "database", "template":
-			default:
-				return &Error{Line: node.Content[i].Line, Key: "pg_db", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: database, template"}
-			}
-		}
-		var raw struct {
-			Database string `yaml:"database"`
-			Template string `yaml:"template"`
-		}
-		if err := node.Decode(&raw); err != nil {
-			return err
-		}
-		p.Database, p.Template = raw.Database, raw.Template
-		return nil
-	}
-	return &Error{Line: node.Line, Key: "pg_db", Message: "must be a database name, a postgres:// URL, or a {database, template} mapping"}
-}
-
-// MarshalYAML writes the scalar back when there is no template. apps.Store.Effective marshals the
-// config for the console, so without this every plain entry would grow a mapping on the next write.
-func (p PgDBSpec) MarshalYAML() (any, error) {
-	if p.Template == "" {
-		return p.Database, nil
-	}
-	return pgDBMapping(p), nil
-}
-
-func (p PgDBSpec) MarshalJSON() ([]byte, error) {
-	if p.Template == "" {
-		return json.Marshal(p.Database)
-	}
-	return json.Marshal(pgDBMapping(p))
-}
-
-type pgDBMapping struct {
-	Database string `yaml:"database" json:"database"`
-	Template string `yaml:"template" json:"template"`
-}
-
-// PgDatabases returns the app's pg_db block keyed by the environment variable each database is
-// exported as, which is the YAML key uppercased.
-func (a App) PgDatabases() map[string]PgDBSpec {
-	if len(a.PgDB) == 0 {
-		return nil
-	}
-	out := make(map[string]PgDBSpec, len(a.PgDB))
-	for key, entry := range a.PgDB {
-		out[strings.ToUpper(key)] = entry
-	}
-	return out
-}
-
-func validatePgDB(pgdb map[string]PgDBSpec) error {
-	keys := make([]string, 0, len(pgdb))
-	for key := range pgdb {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	seen := make(map[string]string, len(pgdb))
-	for _, key := range keys {
-		if !envName.MatchString(key) {
-			return &Error{Key: "pg_db", Message: fmt.Sprintf("invalid environment variable name %q", key), Hint: "names match [A-Za-z_][A-Za-z0-9_]*, e.g. db_main"}
-		}
-		name := strings.ToUpper(key)
-		if injectedEnv[name] {
-			return keyErr("pg_db."+key, "%s is set by dboss itself", name)
-		}
-		if other, ok := seen[name]; ok {
-			return keyErr("pg_db."+key, "collides with %q; both export %s", other, name)
-		}
-		seen[name] = key
-		entry := pgdb[key]
-		if entry.Database == "" {
-			return keyErr("pg_db."+key, "needs a database name")
-		}
-		// A template is always copied on the server that receives the create, so a URL there
-		// would name a server PostgreSQL cannot reach across.
-		if entry.Template != "" {
-			if PgDBIsURL(entry.Template) {
-				return &Error{Key: "pg_db." + key + ".template", Message: "must be a database name, not a URL", Hint: "a template is copied on the server the database is created on, e.g. template_erpx"}
-			}
-			if !databaseName.MatchString(entry.Template) {
-				return &Error{Key: "pg_db." + key + ".template", Message: fmt.Sprintf("invalid database name %q", entry.Template), Hint: "give a database name like template_erpx"}
-			}
-		}
-		database := entry.Database
-		if PgDBIsURL(database) {
-			parsed, err := PgDBDatabase(database)
-			if err != nil {
-				return &Error{Key: "pg_db." + key, Message: err.Error(), Hint: "a URL names its database in the path, e.g. postgres://user:pass@db.example.com/myapp_production"}
-			}
-			database = parsed
-		} else if !databaseName.MatchString(database) {
-			return &Error{Key: "pg_db." + key, Message: fmt.Sprintf("invalid database name %q", database), Hint: "give a database name like myapp_production, or a full postgres:// URL"}
-		}
-		if entry.Template != "" && entry.Template == database {
-			return keyErr("pg_db."+key+".template", "a database cannot be its own template")
-		}
-	}
-	return nil
-}
-
-// PgDBIsURL reports whether a pg_db value is a full connection URL rather than a database name on
-// the host's own server. The two can never be confused: a database name has no scheme.
-func PgDBIsURL(value string) bool {
-	return strings.HasPrefix(value, "postgres://") || strings.HasPrefix(value, "postgresql://")
-}
-
-// PgDBDatabase returns the database a pg_db URL names. It is the one field dboss needs from a
-// URL it otherwise passes through untouched.
-func PgDBDatabase(value string) (string, error) {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return "", fmt.Errorf("invalid connection URL %q", value)
-	}
-	database := strings.TrimPrefix(parsed.Path, "/")
-	if database == "" {
-		return "", fmt.Errorf("connection URL %q names no database", value)
-	}
-	if !databaseName.MatchString(database) {
-		return "", fmt.Errorf("invalid database name %q in connection URL", database)
-	}
-	return database, nil
-}
-
 var notifyFormats = map[string]bool{"generic": true, "slack": true, "discord": true, "ntfy": true}
 var notifyEvents = map[string]bool{"crash": true, "restart-loop": true, "health-timeout": true, "wake-failed": true, "hook-failed": true, "deploy": true, "config-changed": true, "backup-failed": true, "error-rate": true, "slow": true}
 
@@ -1271,7 +1118,7 @@ const BuiltinGithubPR = "github_pr"
 
 // hasBuiltinFields reports whether a hook uses options that only the github_pr built-in reads.
 func hasBuiltinFields(hook Hook) bool {
-	return hook.Repo != "" || hook.Setup != nil || hook.DropDatabaseOnClose || hook.Template != nil
+	return hook.Repo != "" || hook.Setup != nil || hook.Template != nil
 }
 
 // validateHostHooks checks the host-level hooks block: only the github_pr built-in is supported
@@ -1570,11 +1417,8 @@ type App struct {
 	Deletable    bool               `yaml:"deletable" json:"deletable"`
 	Cron         map[string]CronJob `yaml:"cron" json:"cron"`
 	Hooks        map[string]Hook    `yaml:"hooks" json:"hooks"`
-	// PgDB maps an environment variable name to the PostgreSQL database the app owns. Each one
-	// is created when missing and handed to every process as a connection URL.
-	PgDB      map[string]PgDBSpec `yaml:"pg_db" json:"pg_db,omitempty"`
-	Defaults  `yaml:",inline"`
-	Processes map[string]ProcessOverrides `yaml:"processes" json:"processes"`
+	Defaults     `yaml:",inline"`
+	Processes    map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
 
 // processNames lists procfile names sorted, so every derived choice and error is deterministic.
@@ -1738,10 +1582,9 @@ type Hook struct {
 
 	// The fields below configure the built-in github_pr host hook. They are invalid on an app
 	// hook and on any other host hook name.
-	Repo                string         `yaml:"repo"`
-	Setup               *SetupSpec     `yaml:"setup"`
-	DropDatabaseOnClose bool           `yaml:"drop_database_on_close"`
-	Template            map[string]any `yaml:"template"`
+	Repo     string         `yaml:"repo"`
+	Setup    *SetupSpec     `yaml:"setup"`
+	Template map[string]any `yaml:"template"`
 }
 
 // Setup is the command the built-in github_pr hook runs in the checkout after the branch is
@@ -1771,7 +1614,7 @@ func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
 			case "command", "timeout", "restart", "overlap", "disabled", "secret",
-				"repo", "setup", "drop_database_on_close", "template":
+				"repo", "setup", "template":
 			default:
 				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled, secret"}
 			}
@@ -1788,7 +1631,6 @@ type appFile struct {
 	Deletable bool                   `yaml:"deletable"`
 	Cron      map[string]CronJob     `yaml:"cron"`
 	Hooks     map[string]Hook        `yaml:"hooks"`
-	PgDB      map[string]PgDBSpec    `yaml:"pg_db"`
 	Overrides `yaml:",inline"`
 	Processes map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -1826,7 +1668,7 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, PgDB: raw.PgDB, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Defaults: defaults, Processes: raw.Processes}
 	if err := app.deriveWeb(); err != nil {
 		return App{}, err
 	}
@@ -1861,9 +1703,6 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 		return App{}, err
 	}
 	if err := validateHooks(app.Hooks); err != nil {
-		return App{}, err
-	}
-	if err := validatePgDB(app.PgDB); err != nil {
 		return App{}, err
 	}
 	app.allowPrefixes, _ = parsePrefixes(app.AllowIPs)

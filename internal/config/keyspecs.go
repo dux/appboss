@@ -79,7 +79,6 @@ var keySpecs = map[string]KeySpec{
 	"autostart": {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
 	"deletable": {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
 	"processes": {Block: "app", Name: "Per-process overrides", Description: "per-process overrides of the process keys, by process name", Example: "{worker: {stop_timeout: 120s}}"},
-	"pg_db":     {Block: "app", Name: "PostgreSQL databases", Description: "databases this app owns, keyed by the environment variable each one is exported as; a value is a database name on the host's server, a full postgres:// URL, or a {database, template} mapping, a missing database is created either way (from the template when one is named), and every process gets a connection URL", Example: "{db_main: myapp_production, db_fresh: {database: pr222_erpx, template: template_erpx}}"},
 
 	// --- Cron ---
 	"cron": {Block: "cron", Name: "Scheduled commands", Description: "scheduled one-shot commands by name, run on an every interval or a cron expression", Example: "{cleanup: {schedule: every 6h, command: bundle exec rake cleanup}}"},

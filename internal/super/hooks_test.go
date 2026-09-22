@@ -56,7 +56,7 @@ func waitForHookEnd(t *testing.T, manager *Manager, app, hook string) HookSnapsh
 
 func TestHookListsRunsAndGeneratesSecret(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32800, 32820}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hello\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestHookListsRunsAndGeneratesSecret(t *testing.T) {
 
 func TestHookRotateAndConfigSecretWins(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32820, 32840}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hi\n    secret: fromconfig\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestHookRotateAndConfigSecretWins(t *testing.T) {
 
 func TestHookRotateReplacesGeneratedSecret(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32840, 32860}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hi\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestGitAuthEnvCarriesTokenInEnvironment(t *testing.T) {
 
 func TestHookWithRestartStartsTheApp(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32860, 32880}, "procfile:\n  web: /bin/sleep 30\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/true\n    restart: true\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

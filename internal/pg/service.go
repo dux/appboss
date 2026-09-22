@@ -32,8 +32,8 @@ type Service struct {
 	next       time.Time
 
 	refreshMu sync.Mutex
-	// detectMu serialises the on-demand detect in connection(), so a host starting several
-	// pg_db apps at once resolves the server once rather than once per app.
+	// detectMu serialises the on-demand detect in connection(), so concurrent callers resolve
+	// the server once.
 	detectMu sync.Mutex
 
 	catalog *catalog
@@ -138,10 +138,7 @@ func (s *Service) Snapshot() Snapshot {
 }
 
 // connection returns the resolved server, detecting once when startup has not got there yet.
-// Detection runs off the daemon's start path on purpose, but super.New starts autostart apps
-// before the module manager runs, so an app with pg_db reaches this first. Without the
-// on-demand detect it would fail its first start after every daemon restart and spend its
-// restart budget doing it.
+// Detection runs off the daemon's start path on purpose, so a console action can arrive first.
 func (s *Service) connection(ctx context.Context) *pgx.ConnConfig {
 	s.mu.RLock()
 	connConfig := s.connConfig

@@ -43,26 +43,9 @@ func (a *appRuntime) maxStopTimeout(names []string) time.Duration {
 	return maximum
 }
 
-// appDatabases resolves the app's pg_db block into environment values. It runs on every spawn
-// rather than once, so a database dropped behind dboss's back is recreated on the next start.
-func (a *appRuntime) appDatabases() (map[string]string, error) {
-	wanted := a.spec.Config.PgDatabases()
-	if len(wanted) == 0 {
-		return nil, nil
-	}
-	if a.databases == nil {
-		return nil, errors.New("pg_db needs the PostgreSQL service, which is not available")
-	}
-	return a.databases.AppDatabases(a.ctx, a.spec.Name, wanted)
-}
-
 func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	defaults := a.spec.Config.Process(name)
-	generated, err := a.appDatabases()
-	if err != nil {
-		return fmt.Errorf("start %s: %w", name, err)
-	}
-	env := processEnv(a.spec, name, port, a.cfg.Socket, defaults.Env, generated)
+	env := processEnv(a.spec, name, port, a.cfg.Socket, defaults.Env)
 	var cmd *exec.Cmd
 	if defaults.Shell {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)
@@ -506,9 +489,8 @@ func alive(pid int) bool { err := syscall.Kill(pid, 0); return err == nil || err
 
 // processEnv assembles one process environment in the documented priority order, lowest first:
 // the daemon environment and mise (spec.Env), then config env (extra, including a process
-// override), then .env and .env.local, then the values dboss injects. generated holds the
-// pg_db connection URLs, which dboss owns exactly like PORT and so land in the same top layer.
-func processEnv(spec *apps.App, processName string, port int, socket string, extra, generated map[string]string) map[string]string {
+// override), then .env and .env.local, then the values dboss injects.
+func processEnv(spec *apps.App, processName string, port int, socket string, extra map[string]string) map[string]string {
 	values := map[string]string{}
 	for key, value := range spec.Env {
 		values[key] = value
@@ -517,9 +499,6 @@ func processEnv(spec *apps.App, processName string, port int, socket string, ext
 		values[key] = value
 	}
 	for key, value := range spec.FileEnv {
-		values[key] = value
-	}
-	for key, value := range generated {
 		values[key] = value
 	}
 	// Cron jobs run outside the port table, so port 0 means no PORT is injected.

@@ -31,7 +31,7 @@ All of it is in the one binary: no sidecars, no agents, no extra database, no YA
 * **A real web console.** Live state, start and stop, log search, traffic, the config files edited on disk with revision history and restore, and an audit row for every action.
 * **Scheduled jobs.** Cron per app, running even while the app itself is stopped, with output in the same log store.
 * **Access control.** Basic auth, IP allowlists, or a full SSO sign-in in front of any app, without touching the app's code.
-* **Batteries for the rest.** PostgreSQL databases created for an app and handed to it as a connection URL, with inspection, scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
+* **Batteries for the rest.** PostgreSQL inspection, a SQL prompt, scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
 
 Install is one command and the service runs as an ordinary user, not root.
 `dboss start` on your laptop gives you the same thing locally, with no sudo and no setup.
@@ -207,7 +207,7 @@ env:
   API_URL_dev: http://lvh.me:4000
 ```
 
-The suffix works at every depth and inside free-form maps such as `procfile`, `env`, `headers` and `pg_db`; the value replaces the base key outright, so a block override names the leaf key it changes (`proxy: {listen_dev: ":3000"}`) rather than restating the block. A `<key>_dev` is checked against the schema in both modes, so a typo is caught by `dboss check` on the host too.
+The suffix works at every depth and inside free-form maps such as `procfile`, `env` and `headers`; the value replaces the base key outright, so a block override names the leaf key it changes (`proxy: {listen_dev: ":3000"}`) rather than restating the block. A `<key>_dev` is checked against the schema in both modes, so a typo is caught by `dboss check` on the host too.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
 `dboss config --keys [filter]` lists every key grouped by block, with a one-line description, its default and, when useful, an example; the same list is behind the Help button in the console's Configuration view.
 `dboss config --reference` prints the long annotated reference, and `dboss config [app] -d` prints a resolved config with every default filled in.
@@ -454,14 +454,11 @@ hooks:
     setup:
       command: ./bin/setup.sh     # after checkout, before start; non-zero fails the deploy
       timeout: 3m                 # default
-    drop_database_on_close: false
     template:
       name: $QS_BRANCH
       hosts: [pr-$QS_BRANCH.example.com]
       autostart: false
       deletable: true
-      pg_db:
-        db_url: ${QS_BRANCH}_db
       procfile:
         web: {command: ./start.sh, health: /up}
 ```
@@ -474,16 +471,16 @@ curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=${{ github.event
 ```
 
 Every query param becomes `QS_<NAME>` for the hook.
-`action=closed` stops the app, optionally drops its `pg_db` databases and removes the checkout; any other action checks out the branch tip, writes the app config from `template`, runs `setup`, and starts the app.
+`action=closed` stops the app and removes the checkout; any other action checks out the branch tip, writes the app config from `template`, runs `setup`, and starts the app.
 A private `repo` over HTTPS is pulled with `github_token`; a fork PR works because the caller passes the head repo's clone URL.
 Events for one branch are serialized, so two pushes cannot race the same checkout, while different branches deploy in parallel.
 
 `template` is an app file with `$VAR` and `${VAR}` interpolation.
 A value in a `hosts` or `canonical_host` field is sanitized as a DNS label (`/` and `_` become `-`); every other field is an identifier (`/` becomes `_`).
 A top-level `hosts` is the default for every procfile entry that declares none.
-The preview-only `name` key names the app folder and database prefix, sanitized the same way, and `main` and `development` are refused.
+The preview-only `name` key names the app folder, sanitized the same way, and `main` and `development` are refused.
 
-Every step is audited under actor `hook:github_pr` (`config-write`, `deploy`, `setup-failed`, `stop`, `db-drop`, `destroy`).
+Every step is audited under actor `hook:github_pr` (`config-write`, `deploy`, `setup-failed`, `stop`, `destroy`).
 The preview runs like any other app, so the console, request log, metrics and `dboss ls` all see it.
 
 ## PubSub channels
@@ -615,58 +612,6 @@ dboss pg drop <database> --confirm <database>
 ```
 
 The metrics endpoint exports `dboss_pg_up`, `dboss_pg_database_size_bytes`, `dboss_pg_backup_last_success_timestamp_seconds` and `dboss_pg_backup_count`.
-
-### Databases for an app
-
-An app declares the databases it owns with `pg_db:` in its own `dboss.yaml`.
-Each key is the environment variable the database is exported as, uppercased:
-
-```yaml
-procfile:
-  web: bundle exec puma
-  worker: bundle exec lux jobs:work
-
-pg_db:
-  db_main: myapp_production                    # on this host's server
-  db_cache: myapp_cache
-  db_report: $REPORTS_URL                      # anywhere else
-  db_fresh:                                    # a copy of another database
-    database: myapp_pr222
-    template: template_myapp
-```
-
-dboss creates a database that does not exist yet, then hands every process of the app a connection URL:
-
-```
-DB_MAIN=postgres:///myapp_production?host=/var/run/postgresql
-DB_CACHE=postgres:///myapp_cache?host=/var/run/postgresql
-DB_REPORT=postgres://user:pass@db.example.com/reports
-```
-
-This is the same deal as `PORT`: dboss owns the resource, so it hands it over instead of asking you to repeat it in `env:` or a `.env` file.
-Web processes, workers, cron jobs, deploy hooks and `dboss exec` all get the variables, and they are injected like `PORT`, so they win over `env:` and over `.env`/`.env.local`.
-
-A value is a **database name**, a **full `postgres://` URL**, or a **`{database, template}` mapping**.
-A name and a URL can never be confused, because a name has no scheme.
-
-A database name lives on the server the `postgres:` block resolved, and dboss builds the URL from that connection with only the database name swapped.
-The app then connects as whatever identity dboss connects as, and every app using a bare name shares that identity; if you need them separated, create per-app roles in PostgreSQL and give those apps a full URL instead.
-
-A full URL lives wherever it says.
-dboss creates the database on that server and hands the URL to the app exactly as written, so a password or an option you put in it survives untouched.
-Keep credentials out of the committed file with `$REPORTS_URL`, expanded from the daemon environment at load, or put the URL in `dboss.local.yaml`.
-Creating a database on a managed provider usually needs rights it will not give you; create it there first and dboss will simply pass the URL on.
-
-A `{database, template}` mapping starts the database as a copy of another one on the same server, through `CREATE DATABASE <database> TEMPLATE <template>`.
-It is how a throwaway environment gets a seeded database in seconds rather than building one from scratch on every deploy.
-
-Three things are worth knowing about a template.
-The template is read only when dboss creates the database, so changing it later does nothing and dboss never recreates a database that already exists.
-It has to live on the server that receives the create, which for a URL entry is the server the URL names.
-And PostgreSQL copies a template only while no other session is connected to it, so a `psql` left open on the template fails the start until it is closed - dboss says so and gives you the `pg_terminate_backend` query.
-Setting `datallowconn = false` on a template nothing should ever connect to makes that failure impossible.
-
-An app with a `pg_db` block refuses to start while this host's own PostgreSQL server is unreachable, even when every entry is a URL pointing elsewhere, and retries under its restart policy rather than coming up with the variables unset.
 
 ## Containers
 
