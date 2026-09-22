@@ -651,6 +651,7 @@ func (h *Handler) pubsubPublish(w http.ResponseWriter, r *http.Request, session 
 func (h *Handler) audit(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	rows, err := h.service.SearchAudit(logstore.AuditFilter{
+		ID:     idParam(query.Get("row")),
 		App:    strings.TrimSpace(query.Get("app")),
 		Actor:  strings.TrimSpace(query.Get("actor")),
 		Action: strings.TrimSpace(query.Get("action")),
@@ -944,6 +945,13 @@ func sinceParam(value string) time.Time {
 
 func intParam(value string) int {
 	parsed, _ := strconv.Atoi(value)
+	return parsed
+}
+
+// idParam reads a row id out of the query. A missing or unparseable value is 0, which every
+// filter reads as "not set".
+func idParam(value string) int64 {
+	parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	return parsed
 }
 

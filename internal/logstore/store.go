@@ -132,6 +132,7 @@ type RequestFilter struct {
 // AuditEntry is one operator action: who did what to which app, and how it turned out. Audit rows
 // live in the reserved host database.
 type AuditEntry struct {
+	ID     int64     `json:"id"`
 	Time   time.Time `json:"time"`
 	Actor  string    `json:"actor"`
 	App    string    `json:"app"`
@@ -141,8 +142,9 @@ type AuditEntry struct {
 	Error  string    `json:"error,omitempty"`
 }
 
-// AuditFilter narrows SearchAudit.
+// AuditFilter narrows SearchAudit. ID addresses one row and ignores the other fields.
 type AuditFilter struct {
+	ID     int64
 	App    string
 	Actor  string
 	Action string
@@ -630,6 +632,10 @@ func (s *Store) SearchAudit(filter AuditFilter) ([]AuditEntry, error) {
 	}
 	where := []string{}
 	args := []any{}
+	if filter.ID > 0 {
+		where = append(where, "rowid = ?")
+		args = append(args, filter.ID)
+	}
 	for column, value := range map[string]string{"app": filter.App, "actor": filter.Actor, "action": filter.Action} {
 		if value != "" {
 			where = append(where, column+" = ?")
@@ -644,7 +650,7 @@ func (s *Store) SearchAudit(filter AuditFilter) ([]AuditEntry, error) {
 		where = append(where, "ts < ?")
 		args = append(args, stamp(filter.Before))
 	}
-	query := `SELECT ts, actor, app, action, detail, result, error FROM audit`
+	query := `SELECT rowid, ts, actor, app, action, detail, result, error FROM audit`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -659,7 +665,7 @@ func (s *Store) SearchAudit(filter AuditFilter) ([]AuditEntry, error) {
 	for rows.Next() {
 		var e AuditEntry
 		var ts string
-		if err := rows.Scan(&ts, &e.Actor, &e.App, &e.Action, &e.Detail, &e.Result, &e.Error); err != nil {
+		if err := rows.Scan(&e.ID, &ts, &e.Actor, &e.App, &e.Action, &e.Detail, &e.Result, &e.Error); err != nil {
 			return nil, err
 		}
 		e.Time, _ = time.Parse(time.RFC3339Nano, ts)

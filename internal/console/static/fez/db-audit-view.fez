@@ -1,0 +1,115 @@
+<script>
+  class {
+    // :id is the audit rowid. The row is fetched on its own, so a deep link still opens it when
+    // the list behind it is filtered or older than its 200-row window.
+    PROPS = {
+      id: { type: Number, default: 0 },
+    }
+
+    init() {
+      this.state.row = null
+      this.state.loading = false
+      this.state.error = ''
+      this.state.shown = 0
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    // The parent swaps rows without remounting, so a new id has to refetch.
+    onRefresh(props) {
+      if (props.id !== this.state.shown) this.load()
+    }
+
+    async load() {
+      this.state.shown = this.props.id
+      this.state.loading = true
+      try {
+        const data = await Dboss.api(`/api/audit?row=${this.props.id}`)
+        this.state.row = (data.rows || [])[0] || null
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    stamp(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return value
+      return date.toLocaleString()
+    }
+
+    ago(value) {
+      if (!value) return '-'
+      const then = new Date(value).getTime()
+      if (isNaN(then)) return '-'
+      const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+      if (seconds < 60) return `${seconds}s ago`
+      const minutes = Math.floor(seconds / 60)
+      if (minutes < 60) return `${minutes}m ago`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 24) return `${hours}h ago`
+      const days = Math.floor(hours / 24)
+      if (days < 30) return `${days}d ago`
+      const months = Math.floor(days / 30)
+      if (months < 12) return `${months}mo ago`
+      return `${Math.floor(months / 12)}y ago`
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle"><a href="#/audit">&larr; Audit</a></p>
+    <h1 class="page-title">{state.row ? state.row.action : 'Audit entry'}</h1>
+  </div>
+  {#if state.row}
+    <div class="page-actions">
+      <span class="badge" class:badge-danger={state.row.result !== 'ok'}>{state.row.result}</span>
+    </div>
+  {/if}
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#if state.row}
+  <section class="card">
+    <div class="card-header">
+      <h3 class="section-title">Entry #{state.row.id}</h3>
+    </div>
+    <div class="datagrid audit-view-grid">
+      <div class="datagrid-item"><span class="subheader">Time</span><span class="datagrid-content">{stamp(state.row.time)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Age</span><span class="datagrid-content">{ago(state.row.time)}</span></div>
+      <div class="datagrid-item"><span class="subheader">Actor</span><span class="datagrid-content">{state.row.actor || '-'}</span></div>
+      <div class="datagrid-item"><span class="subheader">App</span><span class="datagrid-content">{state.row.app || '-'}</span></div>
+    </div>
+    <div class="audit-view-block">
+      <span class="subheader">Action</span>
+      <pre class="audit-view-text">{state.row.action}</pre>
+    </div>
+    <div class="audit-view-block">
+      <span class="subheader">Result</span>
+      <pre class="audit-view-text">{state.row.result}</pre>
+    </div>
+    <div class="audit-view-block">
+      <span class="subheader">Detail</span>
+      <pre class="audit-view-text">{state.row.detail || '-'}</pre>
+    </div>
+    {#if state.row.error}
+      <div class="audit-view-block">
+        <span class="subheader">Error</span>
+        <pre class="audit-view-text audit-view-error">{state.row.error}</pre>
+      </div>
+    {/if}
+  </section>
+{:else if !state.loading && !state.error}
+  <section class="card">
+    <div class="audit-view-block text-muted">This audit entry is gone. Retention may have pruned it.</div>
+  </section>
+{/if}

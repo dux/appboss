@@ -43,6 +43,27 @@ func TestAuditRecordSearchAndPrune(t *testing.T) {
 		}
 	}
 
+	// Every row carries its own id, and an id addresses exactly that row.
+	for _, row := range all {
+		if row.ID == 0 {
+			t.Fatalf("audit row has no id: %+v", row)
+		}
+	}
+	one, err := store.SearchAudit(AuditFilter{ID: all[1].ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 1 || one[0] != all[1] {
+		t.Fatalf("by id = %+v, want %+v", one, all[1])
+	}
+	missing, err := store.SearchAudit(AuditFilter{ID: 9999, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("unknown id = %+v", missing)
+	}
+
 	// An old row is dropped by the host prune; a fresh one survives.
 	if err := store.RecordAudit(AuditEntry{Time: now.Add(-2 * time.Hour), Actor: "cli", App: "old", Action: "stop", Result: "ok"}); err != nil {
 		t.Fatal(err)

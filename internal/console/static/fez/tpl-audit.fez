@@ -5,16 +5,26 @@
       this.state.app = Pjax.hqs('app') || ''
       this.state.actor = Pjax.hqs('actor') || ''
       this.state.action = Pjax.hqs('action') || ''
+      this.state.row = Number(Pjax.hqs('row') || 0)
+      this.state.open = {}
       this.state.loading = false
       this.state.error = ''
     }
 
     onMount() {
-      this.load()
+      if (!this.state.row) this.load()
     }
 
     beforeRender() {
       this.state.apps = this.globalState.apps || []
+    }
+
+    // The app select is a fez:this ref: a rendered selected attribute does not move the live
+    // selection, which left the filter showing the last app while no filter was set.
+    afterRender() {
+      const node = this.state.appNode
+      if (!node || node === document.activeElement) return
+      if (node.value !== this.state.app) node.value = this.state.app
     }
 
     async load() {
@@ -39,6 +49,19 @@
       Dboss.setQs(key, value)
     }
 
+    // A hash write is history only, so the row has to move the state itself. The back link is a
+    // plain anchor, which fires hashchange and remounts the page on the list again.
+    open(id) {
+      if (!id) return
+      this.state.row = id
+      Dboss.setQs('row', String(id))
+    }
+
+    // A fresh object per toggle: a write into the existing one would not repaint the list.
+    toggle(id) {
+      this.state.open = { ...this.state.open, [id]: !this.state.open[id] }
+    }
+
     stamp(value) {
       if (!value) return '-'
       const date = new Date(value)
@@ -48,14 +71,17 @@
   }
 </script>
 
+{#if state.row}
+  <db-audit-view :id="state.row" />
+{:else}
 <section class="card">
   <div class="card-header">
     <h3 class="section-title">Operator audit</h3>
     <div class="card-actions audit-filters">
-      <select onchange="fez.setFilter('app', this.value)">
+      <select fez:this="appNode" onchange="fez.setFilter('app', this.value)">
         <option value="">All apps</option>
         {#each state.apps as app}
-          <option value={app.name} selected={state.app === app.name}>{app.name}</option>
+          <option value={app.name}>{app.name}</option>
         {/each}
       </select>
       <input type="text" placeholder="Actor" value={state.actor} oninput="fez.setFilter('actor', this.value)" />
@@ -77,20 +103,28 @@
       <span class="subheader">Actor</span>
       <span class="subheader">Action</span>
       <span class="subheader">App</span>
-      <span class="subheader">Detail</span>
       <span class="subheader">Result</span>
     </div>
     {#each state.rows as row}
-      <div class="audit-row" data-result={row.result}>
-        <span class="service-value">{stamp(row.time)}</span>
-        <span class="service-name">{row.actor}</span>
-        <span>{row.action}</span>
-        <span class="service-value">{row.app || '-'}</span>
-        <span class="audit-detail">{row.detail || '-'}</span>
-        <span class="badge" class:badge-danger={row.result !== 'ok'}>{row.result}{#if row.error}: {row.error}{/if}</span>
+      <div class="audit-entry" class:audit-entry-open={state.open[row.id]}>
+        <div class="audit-row audit-row-click" data-result={row.result} onclick="fez.open({row.id})">
+          <span class="service-value">{stamp(row.time)}</span>
+          <span class="service-name">{row.actor}</span>
+          <span>{row.action}</span>
+          <span class="service-value">{row.app || '-'}</span>
+          <span class="badge" class:badge-danger={row.result !== 'ok'}><span>{row.result}</span></span>
+        </div>
+        <div class="audit-sub" onclick="fez.toggle({row.id})">
+          <button class="audit-caret" type="button" aria-expanded={state.open[row.id] ? 'true' : 'false'}>&#9656;</button>
+          <span class="audit-detail">{row.detail || '-'}</span>
+          {#if row.error}
+            <span class="audit-sub-error">{row.error}</span>
+          {/if}
+        </div>
       </div>
     {:else}
       <div class="audit-row audit-empty text-muted">No audit rows match.</div>
     {/each}
   </div>
 </section>
+{/if}

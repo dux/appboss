@@ -854,28 +854,120 @@ input[type="radio"] {
 
 .audit-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) minmax(90px, 0.8fr) minmax(80px, 0.7fr) minmax(120px, 1.4fr) minmax(120px, 1.2fr);
+  grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) minmax(90px, 0.9fr) minmax(80px, 0.7fr) minmax(90px, 0.7fr);
   align-items: center;
   gap: 12px;
+}
+
+.audit-head,
+.audit-entry,
+.audit-empty {
   padding: 8px 0;
   border-top: 1px solid var(--border);
 }
 
-.audit-row:first-child {
+.audit-head {
   border-top: 0;
 }
 
-.audit-detail {
+/* Every cell of the top line stops at 30 characters; the detail below it truncates on width.
+   The result badge is a flex box, so its text needs the rule too or the ellipsis never renders. */
+.audit-row > span,
+.audit-row .badge > span {
+  max-width: 30ch;
   overflow: hidden;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--text-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.audit-row-click {
+  cursor: pointer;
+}
+
+.audit-row-click:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* Second line of an entry: caret plus the detail, with the error under it once expanded. */
+.audit-sub {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 8px;
+  padding-top: 4px;
+  cursor: pointer;
+}
+
+.audit-caret {
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: none;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.audit-entry-open .audit-caret {
+  transform: rotate(90deg);
+}
+
+.audit-detail {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+}
+
+.audit-entry:not(.audit-entry-open) .audit-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-entry-open .audit-detail,
+.audit-sub-error {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.audit-sub-error {
+  grid-column: 2;
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+}
+
+.audit-entry:not(.audit-entry-open) .audit-sub-error {
+  display: none;
+}
+
 .audit-empty {
   display: block;
+}
+
+.audit-view-grid {
+  padding: 12px 20px 4px;
+}
+
+.audit-view-block {
+  display: grid;
+  gap: 6px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.audit-view-text {
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.audit-view-error {
+  color: var(--danger);
 }
 
 .alert {
