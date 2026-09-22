@@ -167,7 +167,7 @@
     <div class="app-identity">
       <h3 class="app-name">{props.app.name}</h3>
       {#if state.serviceUrl}
-        <a class="service-link" href={state.serviceUrl} target="_blank" rel="noreferrer">{state.serviceUrl}<svg class="icon"><use href="#i-external"></use></svg></a>
+        <a class="service-link" href={state.serviceUrl} target="_blank" rel="noreferrer"><span class="service-url">{state.serviceUrl}</span><svg class="icon"><use href="#i-external"></use></svg></a>
       {:else}
         <span class="service-host">No hosts configured</span>
       {/if}

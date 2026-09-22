@@ -549,15 +549,24 @@ input[type="radio"] {
 
 .service-link,
 .service-host {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   font-family: var(--mono);
   font-size: var(--text-size-small);
 }
 
 .service-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
   text-decoration: none;
+}
+
+.service-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .service-link:hover {
@@ -568,10 +577,15 @@ input[type="radio"] {
 .service-link .icon {
   width: 14px;
   height: 14px;
+  flex: 0 0 auto;
 }
 
 .service-host {
+  display: block;
+  overflow: hidden;
   color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-stats {
@@ -1358,7 +1372,7 @@ input[type="radio"] {
 .editor {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  height: 460px;
+  min-height: 240px;
   background: var(--card);
 }
 

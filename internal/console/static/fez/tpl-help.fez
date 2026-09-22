@@ -22,6 +22,7 @@
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
         { id: 'hooks', title: 'Deploy hooks', summary: 'Commands a signed HTTP ping triggers, plus one-off exec.' },
+        { id: 'previews', title: 'GitHub PR previews', summary: 'One built-in host hook turns a branch into a short-lived app, with teardown on close.' },
         { id: 'pubsub', title: 'PubSub', summary: 'Realtime channels over WebSocket and SSE on the app hosts.' },
         { id: 'audit', title: 'Audit & history', summary: 'Who did what, and every saved config revision.' },
         { id: 'health', title: 'Health & metrics', summary: 'Health endpoints, Prometheus metrics and the doctor preflight.' },
@@ -147,6 +148,29 @@
         timeout: 10m
         restart: true
         overlap: false
+    `,
+    previews: `
+    # host file: one built-in hook, github_pr
+    hooks:
+      github_pr:
+        # secret: $GITHUB_WEBHOOK_SECRET   # generated under state_dir when omitted
+        repo: https://github.com/owner/repo.git   # fallback when the ping omits repo
+        setup:
+          command: ./bin/setup.sh   # after checkout, before start
+          timeout: 3m
+        drop_database_on_close: false
+        template:
+          name: $QS_BRANCH
+          hosts: [pr-$QS_BRANCH.example.com]
+          autostart: false
+          deletable: true
+          pg_db:
+            db_url: \${QS_BRANCH}_db
+          procfile:
+            web: {command: ./start.sh, health: /up}
+    `,
+    previewsPing: `
+    curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=\${{ github.event.action }}&branch=\${{ github.head_ref }}&repo=\${{ github.event.pull_request.head.repo.clone_url }}&num=\${{ github.event.number }}"
     `,
     pubsub: `
     procfile:
@@ -555,6 +579,36 @@
       </section>
     {/if}
 
+    {#if state.topic === 'previews'}
+      <section>
+        <h2>GitHub PR previews</h2>
+        <p>One built-in host hook, <code>github_pr</code>, turns a branch into a short-lived app. A Git host webhook pings <code>https://&#60;management.host&#62;/hooks/github_pr</code>; dboss checks out the branch, writes an app config from a <code>template</code>, runs <code>setup</code> and starts it. The close action stops it, drops its databases and removes the checkout - no runner and no SSH deploy script.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>A live URL per pull request on the box that already runs the apps: every open PR gets its own app, hosts and databases.</li>
+          <li>Fitting many previews on one host: <code>autostart: false</code> keeps a preview down until its first request, so only the ones in use hold memory.</li>
+          <li>Seeded preview databases from a template, thrown away when the PR closes.</li>
+          <li>Clean teardown, with no orphaned processes or checkouts left behind.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-previews"><db-config-keys paths="hooks,github_token,management.host" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.previews" />
+        <p>The ping carries the branch and a few query params; a GitHub Action step sends them straight from the event:</p>
+        <db-preview-yaml :text="state.examples.previewsPing" lang="text" />
+        <h3>Details</h3>
+        <ul>
+          <li>The hook is host-level: <code>hooks.github_pr</code> in the root <code>dboss.yaml</code>, not under an app. One path segment is a host hook and two are an app hook, so its URL is <code>/hooks/github_pr</code>.</li>
+          <li><code>action</code>, <code>branch</code>, <code>repo</code> and <code>num</code> become <code>QS_ACTION</code>, <code>QS_BRANCH</code>, <code>QS_REPO</code> and <code>QS_NUM</code> for the hook; <code>repo</code> falls back to the hook's own <code>repo</code>.</li>
+          <li><code>action=closed</code> stops the app, drops its <code>pg_db</code> databases when <code>drop_database_on_close</code> is true, and removes the checkout. Any other action checks out the branch tip, writes the app from <code>template</code>, runs <code>setup</code> (default timeout 3m; a non-zero exit fails the deploy) and starts it.</li>
+          <li><code>template</code> is an app file with <code>$VAR</code> and <code>$&#123;VAR&#125;</code> interpolation. Its <code>name</code> is required and names the app folder and database prefix; <code>main</code> and <code>development</code> are refused.</li>
+          <li>A value in <code>hosts</code> or <code>canonical_host</code> is sanitized as a DNS label (<code>/</code> and <code>_</code> become <code>-</code>); everywhere else it is an identifier (<code>/</code> becomes <code>_</code>). A top-level <code>hosts</code> is the default for every procfile entry that declares none.</li>
+          <li>A private <code>repo</code> over HTTPS is pulled with <code>github_token</code>; a fork PR works because the ping passes the head repo's clone URL. Pings for one branch run one at a time, while different branches deploy in parallel.</li>
+          <li>Every step is audited under actor <code>hook:github_pr</code>. The preview is a normal app, so the console, <code>dboss ls</code>, the request log and <code>/metrics</code> all see it.</li>
+        </ul>
+      </section>
+    {/if}
+
     {#if state.topic === 'pubsub'}
       <section>
         <h2>PubSub</h2>
@@ -697,7 +751,7 @@
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
           <li><code>pg_db</code> lives in the app's own file. Each key is uppercased to make the variable name, so <code>db_main</code> becomes <code>DB_MAIN</code>. A database that does not exist yet is created.</li>
           <li>A value is either a database name or a full <code>postgres://</code> URL; a name has no scheme, so the two can never be confused. A name lives on this host's server and dboss builds the URL from that connection, so the app connects as whatever identity dboss connects as, and every app using a bare name shares it.</li>
-          <li>A <code>{database, template}</code> mapping starts the database as a copy of another one on the same server, through <code>CREATE DATABASE &#60;database&#62; TEMPLATE &#60;template&#62;</code> - a seeded throwaway environment in seconds instead of one built from scratch each deploy. The template is read only when dboss creates the database, so changing it later does nothing. PostgreSQL copies a template only while nothing is connected to it, so a session left open on it fails the start; <code>datallowconn = false</code> on a template nobody should connect to makes that impossible.</li>
+          <li>A <code>&#123;database, template&#125;</code> mapping starts the database as a copy of another one on the same server, through <code>CREATE DATABASE &#60;database&#62; TEMPLATE &#60;template&#62;</code> - a seeded throwaway environment in seconds instead of one built from scratch each deploy. The template is read only when dboss creates the database, so changing it later does nothing. PostgreSQL copies a template only while nothing is connected to it, so a session left open on it fails the start; <code>datallowconn = false</code> on a template nobody should connect to makes that impossible.</li>
           <li>A URL lives wherever it says. dboss creates the database on that server and passes the URL through exactly as written, so a password or an option in it survives. Keep credentials out of the committed file with <code>$REPORTS_URL</code> or <code>dboss.local.yaml</code>. A managed provider usually will not let you create a database, so create it there first and dboss just passes the URL on.</li>
           <li>Web processes, workers, cron jobs, hooks and <code>dboss exec</code> all get the variables, injected like <code>PORT</code>, so they win over <code>env:</code> and over <code>.env</code>. While this host's server is unreachable, an app with <code>pg_db</code> refuses to start and retries under its restart policy, even when every entry is a URL pointing elsewhere.</li>
           <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
