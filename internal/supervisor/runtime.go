@@ -38,6 +38,9 @@ const (
 	requestHooks
 	requestExecInfo
 	requestDrain
+	requestProcessStart
+	requestProcessStop
+	requestProcessRestart
 )
 
 type request struct {
@@ -101,11 +104,14 @@ type appRuntime struct {
 	created     bool
 	markCreated func(string)
 	// host is the live host config, for the keys a rescan may change (tokens).
-	host             func() config.Config
-	sink             notify.Sink
-	restart          func(string) error
-	failures         map[string]int
-	ready            map[string]bool
+	host     func() config.Config
+	sink     notify.Sink
+	restart  func(string) error
+	failures map[string]int
+	ready    map[string]bool
+	// held are the processes the operator stopped on their own; the restart policy leaves them
+	// down until a process start or the next app start.
+	held             map[string]bool
 	lastActivity     time.Time
 	lastError        string
 	lastErrorProcess string
@@ -173,6 +179,15 @@ func (a *appRuntime) handle(req request) response {
 			return response{err: err}
 		}
 		return response{err: a.start()}
+	case requestProcessStart:
+		return response{err: a.startProcess(req.processName)}
+	case requestProcessStop:
+		return response{err: a.stopProcess(req.processName, true)}
+	case requestProcessRestart:
+		if err := a.stopProcess(req.processName, false); err != nil {
+			return response{err: err}
+		}
+		return response{err: a.startProcess(req.processName)}
 	case requestSnapshot:
 		return response{snapshot: a.snapshot()}
 	case requestLogs:
@@ -234,6 +249,7 @@ func (a *appRuntime) start() error {
 	}
 	a.failures = map[string]int{}
 	a.ready = map[string]bool{}
+	a.held = map[string]bool{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
 	return a.continueStart("")
 }
@@ -390,6 +406,12 @@ func (a *appRuntime) stopProcesses() error {
 	for name := range a.processes {
 		names = append(names, name)
 	}
+	return a.killProcesses(names)
+}
+
+// killProcesses signals every named live process, waits up to the longest stop_timeout and
+// kills what is left, so one process and the whole app stop the same way.
+func (a *appRuntime) killProcesses(names []string) error {
 	var first error
 	for _, name := range names {
 		p := a.processes[name]
@@ -409,4 +431,48 @@ func (a *appRuntime) stopProcesses() error {
 		a.cleanupProcess(name)
 	}
 	return first
+}
+
+// startProcess spawns one procfile process of a live app. A process that is already running is
+// left alone; a stopped app is started as a whole, never one process at a time.
+func (a *appRuntime) startProcess(name string) error {
+	if _, ok := a.spec.Commands[name]; !ok {
+		return fmt.Errorf("unknown process %q", name)
+	}
+	if a.state != Running && a.state != Starting {
+		return fmt.Errorf("%s is %s; start the app first", a.spec.Name, a.state)
+	}
+	delete(a.held, name)
+	if a.processes[name] != nil {
+		return nil
+	}
+	a.failures[name] = 0
+	if err := a.spawnOne(name); err != nil {
+		return err
+	}
+	if a.spec.Config.IsWeb(name) {
+		go a.monitor(a.processes[name], a.spec.Config.Process(name), a.webHost(name))
+	}
+	return nil
+}
+
+// stopProcess stops one process. hold keeps it down against the restart policy; a restart passes
+// false because it spawns the process again right away. The app reads as stopped once nothing
+// of it is left running.
+func (a *appRuntime) stopProcess(name string, hold bool) error {
+	if _, ok := a.spec.Commands[name]; !ok {
+		return fmt.Errorf("unknown process %q", name)
+	}
+	if hold {
+		a.held[name] = true
+	}
+	delete(a.ready, name)
+	if a.processes[name] == nil {
+		return nil
+	}
+	err := a.killProcesses([]string{name})
+	if hold && len(a.processes) == 0 && (a.state == Running || a.state == Starting) {
+		a.state = Stopped
+	}
+	return err
 }

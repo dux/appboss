@@ -164,7 +164,7 @@ func selectCgroup() res.Backend {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, host: m.HostConfig, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, host: m.HostConfig, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, held: map[string]bool{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	m.desiredMu.Lock()
@@ -226,6 +226,29 @@ func (m *Manager) Restart(name string) error {
 		return err
 	}
 	return m.setDesired(name, true)
+}
+
+// StartProcess, StopProcess and RestartProcess act on one procfile process of a live app. A
+// stopped process stays down until it is started again or the whole app starts; none of them
+// changes whether the app itself is desired.
+func (m *Manager) StartProcess(name, process string) error {
+	return m.processCall(name, process, requestProcessStart)
+}
+
+func (m *Manager) StopProcess(name, process string) error {
+	return m.processCall(name, process, requestProcessStop)
+}
+
+func (m *Manager) RestartProcess(name, process string) error {
+	return m.processCall(name, process, requestProcessRestart)
+}
+
+func (m *Manager) processCall(name, process string, kind requestKind) error {
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	return runtime.call(request{kind: kind, processName: process})
 }
 
 // Destroy permanently removes an opted-in app from the host. It shuts down every process and

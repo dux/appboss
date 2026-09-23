@@ -34,6 +34,7 @@
       const port = this.globalState.appPort
       this.state.serviceUrl = host && scheme ? `${scheme}://${host}${port ? `:${port}` : ''}` : ''
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
+      this.state.live = app.state === 'running' || app.state === 'starting'
       this.state.processes = app.processes || []
       this.state.cron = app.cron || []
       this.state.hooks = (app.hooks || []).map((hook) => ({ ...hook, url: this.state.hookMeta[hook.name]?.url || '' }))
@@ -78,6 +79,16 @@
       this.state.pending = true
       try {
         await Dboss.runAction(this.props.app.name, action)
+      } finally {
+        this.state.pending = false
+      }
+    }
+
+    // Same as act, narrowed to one procfile process; the rest of the app keeps running.
+    async actProcess(action, name) {
+      this.state.pending = true
+      try {
+        await Dboss.runAction(this.props.app.name, action, { process: name })
       } finally {
         this.state.pending = false
       }
@@ -186,7 +197,8 @@
       {/if}
     </div>
     <div class="btn-list app-actions">
-      <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="/#/logs?app={props.app.name}" target="_blank" rel="noreferrer" />
+      <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="#/logs?app={props.app.name}" />
+      <ui-btn class="btn-sm" icon="i-activity" label="Traffic" href="#/traffic?app={props.app.name}" title="Request traffic for this app" />
       <ui-btn class="btn-sm" icon="i-settings" label="Config" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml" />
       <ui-btn class="btn-sm {props.app.maintenance ? 'btn-warning' : ''}" icon="i-tool" label={props.app.maintenance ? 'End maintenance' : 'Maintenance'} onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" disabled={state.pending} title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'} />
       <ui-btn class="btn-sm" icon="i-play" label="Start" onclick="fez.act('start')" disabled={state.pending || props.app.state === 'running' || props.app.state === 'starting'} />
@@ -227,6 +239,7 @@
       <span class="subheader">PID</span>
       <span class="subheader">Restarts</span>
       <span class="subheader">Memory</span>
+      <span></span>
     </div>
     {#each state.processes as process}
       <div class="service-row" data-state={process.state}>
@@ -236,6 +249,11 @@
         <span class="service-value">{process.pid || '-'}</span>
         <span class="service-value">{process.restarts || 0}</span>
         <span class="service-value">{bytes(process.memory_bytes)}</span>
+        <span class="service-actions">
+          <ui-btn class="btn-sm btn-icon" icon="i-play" onclick="fez.actProcess('start', '{process.name}')" disabled={state.pending || !state.live || process.state === 'running'} title="Start {process.name}" />
+          <ui-btn class="btn-sm btn-icon" icon="i-rotate" onclick="fez.actProcess('restart', '{process.name}')" disabled={state.pending || process.state !== 'running'} title="Restart {process.name}" />
+          <ui-btn class="btn-sm btn-icon btn-outline-danger" icon="i-stop" onclick="fez.actProcess('stop', '{process.name}')" disabled={state.pending || process.state !== 'running'} title="Stop {process.name}" />
+        </span>
       </div>
     {:else}
       <div class="service-row service-empty text-muted">No services in the procfile</div>

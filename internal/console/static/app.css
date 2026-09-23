@@ -363,11 +363,6 @@ code {
   box-shadow: none;
 }
 
-/* A span, an anchor or a label has no native disabled state, so the attribute stops the click. */
-.btn[disabled] {
-  pointer-events: none;
-}
-
 .btn-primary {
   border-color: var(--primary);
   color: #fff;
@@ -708,7 +703,7 @@ input[type="radio"] {
 
 .service-row {
   display: grid;
-  grid-template-columns: var(--row-label) repeat(5, minmax(0, 1fr));
+  grid-template-columns: var(--row-label) repeat(5, minmax(0, 1fr)) auto;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -827,10 +822,15 @@ input[type="radio"] {
   white-space: nowrap;
 }
 
-.hook-actions {
+.hook-actions,
+.service-actions {
   display: flex;
   justify-self: start;
   gap: 6px;
+}
+
+.service-actions {
+  justify-self: end;
 }
 
 /* --- Audit list (one row per operator action) ------------------------------ */
@@ -2069,6 +2069,60 @@ textarea.sql-editor {
   .help-nav-title { flex-basis: 100%; }
 
   .help-cmd { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* One shared box for every [title]; db-tooltip places it above, or below when the top clips. */
+.tooltip {
+  --tooltip-bg: #1f2937;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 40;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: #fff;
+  background: var(--tooltip-bg);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms;
+}
+
+.tooltip.measure {
+  transition: none;
+}
+
+.tooltip[data-place="top"] { transform: translateY(3px); }
+.tooltip[data-place="bottom"] { transform: translateY(-3px); }
+
+.tooltip.show {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.tooltip::after {
+  content: "";
+  position: absolute;
+  left: var(--arrow-x, 50%);
+  margin-left: -6px;
+  border: 6px solid transparent;
+}
+
+.tooltip[data-place="top"]::after {
+  top: 100%;
+  border-top-color: var(--tooltip-bg);
+}
+
+.tooltip[data-place="bottom"]::after {
+  bottom: 100%;
+  border-bottom-color: var(--tooltip-bg);
 }
 
 .toast {

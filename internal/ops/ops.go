@@ -74,6 +74,9 @@ type Runtime interface {
 	Start(name string) error
 	Stop(name string) error
 	Restart(name string) error
+	StartProcess(name, process string) error
+	StopProcess(name, process string) error
+	RestartProcess(name, process string) error
 	Destroy(name string) error
 	SetMaintenance(name string, on bool) error
 	RunCron(name, job string) error
@@ -222,11 +225,11 @@ func (s *Service) dispatch(request Request) (any, error) {
 	case ActionStatus:
 		return s.app(request.App)
 	case ActionStart:
-		return nil, s.start(request.App)
+		return nil, s.start(request.App, request.Process)
 	case ActionStop:
-		return nil, s.stop(request.App)
+		return nil, s.stop(request.App, request.Process)
 	case ActionRestart:
-		return nil, s.restart(request.App)
+		return nil, s.restart(request.App, request.Process)
 	case ActionDestroy:
 		return nil, s.destroy(request.App)
 	case ActionMaintenance:
@@ -321,6 +324,8 @@ func (s *Service) auditRequest(request Request, err error) {
 
 func auditDetail(request Request) string {
 	switch request.Method {
+	case ActionStart, ActionStop, ActionRestart:
+		return request.Process
 	case ActionMaintenance:
 		if request.On {
 			return "on"

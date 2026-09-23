@@ -25,10 +25,13 @@ func (f *fakeRuntime) Snapshots() []supervisor.Snapshot {
 func (f *fakeRuntime) Snapshot(string) (supervisor.Snapshot, error) {
 	return supervisor.Snapshot{}, errors.New("unknown app")
 }
-func (f *fakeRuntime) Start(name string) error { f.started = append(f.started, name); return nil }
-func (f *fakeRuntime) Stop(string) error       { return nil }
-func (f *fakeRuntime) Restart(string) error    { return nil }
-func (f *fakeRuntime) Destroy(string) error    { return nil }
+func (f *fakeRuntime) Start(name string) error             { f.started = append(f.started, name); return nil }
+func (f *fakeRuntime) Stop(string) error                   { return nil }
+func (f *fakeRuntime) Restart(string) error                { return nil }
+func (f *fakeRuntime) StartProcess(string, string) error   { return nil }
+func (f *fakeRuntime) StopProcess(string, string) error    { return nil }
+func (f *fakeRuntime) RestartProcess(string, string) error { return nil }
+func (f *fakeRuntime) Destroy(string) error                { return nil }
 func (f *fakeRuntime) SetMaintenance(string, bool) error {
 	return nil
 }

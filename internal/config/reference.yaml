@@ -125,7 +125,7 @@ proxy:
   # selected by management.host.
   # Set to "" to disable the proxy entirely (supervisor-only mode).
   # A dev session ignores it: its proxy takes a free port from ports, or :80 with
-  # `dboss start --root`.
+  # `dboss start --https`.
   listen: ":80"
 
   # The box sits behind Cloudflare: only Cloudflare's published ranges
@@ -141,10 +141,10 @@ proxy:
   # cannot exhaust the authority's rate limit. Certificates are cached under dir/state/acme and
   # renewed automatically, and plain http redirects to https. Leave listen empty to keep TLS at the
   # edge (Cloudflare).
-  # A dev session (dboss start in an app folder) never uses ACME and ignores listen: it serves
-  # HTTPS on a free port from ports (:443 with `dboss start --root`) with certificates from a
-  # local authority in the user config directory, and plain http stays on. `dboss trust` adds
-  # that root to the system store.
+  # A dev session (dboss start in an app folder) never uses ACME and ignores listen: only
+  # `dboss start --https` serves HTTPS, on :443, with certificates from a local authority in the
+  # user config directory, and plain http stays on at :80. `dboss trust` adds that root to the
+  # system store.
   tls:
     # Address of the HTTPS listener. Empty disables built-in TLS.
     listen: ""              # e.g. ":443"

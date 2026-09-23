@@ -27,19 +27,19 @@ func (c CLI) start(args []string) error {
 	configPath := configFlag(set)
 	login := set.Bool("login", false, "print a one-time console sign-in link")
 	yes := set.Bool("y", false, "start the apps without waiting for ENTER")
-	root := set.Bool("root", false, "dev session: listen on :80 and :443 instead of free ports")
+	https := set.Bool("https", false, "dev session: listen on :80 and :443 with the local certificate authority instead of a free http port")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: dboss start [-c path] [--login] [-y] [--root]")
+		return errors.New("usage: dboss start [-c path] [--login] [-y] [--https]")
 	}
 	cfg, err := loadHostConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	if *root && !cfg.Dev() {
-		return errors.New("--root is for a dev session; a host listens on proxy.listen")
+	if *https && !cfg.Dev() {
+		return errors.New("--https is for a dev session; a host serves HTTPS through proxy.tls")
 	}
 	var echo *supervisor.Echo
 	if info, statErr := os.Stdout.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
@@ -48,11 +48,11 @@ func (c CLI) start(args []string) error {
 			echo.Solo()
 		}
 		warnUnignoredRuntime(c.Err, cfg)
-		if cfg.Dev() {
+		if *https {
 			c.offerTrust()
 		}
 	}
-	session, err := daemon.Build(cfg, echo, daemon.Options{Root: *root})
+	session, err := daemon.Build(cfg, echo, daemon.Options{HTTPS: *https})
 	if err != nil {
 		return err
 	}

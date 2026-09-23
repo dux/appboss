@@ -126,7 +126,7 @@ func (a *appRuntime) handleEvent(event processEvent) {
 		a.emit(notify.HealthTimeout, a.lastError)
 		_ = syscall.Kill(-event.proc.pid, syscall.SIGKILL)
 	case "restart":
-		if a.state != Running && a.state != Starting || a.processes[name] != nil {
+		if a.state != Running && a.state != Starting || a.processes[name] != nil || a.held[name] {
 			return
 		}
 		if a.spawnOne(name) == nil && a.spec.Config.IsWeb(name) {
@@ -141,7 +141,7 @@ func (a *appRuntime) processExited(event processEvent) {
 	name := event.proc.name
 	a.cleanupProcess(name)
 	delete(a.ready, name)
-	if a.state == Stopping || a.state == Stopped {
+	if a.state == Stopping || a.state == Stopped || a.held[name] {
 		return
 	}
 	defaults := a.spec.Config.Process(name)

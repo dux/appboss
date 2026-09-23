@@ -92,6 +92,8 @@ type actionRequest struct {
 	App    string `json:"app"`
 	Action string `json:"action"`
 	Job    string `json:"job,omitempty"`
+	// Process narrows start, stop and restart to one procfile process.
+	Process string `json:"process,omitempty"`
 }
 
 func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store ConfigStore, sys SysReader) (*Handler, error) {

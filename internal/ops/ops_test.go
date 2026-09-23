@@ -51,6 +51,21 @@ func (f *fakeRuntime) Restart(name string) error {
 	return nil
 }
 
+func (f *fakeRuntime) StartProcess(name, process string) error {
+	f.actions = append(f.actions, "start "+name+"/"+process)
+	return nil
+}
+
+func (f *fakeRuntime) StopProcess(name, process string) error {
+	f.actions = append(f.actions, "stop "+name+"/"+process)
+	return nil
+}
+
+func (f *fakeRuntime) RestartProcess(name, process string) error {
+	f.actions = append(f.actions, "restart "+name+"/"+process)
+	return nil
+}
+
 func (f *fakeRuntime) Destroy(name string) error {
 	f.actions = append(f.actions, "destroy "+name)
 	return f.destroyErr
@@ -128,6 +143,9 @@ func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
 		{Request{Method: ActionStart, App: "sinatra"}, "start sinatra"},
 		{Request{Method: ActionStop, App: "sinatra"}, "stop sinatra"},
 		{Request{Method: ActionRestart, App: "sinatra"}, "restart sinatra"},
+		{Request{Method: ActionStart, App: "sinatra", Process: "job"}, "start sinatra/job"},
+		{Request{Method: ActionStop, App: "sinatra", Process: "job"}, "stop sinatra/job"},
+		{Request{Method: ActionRestart, App: "sinatra", Process: "job"}, "restart sinatra/job"},
 		{Request{Method: ActionDestroy, App: "sinatra"}, "destroy sinatra"},
 		{Request{Method: ActionMaintenance, App: "sinatra", On: true}, "maintenance sinatra"},
 		{Request{Method: ActionRescan}, "rescan"},
@@ -363,6 +381,12 @@ func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
 	entry = store.rows[2]
 	if entry.Actor != "bob" || entry.Action != ActionDestroy || entry.Result != "ok" {
 		t.Fatalf("destroy audit = %+v", entry)
+	}
+	if _, err := service.Do(Request{Method: ActionRestart, App: "sinatra", Process: "job"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.rows[3].Detail; got != "job" {
+		t.Fatalf("process detail = %q", got)
 	}
 
 	failing := New(&fakeRuntime{startErr: errors.New("port busy")}, store, nil, nil, nil, nil)

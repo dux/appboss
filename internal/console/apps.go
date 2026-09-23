@@ -116,7 +116,12 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, session authSes
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, On: on, Job: strings.TrimSpace(request.Job), Actor: session.Email}); err != nil {
+	process := strings.TrimSpace(request.Process)
+	if process != "" && method != ops.ActionStart && method != ops.ActionStop && method != ops.ActionRestart {
+		writeError(w, http.StatusBadRequest, "process applies to start, stop and restart only")
+		return
+	}
+	if _, err := h.service.Do(ops.Request{Method: method, App: request.App, Process: process, On: on, Job: strings.TrimSpace(request.Job), Actor: session.Email}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

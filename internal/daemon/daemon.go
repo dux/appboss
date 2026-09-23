@@ -62,8 +62,9 @@ type Daemon struct {
 
 // Options are the start flags of a hand-run session.
 type Options struct {
-	// Root binds a dev session's proxy on :80 and its HTTPS on :443 instead of free ports.
-	Root bool
+	// HTTPS binds a dev session's proxy on :80 and adds HTTPS on :443 with certificates from the
+	// local authority, instead of plain http on a free port.
+	HTTPS bool
 }
 
 // netListen is the test seam for the privileged-port fallback: a test cannot provoke a real
@@ -169,7 +170,7 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 			d.Close()
 			return nil, err
 		}
-		if err := d.startDevProxy(edge, allocator, opts.Root); err != nil {
+		if err := d.startDevProxy(edge, allocator, opts.HTTPS); err != nil {
 			d.Close()
 			return nil, err
 		}
@@ -408,39 +409,33 @@ func bindProxy(name, key, address, process string, allocator *ports.Allocator, i
 	return listener, fallback, nil
 }
 
-// startDevProxy serves a dev session on the next free ports, plain http and then HTTPS, or on
-// :80 and :443 when the start asked for them. The plain listener is required; HTTPS is a
-// convenience, so it only logs when the authority is unavailable or a free port did not bind.
-func (d *Daemon) startDevProxy(edge http.Handler, allocator *ports.Allocator, root bool) error {
-	address, err := devAddress(allocator, "proxy", ":80", root)
+// startDevProxy serves a dev session's plain http on the next free port, or with --https on :80
+// plus HTTPS on :443. Both addresses are asked for exactly, so a failed bind is an error.
+func (d *Daemon) startDevProxy(edge http.Handler, allocator *ports.Allocator, https bool) error {
+	address, err := devAddress(allocator, "proxy", ":80", https)
 	if err != nil {
 		return err
 	}
-	listener, err := devBind("proxy", address, root)
+	listener, err := devBind("proxy", address, https)
 	if err != nil {
 		return err
 	}
 	d.servers = append(d.servers, startHTTPServer("proxy", listener, edge))
 	d.listen = append(d.listen, address)
+	if !https {
+		return nil
+	}
 	dir, err := devCADir()
 	if err == nil {
 		d.devTLS, err = devtls.Open(dir)
 	}
 	if err != nil {
-		logx.Warnf("dev https: %v", err)
-		return nil
+		return fmt.Errorf("dev https: %w", err)
 	}
-	address, err = devAddress(allocator, "proxy-tls", ":443", root)
-	if err == nil {
-		listener, err = devBind("dev https", address, root)
-	}
+	listener, err = devBind("dev https", ":443", https)
 	if err != nil {
 		d.devTLS = nil
-		if root {
-			return err
-		}
-		logx.Warnf("dev https: %v", err)
-		return nil
+		return err
 	}
 	d.servers = append(d.servers, startHTTPSServer("dev-https", listener, edge, d.devTLS.TLSConfig()))
 	d.devHTTPS = listener.Addr().String()
@@ -448,9 +443,9 @@ func (d *Daemon) startDevProxy(edge http.Handler, allocator *ports.Allocator, ro
 	return nil
 }
 
-// devAddress is where a dev listener goes: the fixed port under --root, else a claimed one.
-func devAddress(allocator *ports.Allocator, process, fixed string, root bool) (string, error) {
-	if root {
+// devAddress is where a dev listener goes: the fixed port under --https, else a claimed one.
+func devAddress(allocator *ports.Allocator, process, fixed string, https bool) (string, error) {
+	if https {
 		return fixed, nil
 	}
 	port, err := allocator.Allocate("dboss", process)
@@ -460,13 +455,13 @@ func devAddress(allocator *ports.Allocator, process, fixed string, root bool) (s
 	return ":" + strconv.Itoa(port), nil
 }
 
-func devBind(name, address string, root bool) (net.Listener, error) {
+func devBind(name, address string, https bool) (net.Listener, error) {
 	listener, err := netListen("tcp", address)
 	if err == nil {
 		return listener, nil
 	}
-	if root {
-		return nil, fmt.Errorf("%s listen %s: %w (dboss start --root needs %s free and, on Linux, root or CAP_NET_BIND_SERVICE; start without --root to use free ports)", name, address, err, address)
+	if https {
+		return nil, fmt.Errorf("%s listen %s: %w (dboss start --https needs %s free and, on Linux, root or CAP_NET_BIND_SERVICE; start without --https to use a free port)", name, address, err, address)
 	}
 	return nil, fmt.Errorf("%s listen %s: %w", name, address, err)
 }

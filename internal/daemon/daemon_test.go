@@ -248,22 +248,43 @@ func TestDevSessionsRunSideBySide(t *testing.T) {
 	_ = response.Body.Close()
 }
 
-// --root asks for :80 and :443 exactly, so a refused bind is an error that names the flag instead
+// --https asks for :80 and :443 exactly, so a refused bind is an error that names the flag instead
 // of a quiet move to a free port.
-func TestDevRootBindsStandardPorts(t *testing.T) {
+func TestDevHTTPSBindsStandardPorts(t *testing.T) {
 	cfg := devConfig(t, devSessions(t))
 	refuseListen(t, ":80")
-	_, err := Build(cfg, nil, Options{Root: true})
-	if err == nil || !strings.Contains(err.Error(), "--root") || !errors.Is(err, syscall.EACCES) {
-		t.Fatalf("error = %v, want the --root hint", err)
+	_, err := Build(cfg, nil, Options{HTTPS: true})
+	if err == nil || !strings.Contains(err.Error(), "--https") || !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("error = %v, want the --https hint", err)
 	}
 }
 
-// A dev session serves the proxy over HTTPS with a leaf from the local authority, so a client
-// that trusts the root completes the handshake for any app host.
+// HTTPS is opt-in: a plain dev start binds only the http proxy.
+func TestDevSessionSkipsHTTPSByDefault(t *testing.T) {
+	session, err := Build(devConfig(t, devSessions(t)), nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if session.devHTTPS != "" || session.devTLS != nil {
+		t.Fatalf("dev https = %q without --https", session.devHTTPS)
+	}
+}
+
+// With --https a dev session serves the proxy over HTTPS with a leaf from the local authority,
+// so a client that trusts the root completes the handshake for any app host.
 func TestDevSessionServesHTTPS(t *testing.T) {
 	cfg := devConfig(t, devSessions(t))
-	session, err := Build(cfg, nil, Options{})
+	// :80 and :443 need root on Linux and may be taken; the test only needs the listeners.
+	original := netListen
+	netListen = func(network, address string) (net.Listener, error) {
+		if address == ":80" || address == ":443" {
+			address = "127.0.0.1:0"
+		}
+		return original(network, address)
+	}
+	t.Cleanup(func() { netListen = original })
+	session, err := Build(cfg, nil, Options{HTTPS: true})
 	if err != nil {
 		t.Fatal(err)
 	}

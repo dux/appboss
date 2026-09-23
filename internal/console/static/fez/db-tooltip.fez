@@ -1,0 +1,77 @@
+<script>
+  class {
+    MOUNT = true
+
+    // Distance from the element, and the margin kept to the viewport edge.
+    GAP = 8
+    EDGE = 8
+    DELAY = 250
+
+    onMount() {
+      this.tip = this.root.querySelector('.tooltip')
+      this.on(document, 'mouseover', (event) => this.enter(event.target))
+      this.on(document, 'focusin', (event) => this.enter(event.target))
+      this.on(document, 'mouseout', (event) => this.leave(event.relatedTarget))
+      this.on(document, 'focusout', () => this.hide())
+      this.on(document, 'mousedown', () => this.hide())
+      this.on(document, 'keydown', (event) => event.key === 'Escape' && this.hide())
+      this.on(window, 'scroll', () => this.hide())
+      this.on(window, 'resize', () => this.hide())
+    }
+
+    // The native title is moved to data-tip on first hover, so the browser never shows its own
+    // box. A component that repaints its title (ui-btn) just gets moved again.
+    enter(target) {
+      const node = target?.closest?.('[title], [data-tip]')
+      if (!node || node === this.anchor) return
+      this.hide()
+      if (node.hasAttribute('title')) {
+        const title = node.getAttribute('title')
+        node.removeAttribute('title')
+        if (title) node.setAttribute('data-tip', title)
+        // an icon-only control would lose its accessible name with the title
+        if (title && !node.textContent.trim() && !node.hasAttribute('aria-label')) node.setAttribute('aria-label', title)
+      }
+      const text = node.getAttribute('data-tip')
+      if (!text) return
+      this.anchor = node
+      this.timer = this.setTimeout(() => this.show(node, text), this.DELAY)
+    }
+
+    leave(next) {
+      if (this.anchor && next && this.anchor.contains(next)) return
+      this.hide()
+    }
+
+    show(node, text) {
+      if (!node.isConnected) return
+      const tip = this.tip
+      tip.textContent = text
+      tip.classList.add('measure')
+      const box = node.getBoundingClientRect()
+      const width = tip.offsetWidth
+      const height = tip.offsetHeight
+      // Above by default; below when the top edge would clip and there is room there.
+      const above = box.top - height - this.GAP >= this.EDGE || box.bottom + height + this.GAP > window.innerHeight - this.EDGE
+      const top = above ? box.top - height - this.GAP : box.bottom + this.GAP
+      const center = box.left + box.width / 2
+      const left = Math.min(Math.max(center - width / 2, this.EDGE), window.innerWidth - width - this.EDGE)
+      // The arrow follows the element's center even when the box is pushed off-center by an edge.
+      const arrow = Math.min(Math.max(center - left, 12), width - 12)
+      tip.style.top = `${Math.round(top)}px`
+      tip.style.left = `${Math.round(left)}px`
+      tip.style.setProperty('--arrow-x', `${Math.round(arrow)}px`)
+      tip.dataset.place = above ? 'top' : 'bottom'
+      tip.classList.remove('measure')
+      tip.classList.add('show')
+    }
+
+    hide() {
+      window.clearTimeout(this.timer)
+      this.anchor = null
+      this.tip?.classList.remove('show')
+    }
+  }
+</script>
+
+<div class="tooltip" role="tooltip" aria-hidden="true"></div>

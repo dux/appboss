@@ -286,7 +286,7 @@ func TestStartAlias(t *testing.T) {
 		t.Fatalf("s does not resolve to start: %+v", cmd)
 	}
 	var out, errOut strings.Builder
-	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"s", "--help"}); code != 0 || !strings.Contains(out.String(), "dboss start [-c path] [--login] [-y] [--root]") || !strings.Contains(out.String(), "Alias: s") {
+	if code := (CLI{Out: &out, Err: &errOut}).Run([]string{"s", "--help"}); code != 0 || !strings.Contains(out.String(), "dboss start [-c path] [--login] [-y] [--https]") || !strings.Contains(out.String(), "Alias: s") {
 		t.Fatalf("s --help: exit %d %s", code, out.String())
 	}
 }

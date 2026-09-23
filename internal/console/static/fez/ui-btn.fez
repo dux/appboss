@@ -51,6 +51,11 @@
         if (props[name] === undefined) root.removeAttribute(name)
       }
       this.copy(...this.PLAIN)
+      // A disabled button still takes hover so its title shows; without the action it is inert.
+      if (disabled) {
+        root.removeAttribute('onclick')
+        root.removeAttribute('href')
+      }
 
       root.className = [this.state.baseClass, 'btn', props.class].filter(Boolean).join(' ')
       root.textContent = props.label || ''

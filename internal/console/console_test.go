@@ -89,6 +89,21 @@ func (m *fakeManager) Restart(app string) error {
 	return nil
 }
 
+func (m *fakeManager) StartProcess(app, process string) error {
+	m.actions = append(m.actions, "start "+app+"/"+process)
+	return nil
+}
+
+func (m *fakeManager) StopProcess(app, process string) error {
+	m.actions = append(m.actions, "stop "+app+"/"+process)
+	return nil
+}
+
+func (m *fakeManager) RestartProcess(app, process string) error {
+	m.actions = append(m.actions, "restart "+app+"/"+process)
+	return nil
+}
+
 func (m *fakeManager) Destroy(app string) error {
 	m.actions = append(m.actions, "destroy "+app)
 	return nil
@@ -369,6 +384,28 @@ func TestConsoleRunsCronJob(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || len(manager.actions) != 1 || manager.actions[0] != "cron-run bun heartbeat" {
 		t.Fatalf("unexpected response: %d %v %s", response.Code, manager.actions, response.Body.String())
+	}
+}
+
+func TestConsoleActsOnOneProcess(t *testing.T) {
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "bun"}}}
+	handler := newTestHandler(t, manager, nil)
+	cookie, session := sessionCookie(t, handler)
+	post := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", "http://dboss.lvh.me:8081")
+		request.Header.Set("X-CSRF-Token", session.CSRF)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := post(`{"app":"bun","action":"stop","process":"job"}`); response.Code != http.StatusOK || len(manager.actions) != 1 || manager.actions[0] != "stop bun/job" {
+		t.Fatalf("unexpected response: %d %v %s", response.Code, manager.actions, response.Body.String())
+	}
+	if response := post(`{"app":"bun","action":"destroy","process":"job"}`); response.Code != http.StatusBadRequest || len(manager.actions) != 1 {
+		t.Fatalf("destroy with a process: %d %v", response.Code, manager.actions)
 	}
 }
 

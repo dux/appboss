@@ -38,9 +38,27 @@ func (s *Service) DiskRefresh(name string) (supervisor.DiskUsage, error) {
 	return diskUsage(usage), nil
 }
 
-func (s *Service) start(name string) error   { return s.runtime.Start(name) }
-func (s *Service) stop(name string) error    { return s.runtime.Stop(name) }
-func (s *Service) restart(name string) error { return s.runtime.Restart(name) }
+// start, stop and restart act on the whole app, or on one of its processes when one is named.
+func (s *Service) start(name, process string) error {
+	if process != "" {
+		return s.runtime.StartProcess(name, process)
+	}
+	return s.runtime.Start(name)
+}
+
+func (s *Service) stop(name, process string) error {
+	if process != "" {
+		return s.runtime.StopProcess(name, process)
+	}
+	return s.runtime.Stop(name)
+}
+
+func (s *Service) restart(name, process string) error {
+	if process != "" {
+		return s.runtime.RestartProcess(name, process)
+	}
+	return s.runtime.Restart(name)
+}
 
 func (s *Service) destroy(name string) error {
 	if err := s.runtime.Destroy(name); err != nil {

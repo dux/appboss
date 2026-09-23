@@ -742,3 +742,70 @@ func startListenerHelperOnPort(t *testing.T, port int) *exec.Cmd {
 	}
 	return cmd
 }
+
+func TestProcessStopHoldsAgainstRestartUntilStarted(t *testing.T) {
+	cfg := supervisorTestConfigApp(t, [2]int{32800, 32820}, "  worker: sleep 60\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.Start("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	pids := func() map[string]int {
+		snapshot, _ := manager.Snapshot("demo")
+		result := map[string]int{}
+		for _, process := range snapshot.Processes {
+			result[process.Name] = process.PID
+		}
+		return result
+	}
+	before := pids()
+
+	if err := manager.StopProcess("demo", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	after := pids()
+	if after["worker"] != 0 || alive(before["worker"]) {
+		t.Fatalf("worker came back after a process stop: %v", after)
+	}
+	if after["web"] != before["web"] {
+		t.Fatalf("stopping the worker touched web: %v -> %v", before, after)
+	}
+	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != Running {
+		t.Fatalf("app state = %s", snapshot.State)
+	}
+
+	if err := manager.StartProcess("demo", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	started := pids()["worker"]
+	if started == 0 || started == before["worker"] {
+		t.Fatalf("worker did not start: %d", started)
+	}
+
+	if err := manager.RestartProcess("demo", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := pids()["worker"]
+	if restarted == 0 || restarted == started || alive(started) {
+		t.Fatalf("worker restart: %d -> %d", started, restarted)
+	}
+
+	if err := manager.StopProcess("demo", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Restart("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, manager, Running)
+	if pids()["worker"] == 0 {
+		t.Fatal("an app restart did not bring the held worker back")
+	}
+	if err := manager.StartProcess("demo", "nope"); err == nil {
+		t.Fatal("unknown process started")
+	}
+}
