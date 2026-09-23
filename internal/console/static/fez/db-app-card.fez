@@ -29,7 +29,10 @@
       const webs = app.web_processes || []
       const primary = webs.find((web) => web.canonical_host) || webs[0]
       const host = ((primary && (primary.canonical_host || (primary.hosts || [])[0])) || (app.hosts || [])[0] || '').replace(/^\*?\./, '')
-      this.state.serviceUrl = host ? `${location.protocol}//${host}${location.port ? `:${location.port}` : ''}` : ''
+      // The proxy's address, not the page's: the console has its own listener.
+      const scheme = this.globalState.appScheme
+      const port = this.globalState.appPort
+      this.state.serviceUrl = host && scheme ? `${scheme}://${host}${port ? `:${port}` : ''}` : ''
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.processes = app.processes || []
       this.state.cron = app.cron || []

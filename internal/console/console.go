@@ -60,6 +60,8 @@ type Handler struct {
 	mux            *http.ServeMux
 	sys            SysReader
 	dev            bool
+	appScheme      string
+	appPort        string
 }
 
 type dashboard struct {
@@ -69,6 +71,8 @@ type dashboard struct {
 	RestartRequired []string              `json:"restart_required"`
 	Capabilities    map[string]bool       `json:"capabilities"`
 	Version         string                `json:"version"`
+	AppScheme       string                `json:"app_scheme"`
+	AppPort         string                `json:"app_port"`
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
@@ -106,6 +110,13 @@ func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store Conf
 		handler.publicHost = cfg.Management.Host[0]
 	}
 	return handler, nil
+}
+
+// SetAppAddress is the scheme and port the proxy serves apps on, so app links point at the
+// proxy and not at the console's own listener. An empty scheme means no proxy is listening.
+// Call it before the console starts serving.
+func (h *Handler) SetAppAddress(scheme, port string) {
+	h.appScheme, h.appPort = scheme, port
 }
 
 // LoginURL mints a one-time link for `dboss login`. It returns the console's loopback

@@ -142,6 +142,8 @@
         this.state.csrf = data.csrf
         this.state.viewer = data.viewer
         this.state.version = data.version || ''
+        this.globalState.appScheme = data.app_scheme || ''
+        this.globalState.appPort = data.app_port || ''
         this.applyApps(data.apps, data.updated_at, data.capabilities)
         this.globalState.restartRequired = data.restart_required || []
       } catch (error) {

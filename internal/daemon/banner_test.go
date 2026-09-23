@@ -43,6 +43,27 @@ func TestBannerPortDropsTheSchemeDefault(t *testing.T) {
 	}
 }
 
+func TestAppAddressIsTheProxyNotTheConsole(t *testing.T) {
+	var tls config.Config
+	tls.Proxy.TLS.Listen = ":443"
+	for _, test := range []struct {
+		name         string
+		cfg          config.Config
+		listen       []string
+		scheme, port string
+	}{
+		{"no proxy", config.Config{}, nil, "", ""},
+		{"claimed dev port", config.Config{}, []string{":3104"}, "http", "3104"},
+		{"default http", config.Config{}, []string{":80"}, "http", ""},
+		{"acme tls", tls, []string{":80"}, "https", ""},
+	} {
+		d := &Daemon{cfg: test.cfg, listen: test.listen}
+		if scheme, port := d.appAddress(); scheme != test.scheme || port != test.port {
+			t.Fatalf("%s: appAddress() = %q, %q, want %q, %q", test.name, scheme, port, test.scheme, test.port)
+		}
+	}
+}
+
 func TestBannerNoteOnlyNamesMaintenance(t *testing.T) {
 	if got := bannerNote(supervisor.Snapshot{State: supervisor.Stopped}); got != "" {
 		t.Fatalf("stopped app note = %q, want none", got)

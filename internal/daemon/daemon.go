@@ -209,6 +209,7 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 		}
 	}
 	if management != nil {
+		management.SetAppAddress(d.appAddress())
 		listener, err := bind("management", managementAddress(managementPort), "ports")
 		if err != nil {
 			d.Close()

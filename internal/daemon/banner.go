@@ -20,11 +20,7 @@ func (d *Daemon) printBanner() {
 	if d.echo == nil || len(d.listen) == 0 {
 		return
 	}
-	scheme := "http"
-	// A dev session keeps plain http on proxy.listen; its HTTPS gets its own row below.
-	if d.cfg.Proxy.TLS.Enabled() && !d.cfg.Dev() {
-		scheme = "https"
-	}
+	scheme, port := d.appAddress()
 	console, note := "", ""
 	switch {
 	case d.management == nil:
@@ -47,9 +43,22 @@ func (d *Daemon) printBanner() {
 		}
 	}
 	d.echo.Print(bannerIntro(d.cfg))
-	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, bannerPort(d.listen[0], scheme), secure, d.echo) {
+	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, port, secure, d.echo) {
 		d.echo.Print(line)
 	}
+}
+
+// appAddress is the scheme and port a browser reaches the apps on through the proxy. A dev
+// session keeps plain http on proxy.listen; its HTTPS gets its own banner row. The scheme is
+// empty when no proxy is listening.
+func (d *Daemon) appAddress() (scheme, port string) {
+	if len(d.listen) == 0 {
+		return "", ""
+	}
+	if d.cfg.Proxy.TLS.Enabled() && !d.cfg.Dev() {
+		return "https", bannerPort(d.cfg.Proxy.TLS.Listen, "https")
+	}
+	return "http", bannerPort(d.listen[0], "http")
 }
 
 // bannerIntro names the build and what this session runs, above the rows.
