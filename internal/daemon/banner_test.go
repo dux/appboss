@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"dboss/internal/config"
 	"dboss/internal/supervisor"
+	"dboss/internal/version"
 )
 
 func TestWebURLCarriesSchemeAndPort(t *testing.T) {
@@ -41,23 +43,22 @@ func TestBannerPortDropsTheSchemeDefault(t *testing.T) {
 	}
 }
 
-func TestStateLabelHintsOnlyOnWebRows(t *testing.T) {
-	stopped := supervisor.Snapshot{State: supervisor.Stopped}
-	if got := stateLabel(stopped, true); got != "stopped, wakes on the first request" {
-		t.Fatalf("web row = %q", got)
+func TestBannerNoteOnlyNamesMaintenance(t *testing.T) {
+	if got := bannerNote(supervisor.Snapshot{State: supervisor.Stopped}); got != "" {
+		t.Fatalf("stopped app note = %q, want none", got)
 	}
-	// Nobody sends a request to a worker, so the wake hint would be a lie there.
-	if got := stateLabel(stopped, false); got != "stopped" {
-		t.Fatalf("worker row = %q", got)
+	if got := bannerNote(supervisor.Snapshot{State: supervisor.Stopped, Maintenance: true}); got != "maintenance" {
+		t.Fatalf("maintenance note = %q", got)
 	}
-	if got := stateLabel(supervisor.Snapshot{State: supervisor.Stopped, WakeButton: true}, true); got != "stopped, needs the start button" {
-		t.Fatalf("button app = %q", got)
+}
+
+func TestBannerIntroNamesVersionAndSession(t *testing.T) {
+	dev := config.Config{Dir: "/src/shop", App: &config.App{}}
+	if got := bannerIntro(dev); got != "dboss "+version.String()+" - dev session for shop:" {
+		t.Fatalf("dev intro = %q", got)
 	}
-	if got := stateLabel(supervisor.Snapshot{State: supervisor.Running, Maintenance: true}, true); got != "maintenance" {
-		t.Fatalf("maintenance should win, got %q", got)
-	}
-	if got := stateLabel(supervisor.Snapshot{State: supervisor.Crashed}, true); got != "crashed" {
-		t.Fatalf("crashed = %q", got)
+	if got := bannerIntro(config.Config{Dir: "/srv/dboss"}); got != "dboss "+version.String()+" - host /srv/dboss:" {
+		t.Fatalf("host intro = %q", got)
 	}
 }
 
@@ -89,6 +90,9 @@ func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "worker") {
 		t.Fatalf("worker row missing its marker: %q", lines[2])
+	}
+	if strings.HasSuffix(lines[2], " ") {
+		t.Fatalf("a row without a note keeps trailing spaces: %q", lines[2])
 	}
 	// The escape codes in a key have no width, so the address column has to line up on the
 	// visible text instead.

@@ -155,7 +155,11 @@ func TestDevSessionAlwaysHasAConsole(t *testing.T) {
 	if !cfg.ConsoleEnabled() {
 		t.Fatal("a dev session should serve the console with no management block")
 	}
-	if got := cfg.ConsoleURL(); got != "http://127.0.0.1:3100" {
+	if got := cfg.ConsoleURL(); got != "" {
+		t.Fatalf("ConsoleURL() = %q before the console is bound", got)
+	}
+	cfg.ConsolePort = 3104
+	if got := cfg.ConsoleURL(); got != "http://127.0.0.1:3104" {
 		t.Fatalf("ConsoleURL() = %q, want the loopback console", got)
 	}
 }

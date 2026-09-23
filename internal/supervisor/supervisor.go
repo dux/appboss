@@ -46,9 +46,11 @@ type Manager struct {
 	inflight        map[string]*atomic.Int64
 	ctx             context.Context
 	cancel          context.CancelFunc
+	bootOnce        sync.Once
+	booted          atomic.Bool
 }
 
-// New discovers the apps and starts the ones that were running before, skipping autostart: false.
+// New discovers the apps and assigns their ports; nothing starts before Boot.
 // A non-nil echo mirrors every process's output to it, which the foreground session uses when
 // attached to a terminal. An optional sink receives crash and failure events.
 func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...notify.Sink) (*Manager, []error, error) {
@@ -96,14 +98,26 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		}
 		m.add(ctx, spec)
 	}
-	for name := range desired {
-		if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart.Starts() {
-			_ = runtime.call(request{kind: requestStart})
-		}
-	}
-	go m.idleLoop(ctx)
-	go m.cronLoop(ctx)
 	return m, invalid, nil
+}
+
+// Boot starts the apps that were running before, skipping autostart: false, and the idle and
+// cron loops. Until then the session only serves: a request gets the starting page instead of
+// waking its app, so a hand-run start can print every address before anything loads.
+func (m *Manager) Boot() {
+	m.bootOnce.Do(func() {
+		m.booted.Store(true)
+		m.desiredMu.Lock()
+		names := slices.Sorted(maps.Keys(m.desired))
+		m.desiredMu.Unlock()
+		for _, name := range names {
+			if runtime, err := m.runtime(name); err == nil && runtime.spec.Config.Autostart.Starts() {
+				_ = runtime.call(request{kind: requestStart})
+			}
+		}
+		go m.idleLoop(m.ctx)
+		go m.cronLoop(m.ctx)
+	})
 }
 
 func (m *Manager) Close() {
@@ -256,8 +270,12 @@ func (m *Manager) Destroy(name string) error {
 }
 
 // Wake starts an app on behalf of the proxy and reports a failed start, which an explicit run or
-// console start does not.
+// console start does not. Before Boot it does nothing, so a tab opened early waits on the
+// starting page instead of loading the app ahead of the rest.
 func (m *Manager) Wake(name string) {
+	if !m.booted.Load() {
+		return
+	}
 	if err := m.Start(name); err != nil {
 		logx.Warnf("wake %s: %v", name, err)
 		m.emit(notify.Event{Type: notify.WakeFailed, App: name, Error: err.Error(), Time: time.Now()})
@@ -418,6 +436,8 @@ func (m *Manager) Rescan() ([]error, error) {
 	var removed []*appRuntime
 	m.mu.Lock()
 	if reloaded {
+		// The console port is picked at start, not read from the file.
+		loaded.ConsolePort = m.hostConfig.ConsolePort
 		m.hostConfig = loaded
 	}
 	m.cfg.App, m.cfg.Defaults = scanConfig.App, scanConfig.Defaults

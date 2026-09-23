@@ -189,6 +189,8 @@ procfile:
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
 When it does not have either and stdout is a terminal, the proxy falls back to the first free port of `ports` instead of exiting, so developing against an app needs no sudo; under systemd stdout is a pipe and the bind failure is still fatal.
+A dev session (`dboss start` in an app folder) never takes `:80` unless asked: it ignores `proxy.listen` and serves on the next free port, so the app opens as `http://myapp.lvh.me:3110`.
+`dboss start --root` listens on `:80` and `:443` instead and fails when either is taken.
 Every process that declares `hosts` is a web process, and an app may have several, each serving its own hostnames; a process with only a command is a background worker. Running dboss inside an app folder with no hosts binds the first process to `.lvh.me`.
 Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` equals `allow_ips: [10.0.0.0/8]`.
 A leading `*.` in a host matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `hosts: .myapp.com` covers `myapp.com` and `*.myapp.com`.
@@ -206,11 +208,11 @@ env:
   API_URL_dev: http://lvh.me:4000
 ```
 
-The suffix works at every depth and inside free-form maps such as `procfile`, `env` and `headers`; the value replaces the base key outright, so a block override names the leaf key it changes (`proxy: {listen_dev: ":3000"}`) rather than restating the block. A `<key>_dev` is checked against the schema in both modes, so a typo is caught by `dboss check` on the host too.
+The suffix works at every depth and inside free-form maps such as `procfile`, `env` and `headers`; the value replaces the base key outright, so a block override names the leaf key it changes (`alerts: {error_rate_dev: 0}`) rather than restating the block. A `<key>_dev` is checked against the schema in both modes, so a typo is caught by `dboss check` on the host too.
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
 `dboss config --keys [filter]` lists every key grouped by block, with a one-line description, its default and, when useful, an example; the same list is behind the Help button in the console's Configuration view.
 `dboss config --reference` prints the long annotated reference, and `dboss config [app] -d` prints a resolved config with every default filled in.
-A dev session also serves HTTPS, so an app that needs a secure origin (secure cookies, service workers, OAuth callbacks) works locally: `:443`, or `proxy.tls.listen`, moving into `ports` when the port is refused, with certificates from a local certificate authority dboss keeps in your user config directory and shares across projects. Nothing is issued by Let's Encrypt and plain http keeps working. The first dev start on a terminal asks whether to trust that root (`[Y/n]`, it may ask for your password) and starts either way; `dboss trust` does the same at any time, adding it to the macOS login keychain or the Debian/Fedora store through `sudo`. Until it is trusted the banner says so and the browser warns.
+A dev session also serves HTTPS, so an app that needs a secure origin (secure cookies, service workers, OAuth callbacks) works locally: on the next free port after the plain one, or `:443` with `--root`, with certificates from a local certificate authority dboss keeps in your user config directory and shares across projects. Nothing is issued by Let's Encrypt and plain http keeps working. The first dev start on a terminal asks whether to trust that root (`[Y/n]`, it may ask for your password) and starts either way; `dboss trust` does the same at any time, adding it to the macOS login keychain or the Debian/Fedora store through `sudo`. Until it is trusted the banner says so and the browser warns.
 `dboss init` prints a fully commented starter config, service or app, with every key shown with its default or an example; save it with `dboss init > dboss.yaml`.
 
 ```
@@ -266,15 +268,20 @@ Binary
 Every other command talks to the running host over its control socket and accepts `--json`.
 Inside an app folder the app argument defaults to that app.
 
-On a terminal, `dboss start` opens with one row per process before any output arrives:
+On a terminal, `dboss start` opens with the dboss version and one row per process, then waits for ENTER before it starts any app:
 
 ```
-bun/web       http://bun.lvh.me      starting
-button/web    http://button.lvh.me   stopped, needs the start button
-sinatra/web   http://sinatra.lvh.me  stopped, wakes on the first request
-sinatra/job   worker                 stopped
+dboss v113 - host /Users/me/dboss:
+bun/web       http://bun.lvh.me
+button/web    http://button.lvh.me
+sinatra/web   http://sinatra.lvh.me
+sinatra/job   worker
 dboss/console http://127.0.0.1:3100/login?token=...  signed in for an hour
+Press ENTER to start the apps (dboss start -y skips this)
 ```
+
+Every listener already answers at that point, so the console and each URL can be opened first; a page requested before ENTER gets the starting page, which reloads itself into the app once it is up.
+`dboss start -y` starts the apps right away, and so does a start without a terminal on stdin.
 
 Each row is keyed by the same colored `app/proc |` prefix that process logs under, so the address and the output that follows it line up:
 
@@ -287,13 +294,22 @@ Inside an app folder there is only one app, so the key drops to the process name
 
 ```
 $ cd ~/apps/sinatra && dboss s
-web | http://sinatra.lvh.me  stopped, wakes on the first request
-job | worker                 stopped
-web | == Sinatra (v4.1.1) has taken the stage on 3101
-job | tick
+dboss v113 - dev session for sinatra:
+web     | http://sinatra.lvh.me:3110
+job     | worker
+https   | https://sinatra.lvh.me:3113  trusted local certificate
+console | http://127.0.0.1:3101  open on this machine
+Press ENTER to start the apps (dboss start -y skips this)
+web     | == Sinatra (v4.1.1) has taken the stage on 3107
+job     | tick
 ```
 
-A web process shows the address to open (its `canonical_host`, else its first hostname), a worker says `worker`, and every row ends in the app's state, so an app that has not started yet is still listed with the URL that will wake it.
+A web process shows the address to open (its `canonical_host`, else its first hostname), a worker says `worker`, and an app in maintenance says so.
+
+Dev sessions in several app folders run side by side.
+Each one claims the next free ports for its console, processes, proxy and HTTPS from a per-user registry in the user config directory, so no two sessions share a port and none clears another's listeners.
+A folder gets the same ports back on its next start while they are free, so its URLs stay put; its own record is `.dboss/state/ports.json`.
+A dev start only clears what an earlier run of the same folder left on those ports, and `dboss kill` inside the folder clears only them.
 The last row is the console: a dev session prints its plain loopback address, since it needs no sign-in, and a host session prints a sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
 Under systemd none of this appears and no link is minted: the banner, like the output echo and the privileged-port fallback, only happens when stdout is a terminal.
 
@@ -755,7 +771,7 @@ Both work on the host file (no app) or one app's file. A CLI restore writes the 
 ## Management console
 
 The console is served for `management.host` on the proxy listener and again on the first port of `ports` (`3100` in the demo), where `127.0.0.1` and `localhost` are also accepted.
-A dev session (one app run from its own folder) always gets that loopback console, with or without a `management:` block.
+A dev session (one app run from its own folder) always gets a loopback console, with or without a `management:` block, on a free port it claims from `ports`.
 `dboss start` prints the loopback address first, and the public address too (`https://` on the first `management.host`):
 
 ```

@@ -21,11 +21,14 @@ import (
 	"dboss/internal/ports"
 )
 
-func TestManagementTakesFirstPort(t *testing.T) {
+func TestHostManagementTakesFirstPort(t *testing.T) {
 	cfg := config.Default()
 	cfg.Ports = [2]int{3100, 3199}
-	allocator, port := newAllocator(cfg)
-	if port != 3100 || allocator.Entries()["dboss/management"] != 3100 {
+	allocator, registry, err := newAllocator(cfg)
+	if err != nil || registry != nil {
+		t.Fatalf("host allocator: registry %v, %v", registry, err)
+	}
+	if port, _ := allocator.Allocate("dboss", "management"); port != 3100 {
 		t.Fatalf("management port = %d, entries = %v", port, allocator.Entries())
 	}
 	if next, _ := allocator.Allocate("alpha", "web"); next != 3101 {
@@ -161,60 +164,106 @@ func TestLoginURLNeedsTheConsole(t *testing.T) {
 	}
 }
 
-// The console has its own loopback listener, so a dev session that turns the proxy off still
-// gets one, and `dboss login` with it.
-func TestDevConsoleIsServedWithoutTheProxy(t *testing.T) {
+// devSessions points the dev port registry and certificate authority at a temp dir, so a test
+// never touches the developer's own sessions, and returns a port window with room to spare.
+func devSessions(t *testing.T) [2]int {
+	t.Helper()
+	dir := t.TempDir()
+	previousSessions, previousCA := devSessionsDir, devCADir
+	devSessionsDir = func() (string, error) { return filepath.Join(dir, "sessions"), nil }
+	devCADir = func() (string, error) { return filepath.Join(dir, "ca"), nil }
+	t.Cleanup(func() { devSessionsDir, devCADir = previousSessions, previousCA })
+	first := freePort(t)
+	return [2]int{first, first + 50}
+}
+
+// devConfig is a dev session for an app folder with no processes.
+func devConfig(t *testing.T, window [2]int) config.Config {
+	t.Helper()
 	// Not t.TempDir(): its path plus the socket name overruns the unix socket length limit.
 	dir, err := os.MkdirTemp("", "dboss")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cfg := config.Default()
+	cfg.Dir = dir
 	cfg.SourcePath = dir + "/" + config.FileName
 	if err := os.WriteFile(cfg.SourcePath, []byte("procfile: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
-	cfg.Ports = [2]int{0, 0}
-	cfg.Proxy.Listen = nil
+	cfg.Ports = window
 	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}
-	session, err := Build(cfg, nil)
+	return cfg
+}
+
+// A dev session gets its console, `dboss login` and a proxy on claimed ports, and hands the
+// console port to the config so hook links point at it.
+func TestDevSessionServesOnClaimedPorts(t *testing.T) {
+	cfg := devConfig(t, devSessions(t))
+	session, err := Build(cfg, nil, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
 	if session.management == nil {
-		t.Fatal("a dev session should have a console with no proxy listener")
+		t.Fatal("a dev session should have a console")
 	}
 	if _, _, err := session.LoginURL(); err != nil {
 		t.Fatalf("LoginURL = %v", err)
+	}
+	if session.managementPort < cfg.Ports[0] || session.managementPort > cfg.Ports[1] {
+		t.Fatalf("console on %d, outside %v", session.managementPort, cfg.Ports)
+	}
+	if len(session.listen) != 1 || session.listen[0] == ":80" {
+		t.Fatalf("proxy listen = %v, want a claimed port", session.listen)
+	}
+	if got := session.manager.HostConfig().ConsoleURL(); got != "http://127.0.0.1:"+strconv.Itoa(session.managementPort) {
+		t.Fatalf("ConsoleURL = %q", got)
+	}
+}
+
+// Two dev sessions in different app folders run side by side: neither clears the other's
+// listeners and no port is handed out twice.
+func TestDevSessionsRunSideBySide(t *testing.T) {
+	window := devSessions(t)
+	first, err := Build(devConfig(t, window), nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := Build(devConfig(t, window), nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if first.managementPort == second.managementPort || first.listen[0] == second.listen[0] {
+		t.Fatalf("sessions share a port: console %d/%d, proxy %s/%s", first.managementPort, second.managementPort, first.listen[0], second.listen[0])
+	}
+	response, err := http.Get("http://127.0.0.1:" + strconv.Itoa(first.managementPort) + "/healthz")
+	if err != nil {
+		t.Fatalf("first console gone after the second start: %v", err)
+	}
+	_ = response.Body.Close()
+}
+
+// --root asks for :80 and :443 exactly, so a refused bind is an error that names the flag instead
+// of a quiet move to a free port.
+func TestDevRootBindsStandardPorts(t *testing.T) {
+	cfg := devConfig(t, devSessions(t))
+	refuseListen(t, ":80")
+	_, err := Build(cfg, nil, Options{Root: true})
+	if err == nil || !strings.Contains(err.Error(), "--root") || !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("error = %v, want the --root hint", err)
 	}
 }
 
 // A dev session serves the proxy over HTTPS with a leaf from the local authority, so a client
 // that trusts the root completes the handshake for any app host.
 func TestDevSessionServesHTTPS(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dboss")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	caDir := filepath.Join(dir, "ca")
-	previous := devCADir
-	devCADir = func() (string, error) { return caDir, nil }
-	defer func() { devCADir = previous }()
-	cfg := config.Default()
-	cfg.SourcePath = dir + "/" + config.FileName
-	if err := os.WriteFile(cfg.SourcePath, []byte("procfile: {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
-	cfg.Ports = [2]int{0, 0}
-	cfg.Proxy.Listen = config.List{"127.0.0.1:0"}
-	cfg.Proxy.TLS.Listen = "127.0.0.1:0"
-	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}
-	session, err := Build(cfg, nil)
+	cfg := devConfig(t, devSessions(t))
+	session, err := Build(cfg, nil, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

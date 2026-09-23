@@ -3,12 +3,14 @@ package daemon
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"dboss/internal/config"
 	"dboss/internal/logx"
 	"dboss/internal/supervisor"
+	"dboss/internal/version"
 )
 
 // printBanner writes the startup summary of a hand-run session. It is terminal-only, the same
@@ -44,15 +46,23 @@ func (d *Daemon) printBanner() {
 			secure.note = "trusted local certificate"
 		}
 	}
+	d.echo.Print(bannerIntro(d.cfg))
 	for _, line := range banner(d.manager.Snapshots(), console, note, scheme, bannerPort(d.listen[0], scheme), secure, d.echo) {
 		d.echo.Print(line)
 	}
 }
 
-// banner is the startup summary a hand-run session prints: one row per process, keyed by the
-// same colored prefix that process logs under, so the address and its later output line up.
-// Web processes carry a clickable URL, workers say so, and every row ends in the app's state,
-// which is how an app that has not started yet is still visible.
+// bannerIntro names the build and what this session runs, above the rows.
+func bannerIntro(cfg config.Config) string {
+	if cfg.Dev() {
+		return fmt.Sprintf("dboss %s - dev session for %s:", version.String(), filepath.Base(cfg.Dir))
+	}
+	return fmt.Sprintf("dboss %s - host %s:", version.String(), cfg.Dir)
+}
+
+// banner is the startup summary a hand-run session prints before any app starts: one row per
+// process, keyed by the same colored prefix that process logs under, so the address and its later
+// output line up. Web processes carry a clickable URL and workers say so.
 func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme, port string, secure devHTTPS, echo *supervisor.Echo) []string {
 	rows := make([]bannerRow, 0, len(snapshots))
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
@@ -61,7 +71,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 		web := map[string]bool{}
 		for _, process := range app.WebProcesses {
 			web[process.Name] = true
-			rows = append(rows, newRow(app.Name, process.Name, webURL(process, scheme, port), stateLabel(app, true), true))
+			rows = append(rows, newRow(app.Name, process.Name, webURL(process, scheme, port), bannerNote(app), true))
 			if secureURL == "" && config.PrimaryHost(process.CanonicalHost, process.Hosts) != "" {
 				secureURL = webURL(process, "https", secure.port)
 			}
@@ -70,7 +80,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 			if web[process.Name] {
 				continue
 			}
-			rows = append(rows, newRow(app.Name, process.Name, "worker", stateLabel(app, false), true))
+			rows = append(rows, newRow(app.Name, process.Name, "worker", bannerNote(app), true))
 		}
 	}
 	if secure.note != "" && secureURL != "" {
@@ -97,7 +107,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 		if row.pad {
 			address = fmt.Sprintf("%-*s", addressWidth, address)
 		}
-		lines = append(lines, echo.Key(row.app, row.proc)+address+"  "+row.note)
+		lines = append(lines, strings.TrimRight(echo.Key(row.app, row.proc)+address+"  "+row.note, " "))
 	}
 	return lines
 }
@@ -136,22 +146,13 @@ func webURL(web supervisor.WebProcessSnapshot, scheme, port string) string {
 	return scheme + "://" + host
 }
 
-// stateLabel says what the app is doing and, on a web row, what would start it. Only a web row
-// gets the hint: a request is what wakes an app, and nobody sends one to a worker.
-func stateLabel(app supervisor.Snapshot, web bool) string {
+// bannerNote is what a process row adds after its address. The banner prints before any app
+// starts, so the state would always read stopped; only maintenance changes what a click shows.
+func bannerNote(app supervisor.Snapshot) string {
 	if app.Maintenance {
 		return "maintenance"
 	}
-	if app.State != supervisor.Stopped {
-		return string(app.State)
-	}
-	if !web {
-		return string(supervisor.Stopped)
-	}
-	if app.WakeButton {
-		return "stopped, needs the start button"
-	}
-	return "stopped, wakes on the first request"
+	return ""
 }
 
 // bannerPort is the port to put in a printed URL: the one actually bound, dropped when it is

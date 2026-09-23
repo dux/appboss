@@ -49,12 +49,16 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 	// The port is fixed for this process, so whatever holds it is stale and gets killed first.
-	killed, err := ports.ClearPort(port, defaults.StopTimeout.Value())
-	if err != nil {
-		return fmt.Errorf("start %s: %w", name, err)
-	}
-	if len(killed) > 0 {
-		logx.Warnf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
+	// A dev session's port came from the registry free and stays reserved, so anything on it
+	// belongs to someone else and is left alone.
+	if !a.cfg.Dev() {
+		killed, err := ports.ClearPort(port, defaults.StopTimeout.Value())
+		if err != nil {
+			return fmt.Errorf("start %s: %w", name, err)
+		}
+		if len(killed) > 0 {
+			logx.Warnf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
+		}
 	}
 	logFile, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), logMaxSize, logKeep)
 	if err != nil {

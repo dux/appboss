@@ -35,7 +35,7 @@ lint: vet ## Run go vet and staticcheck
 check: lint test ## Run static checks and tests
 
 demo: build ## Run the local demo daemon
-	$(BINARY) start -c ./demo/dboss.yaml
+	$(BINARY) start $(DEMO_FLAGS) -c ./demo/dboss.yaml
 
 demo-watch: build ## Rebuild and restart the demo on changes
 	$(WATCH) --restart --clear \
@@ -45,7 +45,7 @@ demo-watch: build ## Rebuild and restart the demo on changes
 		--watch ./go.mod \
 		--watch ./go.sum \
 		--ignore './demo/.dboss/**' \
-		-- $(MAKE) demo
+		-- $(MAKE) demo DEMO_FLAGS=-y
 
 kill: build ## Kill all demo apps and listeners in the app port range
 	$(BINARY) kill -c ./demo/dboss.yaml

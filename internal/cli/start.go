@@ -18,22 +18,28 @@ import (
 	"golang.org/x/term"
 )
 
-// start runs the host session in the foreground. Under systemd this is the service process;
-// on a terminal every app's output is echoed with an app/proc prefix.
+// start runs the session in the foreground. Under systemd this is the service process; on a
+// terminal every app's output is echoed with an app/proc prefix, and the apps wait for ENTER
+// after the banner so its addresses can be opened first.
 func (c CLI) start(args []string) error {
 	set := flag.NewFlagSet("start", flag.ContinueOnError)
 	set.SetOutput(c.Err)
 	configPath := configFlag(set)
 	login := set.Bool("login", false, "print a one-time console sign-in link")
+	yes := set.Bool("y", false, "start the apps without waiting for ENTER")
+	root := set.Bool("root", false, "dev session: listen on :80 and :443 instead of free ports")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("usage: dboss start [-c path] [--login]")
+		return errors.New("usage: dboss start [-c path] [--login] [-y] [--root]")
 	}
 	cfg, err := loadHostConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if *root && !cfg.Dev() {
+		return errors.New("--root is for a dev session; a host listens on proxy.listen")
 	}
 	var echo *supervisor.Echo
 	if info, statErr := os.Stdout.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
@@ -42,11 +48,11 @@ func (c CLI) start(args []string) error {
 			echo.Solo()
 		}
 		warnUnignoredRuntime(c.Err, cfg)
-		if cfg.Dev() && len(cfg.Proxy.Listen) > 0 {
+		if cfg.Dev() {
 			c.offerTrust()
 		}
 	}
-	session, err := daemon.Build(cfg, echo)
+	session, err := daemon.Build(cfg, echo, daemon.Options{Root: *root})
 	if err != nil {
 		return err
 	}
@@ -61,7 +67,37 @@ func (c CLI) start(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return session.Run(ctx)
+	if err := session.Serve(ctx); err != nil {
+		return err
+	}
+	if echo != nil && !*yes && !c.waitForEnter(ctx) {
+		return nil
+	}
+	session.Boot()
+	<-ctx.Done()
+	return nil
+}
+
+// waitForEnter holds the apps until ENTER and reports false when the session is interrupted
+// first. Without a terminal on stdin nobody can press it, so it does not wait.
+func (c CLI) waitForEnter(ctx context.Context) bool {
+	in, ok := c.In.(*os.File)
+	if !ok || !term.IsTerminal(int(in.Fd())) {
+		return true
+	}
+	fmt.Fprint(c.Out, "Press ENTER to start the apps (dboss start -y skips this) ")
+	pressed := make(chan struct{})
+	go func() {
+		_, _ = bufio.NewReader(in).ReadString('\n')
+		close(pressed)
+	}()
+	select {
+	case <-pressed:
+		return true
+	case <-ctx.Done():
+		fmt.Fprintln(c.Out)
+		return false
+	}
 }
 
 // trust adds the dev certificate authority's root to the system trust store, so the browser

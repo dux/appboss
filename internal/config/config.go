@@ -16,11 +16,13 @@ type Config struct {
 	App        *App   `yaml:"-" json:"-"`
 	Apps       string `yaml:"apps" json:"apps"`
 	// RuntimeDir holds everything dboss writes: StateDir, LogDir and Socket are derived from it.
-	RuntimeDir     string     `yaml:"dir" json:"dir"`
-	StateDir       string     `yaml:"-" json:"state_dir"`
-	LogDir         string     `yaml:"-" json:"log_dir"`
-	Socket         string     `yaml:"-" json:"socket"`
-	Ports          [2]int     `yaml:"ports" json:"ports"`
+	RuntimeDir string `yaml:"dir" json:"dir"`
+	StateDir   string `yaml:"-" json:"state_dir"`
+	LogDir     string `yaml:"-" json:"log_dir"`
+	Socket     string `yaml:"-" json:"socket"`
+	Ports      [2]int `yaml:"ports" json:"ports"`
+	// ConsolePort is the loopback port the console is bound to; daemon.Build sets it.
+	ConsolePort    int        `yaml:"-" json:"-"`
 	LogLevel       string     `yaml:"log_level" json:"log_level"`
 	AuditRetention Duration   `yaml:"audit_retention" json:"audit_retention"`
 	MaintenanceAt  string     `yaml:"maintenance_at" json:"maintenance_at"`
@@ -77,15 +79,16 @@ func (m Management) Enabled() bool { return len(m.Host) > 0 }
 func (c Config) ConsoleEnabled() bool { return c.Management.Enabled() || c.Dev() }
 
 // ConsoleURL is the console as something can reach it: the public management URL when one is
-// configured, else the loopback port of a dev session, else empty. Hook URLs are built from it.
+// configured, else the loopback port of a dev session once it is bound, else empty. Hook URLs
+// are built from it.
 func (c Config) ConsoleURL() string {
 	if url := c.Management.PublicURL(); url != "" {
 		return url
 	}
-	if !c.Dev() {
+	if !c.Dev() || c.ConsolePort == 0 {
 		return ""
 	}
-	return "http://127.0.0.1:" + strconv.Itoa(c.Ports[0])
+	return "http://127.0.0.1:" + strconv.Itoa(c.ConsolePort)
 }
 
 // PublicURL is the address operators open and the base of the hook ping URLs: https on the first

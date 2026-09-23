@@ -38,8 +38,8 @@
 #     app file serves both. The value replaces the base key outright, so a block override names
 #     the leaf key it changes rather than restating the block. The suffix works at every depth
 #     and inside free-form maps, so procfile, env and headers entries take it too.
-#     A dev session also gets the management console on 127.0.0.1:<first port of ports>
-#     with no management block and no sign-in; see that block for what it costs.
+#     A dev session also gets the management console on a loopback port from ports, with no
+#     management block and no sign-in; see that block for what it costs.
 #
 # Load order at `dboss start`:
 #   root dboss.yaml -> validate -> walk the apps directory (or use the root file itself in
@@ -73,6 +73,11 @@ dir: ./.dboss
 # requires `lsof`. The first port belongs to the management console, reserved whether or not the
 # console is enabled. After it one fixed port is assigned per (app, proctype) at daemon start, in
 # apps order, and never changes while the daemon runs. The range must not overlap an HTTP listener.
+# A dev session (dboss start in an app folder) shares the range with the dev sessions of other
+# folders instead: it claims the next free ports for its console, processes, proxy and HTTPS from
+# a per-user registry, gets the same ones back on its next start while they are free, and only
+# clears what an earlier run of its own folder left behind; `dboss kill` there clears only its
+# own ports.
 ports: [3100, 3990]
 
 # dboss's own log level. The log always goes to stderr: the terminal in the foreground, journald
@@ -119,6 +124,8 @@ proxy:
   # 127.0.0.1:8080. The management console is served on the same listener,
   # selected by management.host.
   # Set to "" to disable the proxy entirely (supervisor-only mode).
+  # A dev session ignores it: its proxy takes a free port from ports, or :80 with
+  # `dboss start --root`.
   listen: ":80"
 
   # The box sits behind Cloudflare: only Cloudflare's published ranges
@@ -134,9 +141,10 @@ proxy:
   # cannot exhaust the authority's rate limit. Certificates are cached under dir/state/acme and
   # renewed automatically, and plain http redirects to https. Leave listen empty to keep TLS at the
   # edge (Cloudflare).
-  # A dev session (dboss start in an app folder) never uses ACME: it always serves HTTPS on
-  # listen (default :443) with certificates from a local authority in the user config
-  # directory, and plain http stays on. `dboss trust` adds that root to the system store.
+  # A dev session (dboss start in an app folder) never uses ACME and ignores listen: it serves
+  # HTTPS on a free port from ports (:443 with `dboss start --root`) with certificates from a
+  # local authority in the user config directory, and plain http stays on. `dboss trust` adds
+  # that root to the system store.
   tls:
     # Address of the HTTPS listener. Empty disables built-in TLS.
     listen: ""              # e.g. ":443"
@@ -157,7 +165,7 @@ proxy:
 # always open; /metrics (Prometheus text) needs tokens.dboss as a bearer token.
 #
 # A dev session (one app run from its own folder, the file has procfile) always
-# has a console on that loopback port, with or without this block, and signs a
+# has a console on a loopback port from ports, with or without this block, and signs a
 # request whose peer is 127.0.0.1 straight in, so admins is not required
 # there. The check is the connecting address and never a forwarded-for header:
 # do not put nginx, caddy or cloudflared in front of an app run this way, or

@@ -104,6 +104,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.Boot()
 	defer manager.Close()
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
@@ -203,6 +204,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.Boot()
 	defer manager.Close()
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)

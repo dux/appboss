@@ -101,6 +101,8 @@ func (c CLI) doctor(args []string) error {
 	switch {
 	case listenErr != nil:
 		add("warn", "port range check failed: "+listenErr.Error())
+	case cfg.Dev():
+		// The dev sessions of other app folders share the range, so listeners there are expected.
 	case len(listeners) > 0:
 		pids := make([]int, 0, len(listeners))
 		for _, listener := range listeners {
@@ -151,6 +153,8 @@ func writable(dir string) error {
 }
 
 // kill stops every app through the daemon, when one answers, then clears the whole port range.
+// A dev session shares the range with other app folders, so it clears only the ports its own
+// folder claimed.
 func (c CLI) kill(args []string) error {
 	cfg, jsonOutput, err := c.hostCommand("kill", args)
 	if err != nil {
@@ -169,13 +173,29 @@ func (c CLI) kill(args []string) error {
 		}
 		stopped = append(stopped, snapshot.Name)
 	}
-	pids, err := ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value())
-	if err != nil {
+	var pids []int
+	if cfg.Dev() {
+		owned, err := ports.Recorded(filepath.Join(cfg.StateDir, "ports.json"))
+		if err != nil {
+			return err
+		}
+		for _, port := range owned {
+			killed, err := ports.ClearPort(port, cfg.Defaults.StopTimeout.Value())
+			if err != nil {
+				return err
+			}
+			pids = append(pids, killed...)
+		}
+	} else if pids, err = ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value()); err != nil {
 		return err
 	}
 	if jsonOutput {
 		encoded, _ := json.Marshal(map[string]any{"stopped": stopped, "killed_pids": pids})
 		fmt.Fprintln(c.Out, string(encoded))
+		return nil
+	}
+	if cfg.Dev() {
+		fmt.Fprintf(c.Out, "stopped %d app(s); killed %d remaining listener(s) on this folder's ports\n", len(stopped), len(pids))
 		return nil
 	}
 	fmt.Fprintf(c.Out, "stopped %d app(s); killed %d remaining listener(s) in ports %d-%d\n", len(stopped), len(pids), cfg.Ports[0], cfg.Ports[1])

@@ -6,16 +6,24 @@ import (
 )
 
 // Allocator hands out one fixed port per (app, process) for the lifetime of the daemon.
-// Entries are never reassigned; the whole range is cleared with lsof before apps start.
+// Entries are never reassigned. A host counts up from the start of its range, which is cleared
+// with lsof before apps start; a dev session takes each port from claim instead.
 type Allocator struct {
 	mu      sync.Mutex
 	first   int
 	last    int
+	claim   func(key string) (int, error)
 	entries map[string]int
 }
 
 func New(portRange [2]int) *Allocator {
 	return &Allocator{first: portRange[0], last: portRange[1], entries: map[string]int{}}
+}
+
+// NewClaiming is the dev session allocator: claim (Registry.Claim) picks every port, so
+// sessions in other app folders never get the same one.
+func NewClaiming(claim func(key string) (int, error)) *Allocator {
+	return &Allocator{claim: claim, entries: map[string]int{}}
 }
 
 func (a *Allocator) Lookup(app, process string) (int, bool) {
@@ -30,6 +38,14 @@ func (a *Allocator) Allocate(app, process string) (int, error) {
 	defer a.mu.Unlock()
 	key := app + "/" + process
 	if port, ok := a.entries[key]; ok {
+		return port, nil
+	}
+	if a.claim != nil {
+		port, err := a.claim(key)
+		if err != nil {
+			return 0, err
+		}
+		a.entries[key] = port
 		return port, nil
 	}
 	used := map[int]bool{}

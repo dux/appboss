@@ -21,7 +21,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"dboss/internal/fsutil"
 )
 
 const (
@@ -51,8 +54,17 @@ func DefaultDir() (string, error) {
 	return filepath.Join(base, "dboss", "ca"), nil
 }
 
-// Open loads the root from dir, creating it on first use.
+// Open loads the root from dir, creating it on first use. Dev sessions in other app folders may
+// start at the same moment, so the check and the create run under a lock on the directory.
 func Open(dir string) (*Authority, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	a := &Authority{dir: dir, leafs: map[string]*tls.Certificate{}}
 	certPEM, certErr := os.ReadFile(a.RootPath())
 	keyPEM, keyErr := os.ReadFile(filepath.Join(dir, keyFile))
@@ -101,16 +113,28 @@ func (a *Authority) create() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(a.dir, 0o700); err != nil {
+	if err := fsutil.WriteFile(filepath.Join(a.dir, keyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(a.dir, keyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(a.RootPath(), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+	if err := fsutil.WriteFile(a.RootPath(), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
 		return err
 	}
 	return a.load(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+}
+
+func lockDir(dir string) (func(), error) {
+	file, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
 }
 
 func (a *Authority) load(certPEM, keyPEM []byte) error {

@@ -1,6 +1,6 @@
 // Package daemon wires one host session: the supervisor, the module set, the proxy pipeline,
 // the management console and the control socket. cli.start only loads the config and calls
-// Build and Run, so a new module is registered here and nowhere else.
+// Build, Serve and Boot, so a new module is registered here and nowhere else.
 package daemon
 
 import (
@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,8 +42,8 @@ import (
 	"dboss/internal/tmpclean"
 )
 
-// Daemon is one running host session. New builds and binds it; Run serves until the context is
-// cancelled, then Close drains it.
+// Daemon is one running session. Build binds it, Serve starts the modules, Boot starts the apps,
+// and Close drains it.
 type Daemon struct {
 	cfg            config.Config
 	manager        *supervisor.Manager
@@ -56,6 +57,13 @@ type Daemon struct {
 	devTLS         *devtls.Authority
 	echo           *supervisor.Echo
 	managementPort int
+	registry       *ports.Registry // a dev session's claim on its ports
+}
+
+// Options are the start flags of a hand-run session.
+type Options struct {
+	// Root binds a dev session's proxy on :80 and its HTTPS on :443 instead of free ports.
+	Root bool
 }
 
 // netListen is the test seam for the privileged-port fallback: a test cannot provoke a real
@@ -70,31 +78,47 @@ const (
 	notifyQuiet       = 5 * time.Minute
 )
 
-// devCADir is the test seam for where a dev session keeps its certificate authority.
-var devCADir = devtls.DefaultDir
+// devCADir and devSessionsDir are the test seams for the per-user dev state: the certificate
+// authority and the registry every dev session claims its ports from.
+var (
+	devCADir       = devtls.DefaultDir
+	devSessionsDir = ports.DefaultSessionsDir
+)
 
-// Build prepares the session: directories, port range, supervisor, modules, the proxy pipeline,
-// the console and the control socket. Listeners bind here, so a returned error leaves nothing
-// behind.
-func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
+// Build prepares the session: directories, ports, supervisor, modules, the proxy pipeline, the
+// console and the control socket. Listeners bind here, so a returned error leaves nothing behind.
+// No app starts before Boot.
+func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, error) {
 	logx.SetLevel(cfg.LogLevel)
 	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, err
 		}
 	}
-	cleared, err := ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value())
+	if !cfg.Dev() {
+		cleared, err := ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value())
+		if err != nil {
+			return nil, err
+		}
+		if len(cleared) > 0 {
+			logx.Infof("cleared app port range %d-%d: pids=%v", cfg.Ports[0], cfg.Ports[1], cleared)
+		}
+	}
+	allocator, registry, err := newAllocator(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if len(cleared) > 0 {
-		logx.Infof("cleared app port range %d-%d: pids=%v", cfg.Ports[0], cfg.Ports[1], cleared)
+	managementPort, err := allocator.Allocate("dboss", "management")
+	if err != nil {
+		closeRegistry(registry)
+		return nil, err
 	}
-	allocator, managementPort := newAllocator(cfg)
+	cfg.ConsolePort = managementPort
 	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: notify.FormatFor(cfg.Notify.URL), Events: cfg.Notify.Events, MinInterval: notifyQuiet, Headers: cfg.Notify.Headers})
 	manager, invalid, err := supervisor.New(cfg, allocator, echo, notifier)
 	if err != nil {
 		notifier.Close()
+		closeRegistry(registry)
 		return nil, err
 	}
 	for _, scanErr := range invalid {
@@ -115,11 +139,12 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 	if err != nil {
 		notifier.Close()
 		manager.Close()
+		closeRegistry(registry)
 		return nil, err
 	}
 	sizes := diskusage.New(manager, cfg.LogDir)
 	postgres := pg.New(cfg, notifier)
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort, registry: registry}
 	service := ops.New(manager, logs, postgres, channels, sizes, notifier)
 	// One AuthCog flow for the console and every app gate: one signing key, one challenge map.
 	flow, err := authcog.New(cfg.StateDir)
@@ -138,16 +163,24 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 		}
 		d.management = management
 	}
-	if len(cfg.Proxy.Listen) > 0 {
+	if cfg.Dev() {
+		edge, err := edgeHandler(cfg, flow, manager, logs, management, channels)
+		if err != nil {
+			d.Close()
+			return nil, err
+		}
+		if err := d.startDevProxy(edge, allocator, opts.Root); err != nil {
+			d.Close()
+			return nil, err
+		}
+	} else if len(cfg.Proxy.Listen) > 0 {
 		edge, err := edgeHandler(cfg, flow, manager, logs, management, channels)
 		if err != nil {
 			d.Close()
 			return nil, err
 		}
 		var certs *proxy.ACME
-		if cfg.Dev() {
-			d.startDevHTTPS(edge, allocator)
-		} else if cfg.Proxy.TLS.Enabled() {
+		if cfg.Proxy.TLS.Enabled() {
 			certs, err = proxy.NewACME(cfg, manager)
 			if err != nil {
 				d.Close()
@@ -196,8 +229,9 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 	return d, nil
 }
 
-// Run starts the modules and serves until ctx is cancelled.
-func (d *Daemon) Run(ctx context.Context) error {
+// Serve starts the modules and prints the banner. Every listener already answers, but the apps
+// wait for Boot, so a hand-run start can show its addresses before anything loads.
+func (d *Daemon) Serve(ctx context.Context) error {
 	if err := d.modules.Start(ctx); err != nil {
 		return err
 	}
@@ -211,11 +245,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 			logx.Infof("management console: %s (AuthCog sign-in)", publicURL)
 		}
 	}
-	d.printBanner()
 	logx.Infof("dboss ready: config=%s socket=%s listen=%s management=%s port=%d", d.cfg.SourcePath, d.cfg.Socket, strings.Join(d.listen, ","), strings.Join(d.cfg.Management.Host, ","), d.managementPort)
-	<-ctx.Done()
+	// Last, so the banner sits right above the ENTER prompt.
+	d.printBanner()
 	return nil
 }
+
+// Boot starts the apps that were running before.
+func (d *Daemon) Boot() { d.manager.Boot() }
 
 // LoginURL mints a one-time console sign-in link; it fails when the console is off.
 func (d *Daemon) LoginURL() (local, public string, err error) {
@@ -241,15 +278,48 @@ func (d *Daemon) Close() error {
 	if d.notifier != nil {
 		d.notifier.Close()
 	}
+	closeRegistry(d.registry)
 	return nil
 }
 
-// newAllocator reserves the first port of the range for the management console before any app
-// is discovered, so app ports never shift when the console is turned on or off.
-func newAllocator(cfg config.Config) (*ports.Allocator, int) {
-	allocator := ports.New(cfg.Ports)
-	port, _ := allocator.Allocate("dboss", "management")
-	return allocator, port
+// newAllocator picks how the session gets its ports. A host owns its whole range, cleared by
+// Build, and counts up from the start, so the console always lands on the first port. A dev
+// session shares the range with the dev sessions of other app folders, so it claims every port
+// from the machine-wide registry and only clears what an earlier run of its own folder left.
+func newAllocator(cfg config.Config) (*ports.Allocator, *ports.Registry, error) {
+	if !cfg.Dev() {
+		return ports.New(cfg.Ports), nil, nil
+	}
+	dir, err := devSessionsDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	registry, err := ports.OpenRegistry(dir, filepath.Join(cfg.StateDir, "ports.json"), cfg.Ports)
+	if err != nil {
+		return nil, nil, err
+	}
+	stale, err := registry.Stale()
+	if err != nil {
+		closeRegistry(registry)
+		return nil, nil, err
+	}
+	for _, port := range stale {
+		cleared, err := ports.ClearPort(port, cfg.Defaults.StopTimeout.Value())
+		if err != nil {
+			closeRegistry(registry)
+			return nil, nil, err
+		}
+		if len(cleared) > 0 {
+			logx.Infof("cleared port %d left by an earlier run: pids=%v", port, cleared)
+		}
+	}
+	return ports.NewClaiming(registry.Claim), registry, nil
+}
+
+func closeRegistry(registry *ports.Registry) {
+	if registry != nil {
+		_ = registry.Close()
+	}
 }
 
 func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
@@ -337,31 +407,67 @@ func bindProxy(name, key, address, process string, allocator *ports.Allocator, i
 	return listener, fallback, nil
 }
 
-// startDevHTTPS serves the proxy over HTTPS in a dev session, on proxy.tls.listen or :443, with
-// certificates from the user's local authority. It is a convenience, so a missing authority or a
-// taken port only logs and the session keeps its plain HTTP listener.
-func (d *Daemon) startDevHTTPS(edge http.Handler, allocator *ports.Allocator) {
+// startDevProxy serves a dev session on the next free ports, plain http and then HTTPS, or on
+// :80 and :443 when the start asked for them. The plain listener is required; HTTPS is a
+// convenience, so it only logs when the authority is unavailable or a free port did not bind.
+func (d *Daemon) startDevProxy(edge http.Handler, allocator *ports.Allocator, root bool) error {
+	address, err := devAddress(allocator, "proxy", ":80", root)
+	if err != nil {
+		return err
+	}
+	listener, err := devBind("proxy", address, root)
+	if err != nil {
+		return err
+	}
+	d.servers = append(d.servers, startHTTPServer("proxy", listener, edge))
+	d.listen = append(d.listen, address)
 	dir, err := devCADir()
 	if err == nil {
 		d.devTLS, err = devtls.Open(dir)
 	}
 	if err != nil {
 		logx.Warnf("dev https: %v", err)
-		return
+		return nil
 	}
-	address := d.cfg.Proxy.TLS.Listen
-	if address == "" {
-		address = ":443"
+	address, err = devAddress(allocator, "proxy-tls", ":443", root)
+	if err == nil {
+		listener, err = devBind("dev https", address, root)
 	}
-	listener, _, err := bindProxy("dev-https", "proxy.tls.listen", address, "proxy-tls", allocator, d.echo != nil)
 	if err != nil {
-		logx.Warnf("dev https: %v", err)
 		d.devTLS = nil
-		return
+		if root {
+			return err
+		}
+		logx.Warnf("dev https: %v", err)
+		return nil
 	}
 	d.servers = append(d.servers, startHTTPSServer("dev-https", listener, edge, d.devTLS.TLSConfig()))
 	d.devHTTPS = listener.Addr().String()
 	logx.Infof("dev https: %s (local certificate authority %s)", d.devHTTPS, d.devTLS.RootPath())
+	return nil
+}
+
+// devAddress is where a dev listener goes: the fixed port under --root, else a claimed one.
+func devAddress(allocator *ports.Allocator, process, fixed string, root bool) (string, error) {
+	if root {
+		return fixed, nil
+	}
+	port, err := allocator.Allocate("dboss", process)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", process, err)
+	}
+	return ":" + strconv.Itoa(port), nil
+}
+
+func devBind(name, address string, root bool) (net.Listener, error) {
+	listener, err := netListen("tcp", address)
+	if err == nil {
+		return listener, nil
+	}
+	if root {
+		return nil, fmt.Errorf("%s listen %s: %w (dboss start --root needs %s free and, on Linux, root or CAP_NET_BIND_SERVICE; start without --root to use free ports)", name, address, err, address)
+	}
+	return nil, fmt.Errorf("%s listen %s: %w", name, address, err)
 }
 
 // proxyProcess is the allocator key for the nth proxy.listen entry, so several addresses that

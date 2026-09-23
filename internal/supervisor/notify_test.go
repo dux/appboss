@@ -48,6 +48,7 @@ func TestCrashEmitsNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.Boot()
 	defer manager.Close()
 	if event := sink.waitFor(t, "crash"); event.App != "demo" || event.Error == "" {
 		t.Fatalf("event = %+v", event)
@@ -62,6 +63,7 @@ func TestRestartLoopEmitsNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.Boot()
 	defer manager.Close()
 	if event := sink.waitFor(t, "restart-loop"); event.App != "demo" {
 		t.Fatalf("event = %+v", event)
@@ -109,6 +111,7 @@ func TestWakeFailureEmitsNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.Boot()
 	defer manager.Close()
 	// A missing command only fails inside sh; a missing app folder fails the spawn itself.
 	if err := os.RemoveAll(filepath.Join(cfg.Apps, "demo")); err != nil {

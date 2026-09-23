@@ -500,6 +500,8 @@ func newDevTestHandler(t *testing.T, manager *fakeManager) *Handler {
 
 func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates fakeRates) *Handler {
 	t.Helper()
+	// daemon.Build sets the bound console port; a host's is the first of its range.
+	cfg.ConsolePort = cfg.Ports[0]
 	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{rates: rates}, nil, nil, nil, nil), newFakeStore(), &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)

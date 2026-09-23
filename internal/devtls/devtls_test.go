@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -26,6 +27,35 @@ func TestAuthorityIsReusedAndKeepsItsKeyPrivate(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("root key mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// Dev sessions started together must end up with one root, not a key from one and a
+// certificate from another.
+func TestConcurrentOpenCreatesOneRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	authorities := make([]*Authority, 8)
+	errs := make([]error, len(authorities))
+	var wait sync.WaitGroup
+	for i := range authorities {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			authorities[i], errs[i] = Open(dir)
+		}()
+	}
+	wait.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if !authorities[i].root.Equal(authorities[0].root) {
+			t.Fatalf("open %d made its own root", i)
+		}
+	}
+	reopened, err := Open(dir)
+	if err != nil || !reopened.root.Equal(authorities[0].root) {
+		t.Fatalf("root on disk differs from the one in use: %v", err)
 	}
 }
 

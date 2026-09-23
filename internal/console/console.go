@@ -100,7 +100,7 @@ func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store Conf
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports[0]), sys: sys, dev: cfg.Dev()}
+	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.ConsolePort), sys: sys, dev: cfg.Dev()}
 	handler.mux = handler.routes()
 	if len(cfg.Management.Host) > 0 {
 		handler.publicHost = cfg.Management.Host[0]
