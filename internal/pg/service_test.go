@@ -1,6 +1,9 @@
 package pg
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,21 +22,8 @@ func connConfig(t *testing.T, dsn string) *pgx.ConnConfig {
 
 func TestDumpNameIsBackupZip(t *testing.T) {
 	at := time.Date(2026, 9, 19, 14, 30, 5, 0, time.UTC)
-	if got := dumpName("app", at); got != "BACKUP_2026-09-19T14-30-05Z.zip" {
+	if got := dumpName(at); got != "BACKUP_2026-09-19T14-30-05Z.zip" {
 		t.Fatalf("dumpName = %q", got)
-	}
-}
-
-func TestNextRunUsesUTCTime(t *testing.T) {
-	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	if got := nextRun("04:00", now); !got.Equal(time.Date(2026, 9, 21, 4, 0, 0, 0, time.UTC)) {
-		t.Fatalf("nextRun(past) = %s, want tomorrow 04:00 UTC", got)
-	}
-	if got := nextRun("18:00", now); !got.Equal(time.Date(2026, 9, 20, 18, 0, 0, 0, time.UTC)) {
-		t.Fatalf("nextRun(future) = %s, want today 18:00 UTC", got)
-	}
-	if got := nextRun("", now); !got.IsZero() {
-		t.Fatalf("empty at should disable the schedule, got %s", got)
 	}
 }
 
@@ -127,5 +117,29 @@ func TestCatalogRecordsAndForgets(t *testing.T) {
 	}
 	if got := catalog.list(); len(got) != 1 || got[0].ID != "b" {
 		t.Fatalf("list after forget = %v", got)
+	}
+}
+
+func TestCatalogRefusesToOverwriteAnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pg-backups.json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	catalog := newCatalog(dir)
+	if err := catalog.record(Backup{ID: "new", Database: "app", Status: "ok"}); err == nil {
+		t.Fatal("record saved over an unreadable catalog")
+	}
+	if data, _ := os.ReadFile(path); string(data) != "{broken" {
+		t.Fatalf("catalog file was rewritten: %q", data)
+	}
+}
+
+func TestDropRefusesReservedDatabasesOnEveryPath(t *testing.T) {
+	connConfig := connConfig(t, "postgres://app@127.0.0.1:1/app")
+	for _, name := range []string{"postgres", "template0", "template1"} {
+		if err := dropDatabase(context.Background(), connConfig, name); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("dropDatabase(%s) = %v, want reserved refusal", name, err)
+		}
 	}
 }

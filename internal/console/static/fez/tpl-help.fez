@@ -495,7 +495,7 @@
           <li>Bounded disk use: rotation, retention per channel, a daily prune and SQLite <code>VACUUM</code>.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-logs"><db-config-keys paths="log_retention,stdout_retention,log_max_size,log_keep,log_tail_lines,log_flush,log_dir,daemon.prune_at,daemon.vacuum_at,daemon.log_ingest_interval,daemon.log_level" /></div>
+        <div fez:keep="keys-logs"><db-config-keys paths="log_retention,stdout_retention,log_max_size,log_keep,log_tail_lines,log_dir,daemon.prune_at,daemon.vacuum_at,daemon.log_ingest_interval,daemon.log_flush,daemon.log_level" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.logs" />
         <h3>Details</h3>
@@ -770,7 +770,7 @@
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
-          <li>Scheduled dumps run once a day at 04:00 UTC. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
+          <li>Scheduled dumps run once a day at 04:00 local time. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><b>Download</b> serves that zip as it is, and <b>Upload backup</b> stores one you picked as a manual entry, so a database moves between hosts: download here, upload there, restore there.</li>
           <li>A database page has a <b>Backup</b> and a <b>SQL</b> tab. SQL runs whatever you type as the role dboss connects with, <code>Cmd/Ctrl+Enter</code> runs it, a pasted batch runs in order and shows the last result set, and 500 rows travel while the full count is still reported. A run is bounded by a 30 second <code>statement_timeout</code>, and because it can write, every run is audited as <code>pg-query</code> with the statement.</li>

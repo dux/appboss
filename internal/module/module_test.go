@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeModule struct {
@@ -61,5 +62,35 @@ func TestManagerClosesStartedModulesOnFailure(t *testing.T) {
 	}
 	if strings.Join(closed, ",") != "a" {
 		t.Fatalf("closed=%v, want only the started module", closed)
+	}
+}
+
+func TestTickerRunsImmediatelyAndStopsOnClose(t *testing.T) {
+	passes := make(chan struct{}, 16)
+	var ticker Ticker
+	ticker.Run(context.Background(), time.Millisecond, true, func(context.Context) { passes <- struct{}{} })
+	for range 3 {
+		select {
+		case <-passes:
+		case <-time.After(time.Second):
+			t.Fatal("ticker did not run")
+		}
+	}
+	if err := ticker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for len(passes) > 0 {
+		<-passes
+	}
+	time.Sleep(5 * time.Millisecond)
+	if len(passes) != 0 {
+		t.Fatal("ticker kept running after Close")
+	}
+}
+
+func TestTickerCloseWithoutRun(t *testing.T) {
+	var ticker Ticker
+	if err := ticker.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -5,6 +5,7 @@ package module
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // Module is a daemon feature. Start begins its work; Close releases it. Both must be safe to
@@ -44,4 +45,42 @@ func (m *Manager) closeFrom(end int) error {
 		}
 	}
 	return first
+}
+
+// Ticker is the loop behind a module that runs one pass on a timer: Run starts it, Close stops
+// it and waits for a pass in flight.
+type Ticker struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// Run calls pass every interval until Close. immediate runs one pass first, still off the
+// caller's goroutine, so a slow pass never delays the daemon's start.
+func (t *Ticker) Run(ctx context.Context, interval time.Duration, immediate bool, pass func(context.Context)) {
+	ctx, t.cancel = context.WithCancel(ctx)
+	t.done = make(chan struct{})
+	go func() {
+		defer close(t.done)
+		if immediate {
+			pass(ctx)
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pass(ctx)
+			}
+		}
+	}()
+}
+
+func (t *Ticker) Close() error {
+	if t.cancel != nil {
+		t.cancel()
+		<-t.done
+	}
+	return nil
 }

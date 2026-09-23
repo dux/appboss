@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"dboss/internal/authcog"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const (
@@ -22,7 +22,7 @@ const signedOutPage = `<!doctype html><html lang="en"><meta charset="utf-8"><met
 
 // signInGate describes one app to the shared AuthCog flow. ResolveHost already matched the
 // request host to this app, so every host that gets here is one of its own.
-func signInGate(app super.Snapshot, realm string) authcog.Gate {
+func signInGate(app supervisor.Snapshot, realm string) authcog.Gate {
 	return authcog.Gate{
 		Audience:      "app:" + app.Name,
 		Realm:         realm,
@@ -37,18 +37,13 @@ func signInGate(app super.Snapshot, realm string) authcog.Gate {
 
 // signIn is the AuthCog gate of an app with auth.allow_emails. The email list is checked on
 // every request, so removing an entry ends that session with the next rescan.
-func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
+func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
 	if !app.Web.Auth.Enabled() {
 		next()
 		return
 	}
-	// The authcog login service owns its own path and is independent of this gate.
-	if app.Web.AuthCog.Enabled() && withinPath(app.Web.AuthCog.Path, r.URL.Path) {
+	if h.exempt(r, app) {
 		next()
-		return
-	}
-	if h.signin == nil {
-		http.Error(w, "sign-in is not available", http.StatusServiceUnavailable)
 		return
 	}
 	gate := signInGate(app, h.cfg.Management.Auth.Realm)
@@ -70,11 +65,6 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request, app super.Snaps
 	}
 	if session, ok := h.signin.Session(r, gate); ok && app.Web.Auth.Allows(session.Email) {
 		r.Header.Set(userHeader, session.Email)
-		next()
-		return
-	}
-	// A pubsub publisher presents the publish secret, not a browser session.
-	if h.pubsub != nil && h.pubsub.AuthorizesPublish(r, app) {
 		next()
 		return
 	}

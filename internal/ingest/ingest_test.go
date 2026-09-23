@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"dboss/internal/logstore"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 func TestParseLineReadsJSONAndPlain(t *testing.T) {
@@ -52,9 +52,9 @@ type fakeSealer struct{ paths []string }
 
 func (f *fakeSealer) SealLogs(string) ([]string, error) { return f.paths, nil }
 
-type fakeApps struct{ snapshots []super.Snapshot }
+type fakeApps struct{ snapshots []supervisor.Snapshot }
 
-func (f fakeApps) Snapshots() []super.Snapshot { return f.snapshots }
+func (f fakeApps) Snapshots() []supervisor.Snapshot { return f.snapshots }
 
 type memorySink struct {
 	entries   []logstore.LogEntry
@@ -99,15 +99,15 @@ func (m *memorySink) RemoveTailOffsets(_ string, paths []string) error {
 	return nil
 }
 
-func snapshot(dir string) super.Snapshot {
-	return super.Snapshot{Name: "demo", Dir: dir, LogRetention: time.Hour, StdoutRetention: time.Hour}
+func snapshot(dir string) supervisor.Snapshot {
+	return supervisor.Snapshot{Name: "demo", Dir: dir, LogRetention: time.Hour, StdoutRetention: time.Hour}
 }
 
 func TestRunOnceIngestsSealedStdoutThenDeletes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "web.log.1.sealed")
 	writeLog(t, path, "hello\n")
 	sink := &memorySink{}
-	module := New(&fakeSealer{paths: []string{path}}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module := New(&fakeSealer{paths: []string{path}}, fakeApps{[]supervisor.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
 	module.runOnce()
 	if len(sink.entries) != 1 || sink.entries[0].Message != "hello" || sink.entries[0].Source != "stdout" {
 		t.Fatalf("unexpected sink entries: %+v", sink.entries)
@@ -128,7 +128,7 @@ func TestCommitFailureKeepsSegmentAndOffset(t *testing.T) {
 	path := filepath.Join(logDir, "production.log")
 	writeLog(t, path, "one\n")
 	sink := &memorySink{appendErr: errors.New("database unavailable")}
-	module := New(&fakeSealer{paths: []string{segment}}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{paths: []string{segment}}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 	module.runOnce()
 
 	if _, err := os.Stat(segment); err != nil {
@@ -148,7 +148,7 @@ func TestTailFileReadsOnlyNewBytes(t *testing.T) {
 	path := filepath.Join(logDir, "production.log")
 	writeLog(t, path, "one\n")
 	sink := &memorySink{}
-	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 
 	module.runOnce()
 	if len(sink.entries) != 1 || sink.entries[0].Message != "one" || sink.entries[0].Source != "file" || sink.entries[0].Process != "production.log" {
@@ -174,7 +174,7 @@ func TestTailHoldsBackPartialLine(t *testing.T) {
 	path := filepath.Join(logDir, "app.log")
 	writeLog(t, path, "full\npart")
 	sink := &memorySink{}
-	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 
 	module.runOnce()
 	if len(sink.entries) != 1 || sink.entries[0].Message != "full" {
@@ -196,7 +196,7 @@ func TestTailResetsOnTruncation(t *testing.T) {
 	path := filepath.Join(logDir, "app.log")
 	writeLog(t, path, "long enough first line\n")
 	sink := &memorySink{}
-	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 	module.runOnce()
 
 	writeLog(t, path, "new\n")
@@ -213,7 +213,7 @@ func TestTailDropsStaleOffsets(t *testing.T) {
 	}
 	gone := filepath.Join(dir, "log", "gone.log")
 	sink := &memorySink{offsets: map[string]logstore.TailOffset{gone: {Path: gone, Offset: 10}}}
-	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 	module.runOnce()
 	if len(sink.removed) != 1 || sink.removed[0] != gone {
 		t.Fatalf("stale offset should be removed: %+v", sink.removed)
@@ -242,7 +242,7 @@ func TestTailHoldsOpenRowWhileFileIsFresh(t *testing.T) {
 	}
 	path := filepath.Join(logDir, "app.log")
 	sink := &memorySink{}
-	module := New(&fakeSealer{}, fakeApps{[]super.Snapshot{snapshot(dir)}}, sink, time.Second)
+	module := New(&fakeSealer{}, fakeApps{[]supervisor.Snapshot{snapshot(dir)}}, sink, time.Second)
 
 	// Just written: the last row may still get more lines.
 	if err := os.WriteFile(path, []byte("done\nhead\n  one\n"), 0o640); err != nil {
@@ -278,7 +278,7 @@ func TestSealedRowSplitAcrossSegmentsIsOneRow(t *testing.T) {
 	logs := t.TempDir()
 	first := filepath.Join(logs, "web.log.1000000000000000001.sealed")
 	sink := &memorySink{}
-	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module := New(diskSealer{logs}, fakeApps{[]supervisor.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
 
 	// The seal landed in the middle of a record of a busy process.
 	if err := os.WriteFile(first, []byte("done\nhead\n  one\n"), 0o640); err != nil {
@@ -311,7 +311,7 @@ func TestSealedCarryFlushesWhenProcessGoesQuiet(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink := &memorySink{}
-	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module := New(diskSealer{logs}, fakeApps{[]supervisor.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
 	module.runOnce()
 	if len(sink.entries) != 0 {
 		t.Fatalf("fresh row should be carried: %+v", sink.entries)
@@ -334,7 +334,7 @@ func TestSealedSegmentsAreRetriedAfterFailedCommit(t *testing.T) {
 	writeLog(t, filepath.Join(logs, "web.log.1000000000000000001.sealed"), "one\n")
 	writeLog(t, filepath.Join(logs, "worker.log.1000000000000000001.sealed"), "job\n")
 	sink := &memorySink{appendErr: errors.New("database unavailable")}
-	module := New(diskSealer{logs}, fakeApps{[]super.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
+	module := New(diskSealer{logs}, fakeApps{[]supervisor.Snapshot{snapshot(t.TempDir())}}, sink, time.Second)
 	module.runOnce()
 
 	sink.appendErr = nil

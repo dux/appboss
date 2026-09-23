@@ -98,9 +98,8 @@ func (c CLI) sshkeyNew(args []string) error {
 	target := set.String("f", "", "target path (default dir/name)")
 	noPass := set.Bool("no-passphrase", false, "create without a passphrase")
 	force := set.Bool("force", false, "overwrite an existing key")
-	// the name may come before the flags, which Go's flag package does not allow
-	flags, positionals := splitFlags(args, "--dir", "-dir", "-t", "--t", "-b", "--b", "-C", "--C", "-f", "--f")
-	if err := set.Parse(flags); err != nil {
+	positionals, err := parseSubcommandFlags(set, args)
+	if err != nil {
 		return err
 	}
 	if len(positionals) > 1 {

@@ -7,12 +7,12 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/notify"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
-type fakeApps struct{ snapshots []super.Snapshot }
+type fakeApps struct{ snapshots []supervisor.Snapshot }
 
-func (f fakeApps) Snapshots() []super.Snapshot { return f.snapshots }
+func (f fakeApps) Snapshots() []supervisor.Snapshot { return f.snapshots }
 
 type fakeStore struct {
 	windows map[string]logstore.Window
@@ -28,15 +28,15 @@ type recordingSink struct{ events []notify.Event }
 
 func (r *recordingSink) Send(event notify.Event) { r.events = append(r.events, event) }
 
-func snapshot(name string, alerts config.Alerts) super.Snapshot {
-	return super.Snapshot{Name: name, LogRetention: time.Hour, Web: config.Web{Alerts: alerts}}
+func snapshot(name string, alerts config.Alerts) supervisor.Snapshot {
+	return supervisor.Snapshot{Name: name, LogRetention: time.Hour, Web: config.Web{Alerts: alerts}}
 }
 
 func TestRunOnceFiresOverThreshold(t *testing.T) {
 	checks := config.Alerts{Window: config.Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10, SlowP95: config.Duration(2 * time.Second)}
 	quiet := snapshot("unlogged", checks)
 	quiet.LogRetention = 0
-	apps := fakeApps{snapshots: []super.Snapshot{
+	apps := fakeApps{snapshots: []supervisor.Snapshot{
 		snapshot("shop", checks),
 		snapshot("calm", checks),
 		snapshot("tiny", checks),

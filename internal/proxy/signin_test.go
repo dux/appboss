@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"dboss/internal/authcog"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const gated = "auth:\n  allow_emails: [ana@example.com, \"*@team.test\"]\n"
@@ -33,7 +33,7 @@ func browser(target string) *http.Request {
 }
 
 // signInCookieFor walks the redirect and the callback and returns the session cookie.
-func signInCookieFor(t *testing.T, handler *Handler, snapshot super.Snapshot) (*httptest.ResponseRecorder, *http.Cookie) {
+func signInCookieFor(t *testing.T, handler *Handler, snapshot supervisor.Snapshot) (*httptest.ResponseRecorder, *http.Cookie) {
 	t.Helper()
 	start := serveFeature(t, handler, snapshot, browser("http://demo.test:8080/reports?page=2"))
 	login, err := url.Parse(start.Header().Get("Location"))
@@ -62,7 +62,7 @@ func TestSignInGatesTheAppBehindAuthCog(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Stopped and without a manager: a request that got past the gate would panic in the wake stage.
-	snapshot.State = super.Stopped
+	snapshot.State = supervisor.Stopped
 	handler := signInHandler("Ana@Example.com")
 
 	api := httptest.NewRequest(http.MethodGet, "http://demo.test:8080/api/items", nil)
@@ -96,7 +96,7 @@ func TestSignInGatesTheAppBehindAuthCog(t *testing.T) {
 		t.Fatalf("session reused on another app = %d", response.Code)
 	}
 	removed := featureSnapshot(t, "auth:\n  allow_emails: [someone@else.test]\n")
-	removed.State = super.Stopped
+	removed.State = supervisor.Stopped
 	if response := serveFeature(t, handler, removed, static); response.Code != http.StatusUnauthorized {
 		t.Fatalf("session of a removed email = %d", response.Code)
 	}
@@ -111,7 +111,7 @@ func TestSignInGatesTheAppBehindAuthCog(t *testing.T) {
 
 func TestSignInAllowsDomainsAndRejectsOthers(t *testing.T) {
 	snapshot := featureSnapshot(t, gated)
-	snapshot.State = super.Stopped
+	snapshot.State = supervisor.Stopped
 	if _, cookie := signInCookieFor(t, signInHandler("bo@team.test"), snapshot); cookie == nil {
 		t.Fatal("an email of an allowed domain was rejected")
 	}
@@ -125,7 +125,7 @@ func TestSignInAllowsDomainsAndRejectsOthers(t *testing.T) {
 func TestSignInOwnsTheUserHeader(t *testing.T) {
 	handler := signInHandler("ana@example.com")
 	seen := ""
-	handler.filters = []Filter{handler.signIn, func(_ http.ResponseWriter, r *http.Request, _ super.Snapshot, _ func()) {
+	handler.filters = []Filter{handler.signIn, func(_ http.ResponseWriter, r *http.Request, _ supervisor.Snapshot, _ func()) {
 		seen = r.Header.Get(userHeader)
 	}}
 
@@ -156,7 +156,7 @@ func TestSignInHonorsPublishAuthorizer(t *testing.T) {
 	handler := signInHandler("ana@example.com")
 	handler.pubsub = authorizer
 	passed := false
-	handler.filters = []Filter{handler.signIn, func(http.ResponseWriter, *http.Request, super.Snapshot, func()) { passed = true }}
+	handler.filters = []Filter{handler.signIn, func(http.ResponseWriter, *http.Request, supervisor.Snapshot, func()) { passed = true }}
 	serveFeature(t, handler, featureSnapshot(t, gated), httptest.NewRequest(http.MethodPost, "http://demo.test:8080/socketio/news", nil))
 	if !authorizer.called || !passed {
 		t.Fatalf("publish secret did not pass the gate: called=%v passed=%v", authorizer.called, passed)

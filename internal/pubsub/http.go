@@ -11,7 +11,8 @@ import (
 	"strings"
 
 	"dboss/internal/config"
-	"dboss/internal/super"
+	"dboss/internal/httpx"
+	"dboss/internal/supervisor"
 )
 
 // Reserved path segments that never name a user channel.
@@ -27,7 +28,7 @@ var channelPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,64}$`)
 
 // Filter is the proxy stage. It answers the pubsub path of the web process that owns the request
 // host and lets every other request through.
-func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
+func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
 	web, ok := app.WebForHost(r.Host)
 	if !ok || !web.Pubsub.Enabled() {
 		next()
@@ -62,7 +63,7 @@ func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snaps
 			return
 		}
 		s.serveChannel(w, r, app.Name, web, rest)
-	case validChannel(rest):
+	case ValidChannel(rest):
 		s.serveChannel(w, r, app.Name, web, rest)
 	default:
 		next()
@@ -72,19 +73,19 @@ func (s *Service) Filter(w http.ResponseWriter, r *http.Request, app super.Snaps
 // AuthorizesPublish reports whether the request is a publish to this app carrying a valid secret.
 // The proxy's basic-auth stage consults it so a publisher needs only the publish secret, even when
 // the app also has basic_auth.
-func (s *Service) AuthorizesPublish(r *http.Request, app super.Snapshot) bool {
+func (s *Service) AuthorizesPublish(r *http.Request, app supervisor.Snapshot) bool {
 	web, ok := app.WebForHost(r.Host)
 	if !ok || !web.Pubsub.Enabled() || r.Method != http.MethodPost {
 		return false
 	}
 	rest, ok := route(web.Pubsub.Path, r.URL.Path)
-	if !ok || !validChannel(rest) {
+	if !ok || !ValidChannel(rest) {
 		return false
 	}
 	return s.authorize(r, app.Name, web)
 }
 
-func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app string, web supervisor.WebProcessSnapshot, channel string) {
 	switch r.Method {
 	case http.MethodPost:
 		s.servePublish(w, r, app, web, channel)
@@ -105,7 +106,7 @@ func (s *Service) serveChannel(w http.ResponseWriter, r *http.Request, app strin
 	}
 }
 
-func (s *Service) servePublish(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+func (s *Service) servePublish(w http.ResponseWriter, r *http.Request, app string, web supervisor.WebProcessSnapshot, channel string) {
 	if !s.authorize(r, app, web) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="pubsub"`)
 		http.Error(w, "invalid or missing publish secret", http.StatusUnauthorized)
@@ -135,7 +136,7 @@ func (s *Service) serveClient(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(s.client)
 }
 
-func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot) {
+func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app string, web supervisor.WebProcessSnapshot) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -154,7 +155,7 @@ func (s *Service) serveTestPublish(w http.ResponseWriter, r *http.Request, app s
 
 // authorize compares the request's publish token against the hub's effective secret in constant
 // time.
-func (s *Service) authorize(r *http.Request, app string, web super.WebProcessSnapshot) bool {
+func (s *Service) authorize(r *http.Request, app string, web supervisor.WebProcessSnapshot) bool {
 	secret, err := s.Secret(app, web.Name, web.Pubsub)
 	if err != nil || secret == "" {
 		return false
@@ -178,15 +179,13 @@ func route(prefix, requestPath string) (string, bool) {
 	return "", false
 }
 
-func validChannel(name string) bool {
+// ValidChannel reports whether name can be a channel: the reserved segments never are.
+func ValidChannel(name string) bool {
 	if name == testChannel || name == clientPath || name == testPath {
 		return false
 	}
 	return channelPattern.MatchString(name)
 }
-
-// ValidChannel reports whether name is a usable channel, for the CLI and console publish paths.
-func ValidChannel(name string) bool { return validChannel(name) }
 
 func upgradeRequested(r *http.Request) bool {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
@@ -212,8 +211,8 @@ func publishToken(r *http.Request) string {
 	if token := r.URL.Query().Get("token"); token != "" {
 		return token
 	}
-	if header := r.Header.Get("Authorization"); len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
-		return strings.TrimSpace(header[7:])
+	if token := httpx.BearerToken(r); token != "" {
+		return token
 	}
 	return r.Header.Get("X-Pubsub-Token")
 }

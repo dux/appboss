@@ -8,7 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 	writeTimeout = 10 * time.Second
 )
 
-func (s *Service) serveWebSocket(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+func (s *Service) serveWebSocket(w http.ResponseWriter, r *http.Request, app string, web supervisor.WebProcessSnapshot, channel string) {
 	cfg := web.Pubsub
 	sub, backlog, err := s.subscribe(hubID{app, web.Name}, channel, cfg)
 	if err != nil {

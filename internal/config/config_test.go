@@ -928,3 +928,61 @@ func TestConfigFolderLookupAndBaseDir(t *testing.T) {
 		t.Fatalf("BaseDir with a root file present = %q, want %q", got, nested)
 	}
 }
+
+// A nested block set in the app keeps every key it leaves out from defaults:.
+func TestNestedOverrideMergesKeyByKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dboss.yaml")
+	defaults := Default().Defaults
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nalerts:\n  min_requests: 7\nauthcog:\n  realm: shop\n"), path, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Alerts.MinRequests != 7 || app.Alerts.Window != defaults.Alerts.Window || app.Alerts.ErrorRate != defaults.Alerts.ErrorRate {
+		t.Fatalf("alerts = %+v", app.Alerts)
+	}
+	if app.AuthCog.Realm != "shop" || app.AuthCog.Path != defaults.AuthCog.Path {
+		t.Fatalf("authcog = %+v", app.AuthCog)
+	}
+}
+
+func TestParseAppChecksTheProcfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	defaults := Default().Defaults
+	if _, err := ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [\".demo.test\", \"*.api.test\"]\n"), path, defaults); err != nil {
+		t.Fatalf("pattern hosts rejected: %v", err)
+	}
+	for name, file := range map[string]string{
+		"malformed host":      "procfile:\n  web:\n    command: ./server\n    hosts: [demo..test]\n",
+		"bad process name":    "procfile:\n  Web: ./server\n",
+		"empty command":       "procfile:\n  web: \"  \"\n",
+		"unknown process key": "procfile:\n  web: ./server\nprocesses:\n  worker:\n    restart: always\n",
+	} {
+		if _, err := ParseApp([]byte(file), path, defaults); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestLiveFollowsTheLocalOverride(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, FileName)
+	local := filepath.Join(dir, LocalFileName)
+	writeConfigFile(t, base, "apps: ./apps\n")
+	if got := Live(base); got != base {
+		t.Fatalf("Live without override = %q", got)
+	}
+	writeConfigFile(t, local, "apps: ./apps\n")
+	if got := Live(base); got != local {
+		t.Fatalf("Live with override = %q, want %q", got, local)
+	}
+	if err := os.Remove(local); err != nil {
+		t.Fatal(err)
+	}
+	if got := Live(local); got != base {
+		t.Fatalf("Live after the override is gone = %q, want %q", got, base)
+	}
+	custom := filepath.Join(dir, "host.yaml")
+	if got := Live(custom); got != custom {
+		t.Fatalf("Live(custom) = %q", got)
+	}
+}

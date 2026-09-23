@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"dboss/internal/config"
+	"dboss/internal/fsutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -150,20 +151,13 @@ func (s *Store) Validate(id, contents string) error {
 		if (parsed.App != nil) != (s.root.App != nil) {
 			return errors.New("the host file cannot switch between apps and procfile while dboss runs")
 		}
-		if parsed.App != nil {
-			_, err = validateApp(*parsed.App)
-		}
-		return err
+		return nil
 	}
 	root, err := s.HostConfig()
 	if err != nil {
 		return fmt.Errorf("host file: %w", err)
 	}
-	app, err := config.ParseApp([]byte(contents), file.Path, root.Defaults)
-	if err != nil {
-		return err
-	}
-	_, err = validateApp(app)
+	_, err = config.ParseApp([]byte(contents), file.Path, root.Defaults)
 	return err
 }
 
@@ -290,24 +284,7 @@ func (s *Store) CreateLocal(app string) (ConfigFile, error) {
 	if file.HasLocal {
 		return ConfigFile{}, fmt.Errorf("%s already has %s", app, config.LocalFileName)
 	}
-	info, err := os.Stat(file.Path)
-	if err != nil {
-		return ConfigFile{}, err
-	}
-	data, err := os.ReadFile(file.Path)
-	if err != nil {
-		return ConfigFile{}, err
-	}
-	target := filepath.Join(filepath.Dir(file.Path), config.LocalFileName)
-	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if err != nil {
-		return ConfigFile{}, err
-	}
-	if _, err := handle.Write(data); err != nil {
-		_ = handle.Close()
-		return ConfigFile{}, err
-	}
-	if err := handle.Close(); err != nil {
+	if err := copyExclusive(file.Path, filepath.Join(filepath.Dir(file.Path), config.LocalFileName)); err != nil {
 		return ConfigFile{}, err
 	}
 	return s.Read("app:" + app)
@@ -334,25 +311,7 @@ func (s *Store) CreateHostLocal() (ConfigFile, error) {
 	if _, err := os.Stat(target); err == nil {
 		return s.Read("host")
 	}
-	mode := os.FileMode(0o644)
-	data := []byte(nil)
-	if info, err := os.Stat(s.root.SourcePath); err == nil {
-		mode = info.Mode().Perm()
-		if data, err = os.ReadFile(s.root.SourcePath); err != nil {
-			return ConfigFile{}, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return ConfigFile{}, err
-	}
-	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return ConfigFile{}, err
-	}
-	if _, err := handle.Write(data); err != nil {
-		_ = handle.Close()
-		return ConfigFile{}, err
-	}
-	if err := handle.Close(); err != nil {
+	if err := copyExclusive(s.root.SourcePath, target); err != nil {
 		return ConfigFile{}, err
 	}
 	return s.Read("host")
@@ -370,11 +329,7 @@ func (s *Store) HostConfig() (config.Config, error) {
 
 // Effective returns the resolved config of app as YAML, host defaults merged, read from disk.
 func (s *Store) Effective(name string) (string, error) {
-	path, err := config.FindInDir(s.root.Dir)
-	if err != nil {
-		return "", err
-	}
-	root, err := config.Load(path)
+	root, err := s.HostConfig()
 	if err != nil {
 		return "", fmt.Errorf("host file: %w", err)
 	}
@@ -389,6 +344,31 @@ func (s *Store) Effective(name string) (string, error) {
 	return string(data), nil
 }
 
+// copyExclusive creates target with the bytes and mode of source and fails when target already
+// exists, so two console clicks cannot overwrite an override. A missing source (a host running
+// on defaults) gives an empty 0644 file.
+func copyExclusive(source, target string) error {
+	mode := os.FileMode(0o644)
+	var data []byte
+	if info, err := os.Stat(source); err == nil {
+		mode = info.Mode().Perm()
+		if data, err = os.ReadFile(source); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := handle.Write(data); err != nil {
+		_ = handle.Close()
+		return err
+	}
+	return handle.Close()
+}
+
 func replaceFile(path string, data []byte) error {
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
@@ -396,19 +376,7 @@ func replaceFile(path string, data []byte) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	temp := path + ".tmp"
-	if err := os.WriteFile(temp, data, mode); err != nil {
-		return err
-	}
-	if err := os.Chmod(temp, mode); err != nil {
-		_ = os.Remove(temp)
-		return err
-	}
-	if err := os.Rename(temp, path); err != nil {
-		_ = os.Remove(temp)
-		return err
-	}
-	return nil
+	return fsutil.WriteFile(path, data, mode)
 }
 
 func revision(data []byte) string {

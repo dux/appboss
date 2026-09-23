@@ -13,7 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"dboss/internal/config"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -26,15 +26,15 @@ func newTestService(t *testing.T) *Service {
 	return service
 }
 
-func snapshotFor(name string, cfg config.Pubsub) super.Snapshot {
-	return super.Snapshot{
+func snapshotFor(name string, cfg config.Pubsub) supervisor.Snapshot {
+	return supervisor.Snapshot{
 		Name:         name,
 		Hosts:        []string{"app.test"},
-		WebProcesses: []super.WebProcessSnapshot{{Name: "web", Hosts: []string{"app.test"}, Pubsub: cfg}},
+		WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{"app.test"}, Pubsub: cfg}},
 	}
 }
 
-func filterHandler(service *Service, snapshot super.Snapshot) http.Handler {
+func filterHandler(service *Service, snapshot supervisor.Snapshot) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Host = "app.test"
 		service.Filter(w, r, snapshot, func() { w.WriteHeader(http.StatusTeapot) })
@@ -364,10 +364,10 @@ func TestAuthorizesPublish(t *testing.T) {
 
 func TestAuthorizesPublishPerWebProcess(t *testing.T) {
 	service := newTestService(t)
-	snapshot := super.Snapshot{
+	snapshot := supervisor.Snapshot{
 		Name:  "app",
 		Hosts: []string{"a.test", "b.test"},
-		WebProcesses: []super.WebProcessSnapshot{
+		WebProcesses: []supervisor.WebProcessSnapshot{
 			{Name: "a", Hosts: []string{"a.test"}, Pubsub: config.Pubsub{Path: "/socketio", Secret: "sa"}},
 			{Name: "b", Hosts: []string{"b.test"}, Pubsub: config.Pubsub{Path: "/socketio", Secret: "sb"}},
 		},

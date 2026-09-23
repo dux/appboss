@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // write creates path with size bytes, making the parent directories as it goes.
@@ -24,9 +24,9 @@ func TestDirBytesSumsRegularFiles(t *testing.T) {
 	write(t, filepath.Join(dir, "app.rb"), 100)
 	write(t, filepath.Join(dir, "public", "assets", "app.js"), 400)
 
-	total, err := DirBytes(dir)
+	total, err := dirBytes(dir, "")
 	if err != nil || total != 500 {
-		t.Fatalf("DirBytes = %d, %v; want 500", total, err)
+		t.Fatalf("dirBytes = %d, %v; want 500", total, err)
 	}
 }
 
@@ -39,9 +39,9 @@ func TestDirBytesFollowsASymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	total, err := DirBytes(current)
+	total, err := dirBytes(current, "")
 	if err != nil || total != 250 {
-		t.Fatalf("DirBytes through the release symlink = %d, %v; want 250", total, err)
+		t.Fatalf("dirBytes through the release symlink = %d, %v; want 250", total, err)
 	}
 }
 
@@ -55,16 +55,16 @@ func TestDirBytesDoesNotFollowEntrySymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	total, err := DirBytes(app)
+	total, err := dirBytes(app, "")
 	if err != nil || total != 100 {
-		t.Fatalf("DirBytes = %d, %v; want 100, a shared directory is not billed to the app", total, err)
+		t.Fatalf("dirBytes = %d, %v; want 100, a shared directory is not billed to the app", total, err)
 	}
 }
 
 func TestDirBytesMissingDirectoryIsNoError(t *testing.T) {
-	total, err := DirBytes(filepath.Join(t.TempDir(), "gone"))
+	total, err := dirBytes(filepath.Join(t.TempDir(), "gone"), "")
 	if err != nil || total != 0 {
-		t.Fatalf("DirBytes of a missing directory = %d, %v", total, err)
+		t.Fatalf("dirBytes of a missing directory = %d, %v", total, err)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestDirBytesKeepsThePartialSumOnAnUnreadableDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	total, err := DirBytes(dir)
+	total, err := dirBytes(dir, "")
 	if err == nil {
 		t.Fatal("an unreadable directory should be reported")
 	}
@@ -90,9 +90,9 @@ func TestDirBytesKeepsThePartialSumOnAnUnreadableDirectory(t *testing.T) {
 	}
 }
 
-type stubApps struct{ snapshots []super.Snapshot }
+type stubApps struct{ snapshots []supervisor.Snapshot }
 
-func (s stubApps) Snapshots() []super.Snapshot { return s.snapshots }
+func (s stubApps) Snapshots() []supervisor.Snapshot { return s.snapshots }
 
 func TestMeasureCountsLogsOnce(t *testing.T) {
 	dir := t.TempDir()
@@ -101,7 +101,7 @@ func TestMeasureCountsLogsOnce(t *testing.T) {
 	logDir := filepath.Join(dir, "log")
 	write(t, filepath.Join(logDir, "sinatra", "dboss.sqlite"), 900)
 
-	module := New(stubApps{snapshots: []super.Snapshot{{Name: "sinatra", Dir: app}}}, logDir)
+	module := New(stubApps{snapshots: []supervisor.Snapshot{{Name: "sinatra", Dir: app}}}, logDir)
 	usage, err := module.Refresh("sinatra")
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -122,7 +122,7 @@ func TestMeasureKeepsANestedLogDirOutOfAppBytes(t *testing.T) {
 	logDir := filepath.Join(app, ".dboss", "log")
 	write(t, filepath.Join(logDir, "sinatra", "dboss.sqlite"), 900)
 
-	module := New(stubApps{snapshots: []super.Snapshot{{Name: "sinatra", Dir: app}}}, logDir)
+	module := New(stubApps{snapshots: []supervisor.Snapshot{{Name: "sinatra", Dir: app}}}, logDir)
 	usage, err := module.Refresh("sinatra")
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -153,7 +153,7 @@ func TestRunOnceDropsAppsThatDisappeared(t *testing.T) {
 	write(t, filepath.Join(first, "app.rb"), 10)
 	write(t, filepath.Join(second, "app.rb"), 20)
 
-	apps := &stubApps{snapshots: []super.Snapshot{{Name: "first", Dir: first}, {Name: "second", Dir: second}}}
+	apps := &stubApps{snapshots: []supervisor.Snapshot{{Name: "first", Dir: first}, {Name: "second", Dir: second}}}
 	module := New(apps, filepath.Join(dir, "log"))
 	module.runOnce()
 	if _, ok := module.Usage("second"); !ok {
@@ -173,8 +173,8 @@ func TestRunOnceDropsAppsThatDisappeared(t *testing.T) {
 func TestMeasureSkipsAWalkThatIsAlreadyRunning(t *testing.T) {
 	app := t.TempDir()
 	write(t, filepath.Join(app, "app.rb"), 100)
-	snapshot := super.Snapshot{Name: "sinatra", Dir: app}
-	module := New(stubApps{snapshots: []super.Snapshot{snapshot}}, filepath.Join(app, "log"))
+	snapshot := supervisor.Snapshot{Name: "sinatra", Dir: app}
+	module := New(stubApps{snapshots: []supervisor.Snapshot{snapshot}}, filepath.Join(app, "log"))
 	if _, err := module.measure(snapshot); err != nil {
 		t.Fatalf("measure: %v", err)
 	}

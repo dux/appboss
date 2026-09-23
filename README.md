@@ -611,7 +611,7 @@ postgres:
 
 The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, and every database with its size, owner and last backup.
 
-Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 UTC; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `state_dir/pg-backups.json`.
+Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 local time; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `state_dir/pg-backups.json`.
 
 Every recorded dump has **Download**, which serves the stored zip as it is, and the per-database panel has **Upload backup**, which stores an archive you picked and records it as a manual entry.
 Together they move a database between hosts: download on one box, upload on the other, restore there.
@@ -705,7 +705,7 @@ Paths under `static_immutable` (default `/assets/`) are cached as immutable for 
 `error_page_path` names one static HTML file, relative to the app folder (for example `public/error_500.html`).
 It is sent as it is on disk and read on every request, and only a GET that accepts `text/html` ever gets a page; API and non-GET requests are never rewritten.
 
-* dboss's own errors (`502` when the app is unreachable, timed out or has no port) answer with this file, or with the built-in `./web/error.html` page when the key is empty or the file is unreadable.
+* dboss's own errors (`502` when the app is unreachable, timed out or has no port) answer with this file, or with the built-in error page when the key is empty or the file is unreadable.
 * The app's own `5xx` answers are replaced with this file, status kept, only when the key is set and the file is readable. With the key empty an app keeps its own error page.
 
 ## Restarts and forwarded headers
@@ -834,13 +834,18 @@ internal/daemon/      one host session: supervisor, modules, proxy, console, con
 internal/module/      module lifecycle (start in order, close in reverse)
 internal/config/      dboss.yaml model, validation, embedded reference.yaml
 internal/apps/        app discovery and the config file store the console edits
-internal/hook/        generated deploy-hook secrets under state_dir
-internal/super/       process supervisor, health checks, idle stop, state files, log writer/seal
-internal/ports/       fixed port allocation inside ports.range
-internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
+internal/secret/      generated deploy-hook and pubsub secrets under state_dir
+internal/supervisor/  process supervisor, health checks, idle stop, state files, log writer/seal
+internal/ports/       fixed port allocation inside ports.range, listener lookup and clearing (lsof)
+internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log,
+                      and the embedded built-in pages (pages/)
 internal/authcog/     AuthCog sign-in flow shared by the console and the per-app proxy gate
 internal/pubsub/      realtime channel hubs served in front of a web process
-internal/schedule/    cron expression parsing for scheduled jobs
+internal/schedule/    cron expression parsing and the daily HH:MM timer
+internal/preview/     github_pr preview requests and app file templates
+internal/git/         token-authenticated clone and reset for deploys and previews
+internal/fsutil/      atomic writes for the daemon's state files
+internal/httpx/       request helpers shared by the console, proxy and pubsub
 internal/alerts/      error-rate and slow-request checks over the request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
@@ -857,7 +862,6 @@ internal/console/     management console: auth, JSON API, embedded fez frontend
 internal/ctl/         control socket protocol, server and client
 internal/ops/         one implementation of every app action, shared by CLI and console
 internal/res/         resource backend: process groups or cgroup v2 limits
-web/                  starting, crashed, button, maintenance, error and 404 pages
 demo/                 host config and three sample apps
 ```
 

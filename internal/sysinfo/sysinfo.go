@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"dboss/internal/module"
 	"dboss/internal/release"
 	"dboss/internal/version"
 )
@@ -371,12 +372,11 @@ func firstLine(output string) string {
 type Module struct {
 	inspector *Inspector
 	interval  time.Duration
-	cancel    context.CancelFunc
-	done      chan struct{}
+	loop      module.Ticker
 }
 
 func New(dirs []DirSpec) *Module {
-	return &Module{inspector: NewInspector(dirs), interval: defaultInterval, done: make(chan struct{})}
+	return &Module{inspector: NewInspector(dirs), interval: defaultInterval}
 }
 
 func (m *Module) Name() string          { return "sysinfo" }
@@ -384,30 +384,8 @@ func (m *Module) Inspector() *Inspector { return m.inspector }
 
 func (m *Module) Start(ctx context.Context) error {
 	// Probing every tool can take a moment, so collection runs off the daemon's start path.
-	ctx, m.cancel = context.WithCancel(ctx)
-	go m.loop(ctx)
+	m.loop.Run(ctx, m.interval, true, func(ctx context.Context) { m.inspector.Refresh(ctx) })
 	return nil
 }
 
-func (m *Module) Close() error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	return nil
-}
-
-func (m *Module) loop(ctx context.Context) {
-	defer close(m.done)
-	m.inspector.Refresh(ctx)
-	ticker := time.NewTicker(m.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.inspector.Refresh(ctx)
-		}
-	}
-}
+func (m *Module) Close() error { return m.loop.Close() }

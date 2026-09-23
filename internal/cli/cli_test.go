@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"flag"
 	"io"
 	"os"
@@ -11,8 +12,11 @@ import (
 	"time"
 
 	"dboss/internal/config"
+	"dboss/internal/ops"
 	"dboss/internal/res"
+	"dboss/internal/supervisor"
 	"dboss/internal/version"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -85,16 +89,16 @@ func TestFindConfigOrder(t *testing.T) {
 func TestAppArgumentDefaultsToFolderApp(t *testing.T) {
 	dir := chdir(t, t.TempDir())
 	t.Setenv("DBOSS_CONFIG", "")
-	if name, err := appArgument([]string{"explicit"}, ""); err != nil || name != "explicit" {
+	if name, err := (&workdir{}).app([]string{"explicit"}); err != nil || name != "explicit" {
 		t.Fatalf("got %q, %v", name, err)
 	}
 	writeFile(t, filepath.Join(dir, config.FileName), "procfile:\n  web: ./server\n")
-	name, err := appArgument(nil, "")
+	name, err := (&workdir{}).app(nil)
 	if err != nil || name != filepath.Base(dir) {
 		t.Fatalf("got %q, %v", name, err)
 	}
 	writeFile(t, filepath.Join(dir, config.FileName), "apps: ./apps\n")
-	if _, err := appArgument(nil, ""); err == nil {
+	if _, err := (&workdir{}).app(nil); err == nil {
 		t.Fatal("host config must not supply an implicit app")
 	}
 }
@@ -103,11 +107,11 @@ func TestFindSocketFallsBackToWellKnownPath(t *testing.T) {
 	dir := chdir(t, t.TempDir())
 	t.Setenv("DBOSS_CONFIG", "")
 	t.Setenv("DBOSS_SOCKET", "")
-	if socket, _ := findSocket("", ""); socket != defaultSocket {
+	if socket, _ := (&workdir{}).socket(""); socket != defaultSocket {
 		t.Fatalf("got %q", socket)
 	}
 	writeFile(t, filepath.Join(dir, config.FileName), "procfile:\n  web: ./server\n")
-	if socket, _ := findSocket("", ""); socket != defaultSocket {
+	if socket, _ := (&workdir{}).socket(""); socket != defaultSocket {
 		t.Fatalf("missing socket file should fall back, got %q", socket)
 	}
 	socketPath := filepath.Join(dir, ".dboss", "dboss.sock")
@@ -115,14 +119,14 @@ func TestFindSocketFallsBackToWellKnownPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, socketPath, "")
-	if socket, _ := findSocket("", ""); socket != socketPath {
+	if socket, _ := (&workdir{}).socket(""); socket != socketPath {
 		t.Fatalf("existing config socket should win, got %q", socket)
 	}
 	t.Setenv("DBOSS_SOCKET", "/env.sock")
-	if socket, _ := findSocket("", ""); socket != "/env.sock" {
+	if socket, _ := (&workdir{}).socket(""); socket != "/env.sock" {
 		t.Fatalf("env should win, got %q", socket)
 	}
-	if socket, _ := findSocket("/flag.sock", ""); socket != "/flag.sock" {
+	if socket, _ := (&workdir{}).socket("/flag.sock"); socket != "/flag.sock" {
 		t.Fatalf("flag should win, got %q", socket)
 	}
 }
@@ -306,22 +310,39 @@ func TestConfigPrintsGivenFileOrDefaults(t *testing.T) {
 	}
 }
 
-func TestSplitFlagsSeparatesValuedFlagsFromPositionals(t *testing.T) {
-	flags, positionals := splitFlags(
-		[]string{"--event", "message", "--data", `{"a":1}`, "chat", "--json"},
-		"--event", "--data",
-	)
-	if strings.Join(flags, "|") != `--event|message|--data|{"a":1}|--json` {
-		t.Fatalf("flags = %v", flags)
+func TestParseRemoteReadsFlagsAfterOperands(t *testing.T) {
+	c := CLI{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	opts, err := commonArgs([]string{"publish", "demo", "chat", "--event", "note", "--data", `{"a":1}`, "--process", "api"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Join(positionals, "|") != "chat" {
-		t.Fatalf("positionals = %v", positionals)
+	request, err := c.parseRemote("pubsub", opts, &workdir{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if request.Method != ops.ActionPubsubPublish || request.App != "demo" || request.Channel != "chat" || request.Event != "note" || request.Process != "api" || string(request.Data) != `{"a":1}` {
+		t.Fatalf("request = %+v", request)
+	}
+	opts, _ = commonArgs([]string{"rotate", "demo", "deploy"})
+	if request, err = c.parseRemote("hooks", opts, &workdir{}); err != nil || request.Method != ops.ActionHookRotate || request.App != "demo" || request.Hook != "deploy" {
+		t.Fatalf("hooks rotate = %+v, %v", request, err)
+	}
+	opts, _ = commonArgs([]string{"demo", "-n", "5", "-f"})
+	if request, err = c.parseRemote("logs", opts, &workdir{}); err != nil || request.App != "demo" || request.Lines != 5 || !opts.follow {
+		t.Fatalf("logs = %+v follow=%v, %v", request, opts.follow, err)
+	}
+}
 
-	// name=value stays one token, so the next argument is positional.
-	flags, positionals = splitFlags([]string{"--data=raw", "chat"}, "--data")
-	if strings.Join(flags, "|") != "--data=raw" || strings.Join(positionals, "|") != "chat" {
-		t.Fatalf("equals form: flags=%v positionals=%v", flags, positionals)
+// Every action that answers with a value has a result type, so its human output never type-asserts
+// the placeholder map.
+func TestPrintHumanHookRotate(t *testing.T) {
+	var out bytes.Buffer
+	c := CLI{Out: &out, Err: &out}
+	if err := c.printHuman(ops.ActionHookRotate, supervisor.HookInfo{URL: "https://dboss.test/hooks/demo/deploy?token=x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "https://dboss.test/hooks/demo/deploy?token=x") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
 

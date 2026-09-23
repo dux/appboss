@@ -16,10 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/ports"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 func TestClientIP(t *testing.T) {
@@ -99,8 +100,8 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	cfg.Ports.Range = [2]int{32200, 32220}
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
-	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
+	cfg.Daemon.LogFlush = config.Duration(10 * time.Millisecond)
+	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	}
 	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer requestLogs.Close()
-	handler, err := New(cfg, manager, requestLogs, nil)
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), manager, requestLogs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if wakeResponse.Code != http.StatusServiceUnavailable || !strings.Contains(wakeResponse.Body.String(), "Starting demo") {
 		t.Fatalf("unexpected wake response: %d %s", wakeResponse.Code, wakeResponse.Body.String())
 	}
-	waitForProxyState(t, manager, super.Running)
+	waitForProxyState(t, manager, supervisor.Running)
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/hello?x=1", nil)
 	request.Host = "demo.test"
 	request.Header.Set("CF-Ray", "ray-123")
@@ -199,8 +200,8 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	cfg.Ports.Range = [2]int{32300, 32320}
 	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
-	cfg.Defaults.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := super.New(cfg, ports.New(cfg.Ports.Range), nil)
+	cfg.Daemon.LogFlush = config.Duration(10 * time.Millisecond)
+	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	}
 	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer requestLogs.Close()
-	handler, err := New(cfg, manager, requestLogs, nil)
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), manager, requestLogs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +223,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	if getResponse.Code != http.StatusServiceUnavailable || !strings.Contains(getResponse.Body.String(), "Start app: demo") {
 		t.Fatalf("stopped button page = %d %s", getResponse.Code, getResponse.Body.String())
 	}
-	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != super.Stopped {
+	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != supervisor.Stopped {
 		t.Fatalf("GET woke the button app: %+v", snapshot)
 	}
 	post := httptest.NewRequest(http.MethodPost, "http://demo.test/", nil)
@@ -233,7 +234,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	if postResponse.Code != http.StatusServiceUnavailable || !strings.Contains(postResponse.Body.String(), "Starting demo") {
 		t.Fatalf("post wake response = %d %s", postResponse.Code, postResponse.Body.String())
 	}
-	waitForProxyState(t, manager, super.Running)
+	waitForProxyState(t, manager, supervisor.Running)
 }
 
 // assertUpgradePassthrough drives a raw websocket-style upgrade through a real listener so the
@@ -355,7 +356,7 @@ func TestProxyHelperProcess(t *testing.T) {
 	}
 }
 
-func waitForProxyState(t *testing.T, manager *super.Manager, state super.State) {
+func waitForProxyState(t *testing.T, manager *supervisor.Manager, state supervisor.State) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -388,7 +389,7 @@ type fakeAuthorizer struct {
 	called bool
 }
 
-func (f *fakeAuthorizer) AuthorizesPublish(*http.Request, super.Snapshot) bool {
+func (f *fakeAuthorizer) AuthorizesPublish(*http.Request, supervisor.Snapshot) bool {
 	f.called = true
 	return f.allow
 }
@@ -396,7 +397,7 @@ func (f *fakeAuthorizer) AuthorizesPublish(*http.Request, super.Snapshot) bool {
 // A pubsub publisher presents its own secret, so basic_auth must not reject it before the
 // publisher filter runs.
 func TestAuthorizeHonorsPublishAuthorizer(t *testing.T) {
-	app := super.Snapshot{Name: "web", Web: config.Web{BasicAuth: map[string]string{"alice": "$2a$10$abcdefghijklmnopqrstuv"}}}
+	app := supervisor.Snapshot{Name: "web", Web: config.Web{BasicAuth: map[string]string{"alice": "$2a$10$abcdefghijklmnopqrstuv"}}}
 
 	authorizer := &fakeAuthorizer{allow: true}
 	handler := &Handler{pubsub: authorizer}

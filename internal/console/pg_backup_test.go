@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/ops"
 	"dboss/internal/pg"
@@ -30,8 +31,8 @@ func pgHandler(t *testing.T) *Handler {
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	cfg.Postgres.Enabled = true
 
-	service := ops.New(&fakeManager{}, nil, fakeLogs{}, pg.New(cfg, nil), nil, nil)
-	handler, err := New(cfg, service, newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
+	service := ops.New(&fakeManager{}, fakeLogs{}, pg.New(cfg, nil), nil, nil, nil)
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), service, newFakeStore(), &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,27 +11,31 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"dboss/internal/config"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
 func featureHandler() *Handler {
-	handler := &Handler{cfg: config.Default(), button: []byte(defaultButtonPage), maintenance: []byte(defaultMaintenancePage), failed: []byte(defaultErrorPage)}
+	button, _ := builtinPages.ReadFile("pages/button.html")
+	maintenance, _ := builtinPages.ReadFile("pages/maintenance.html")
+	failed, _ := builtinPages.ReadFile("pages/error.html")
+	denied, _ := builtinPages.ReadFile("pages/forbidden.html")
+	handler := &Handler{cfg: config.Default(), button: button, maintenance: maintenance, failed: failed, denied: denied}
 	handler.initFilters()
 	return handler
 }
 
-func featureSnapshot(t *testing.T, data string) super.Snapshot {
+func featureSnapshot(t *testing.T, data string) supervisor.Snapshot {
 	t.Helper()
 	dir := t.TempDir()
 	app, err := config.ParseApp([]byte("procfile:\n  web:\n    command: ./server\n    hosts: [demo.test, www.demo.test]\n"+data), filepath.Join(dir, config.FileName), config.Default().Defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: super.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
+	return supervisor.Snapshot{Name: "demo", State: supervisor.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: supervisor.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
 }
 
-func serveFeature(t *testing.T, handler *Handler, snapshot super.Snapshot, request *http.Request) *httptest.ResponseRecorder {
+func serveFeature(t *testing.T, handler *Handler, snapshot supervisor.Snapshot, request *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	response := httptest.NewRecorder()
 	handler.serve(&responseRecorder{ResponseWriter: response, status: http.StatusOK}, request, snapshot)
@@ -55,7 +59,7 @@ func TestDrainingAppAnswers503(t *testing.T) {
 
 func TestHealthEndpointReportsState(t *testing.T) {
 	path := "/.well-known/dboss/health"
-	get := func(snapshot super.Snapshot) *httptest.ResponseRecorder {
+	get := func(snapshot supervisor.Snapshot) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, "http://demo.test"+path, nil)
 		request.Host = "demo.test"
 		return serveFeature(t, featureHandler(), snapshot, request)
@@ -68,18 +72,18 @@ func TestHealthEndpointReportsState(t *testing.T) {
 	}
 	// A sleeping app wakes on the next request, so a health check must not report it down.
 	stopped := featureSnapshot(t, "")
-	stopped.State = super.Stopped
+	stopped.State = supervisor.Stopped
 	if response := get(stopped); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"stopped"`) {
 		t.Fatalf("stopped health = %d %s", response.Code, response.Body.String())
 	}
 	button := featureSnapshot(t, "")
-	button.State = super.Stopped
+	button.State = supervisor.Stopped
 	button.WakeButton = true
 	if response := get(button); response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("stopped button health = %d", response.Code)
 	}
 	crashed := featureSnapshot(t, "")
-	crashed.State = super.Crashed
+	crashed.State = supervisor.Crashed
 	if response := get(crashed); response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("crashed health = %d", response.Code)
 	}
@@ -130,7 +134,7 @@ func TestCanonicalHostPerWebProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := super.Snapshot{Name: "demo", State: super.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: super.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
+	snapshot := supervisor.Snapshot{Name: "demo", State: supervisor.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: supervisor.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
 	// The scheme mirrors the plain-HTTP requests below; what matters here is that each web
 	// process redirects to its own canonical host, not the other one's.
 	for host, want := range map[string]string{"www.shop.test": "http://shop.test/", "www.admin.test": "http://admin.test/"} {
@@ -193,7 +197,7 @@ func TestUnauthorizedRequestNeverWakesAStoppedApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := featureSnapshot(t, "basic_auth:\n  alice: \""+string(hash)+"\"\n")
-	snapshot.State = super.Stopped
+	snapshot.State = supervisor.Stopped
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 	request.Header.Set("Accept", "text/html")
 	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code != http.StatusUnauthorized {
@@ -311,7 +315,7 @@ func TestStaticExtensionsEmptyServesAnyFile(t *testing.T) {
 
 // The feature handler has no upstream, so every forwarded request is a proxy error.
 func TestErrorPageForProxyErrors(t *testing.T) {
-	get := func(snapshot super.Snapshot, accept string) *httptest.ResponseRecorder {
+	get := func(snapshot supervisor.Snapshot, accept string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 		if accept != "" {
 			request.Header.Set("Accept", accept)

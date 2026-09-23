@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,11 +42,9 @@ var reservedDatabases = map[string]bool{"postgres": true, "template0": true, "te
 // Restore unpacks a dump and loads it into the target database. It never touches the source
 // database unless Replace is set, and then only with an explicit confirmation.
 func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
-	s.mu.RLock()
-	connConfig := s.connConfig
-	s.mu.RUnlock()
-	if connConfig == nil {
-		return RestoreResult{}, errors.New("no reachable PostgreSQL server")
+	connConfig, err := s.connection(ctx)
+	if err != nil {
+		return RestoreResult{}, err
 	}
 	entry, ok := s.catalog.get(request.ID)
 	if !ok {
@@ -75,15 +72,18 @@ func (s *Service) Restore(ctx context.Context, request RestoreRequest) (RestoreR
 	if target == "" {
 		target = fmt.Sprintf("%s_restore_%s", entry.Database, time.Now().UTC().Format("20060102150405"))
 	}
+	if err := validDatabaseName(target); err != nil {
+		return RestoreResult{}, err
+	}
 	if request.Replace {
 		if request.Confirm != target {
 			return RestoreResult{}, ErrRestoreConfirm
 		}
-		if err := s.dropDatabase(ctx, connConfig, target); err != nil {
+		if err := dropDatabase(ctx, connConfig, target); err != nil {
 			return RestoreResult{}, err
 		}
 	}
-	if err := s.createDatabase(ctx, connConfig, target); err != nil {
+	if err := createDatabase(ctx, connConfig, target); err != nil {
 		return RestoreResult{}, err
 	}
 	if err := runRestore(ctx, connConfig, sqlPath, target); err != nil {
@@ -101,16 +101,11 @@ func (s *Service) DropDatabase(ctx context.Context, database, confirm string) er
 	if database != confirm {
 		return ErrDropConfirm
 	}
-	if reservedDatabases[database] {
-		return fmt.Errorf("%s is a reserved database and cannot be dropped", database)
+	connConfig, err := s.connection(ctx)
+	if err != nil {
+		return err
 	}
-	s.mu.RLock()
-	connConfig := s.connConfig
-	s.mu.RUnlock()
-	if connConfig == nil {
-		return errors.New("no reachable PostgreSQL server")
-	}
-	return s.dropDatabase(ctx, connConfig, database)
+	return dropDatabase(ctx, connConfig, database)
 }
 
 // fetch returns the dump's path on disk, or an error when the file is gone.
@@ -159,56 +154,68 @@ func unzip(path string) (string, func(), error) {
 	return sqlPath, cleanup, nil
 }
 
-func (s *Service) dropDatabase(ctx context.Context, connConfig *pgx.ConnConfig, target string) error {
+// dropDatabase is the only path to DROP DATABASE, so the reserved databases are refused here
+// whichever action asked.
+func dropDatabase(ctx context.Context, connConfig *pgx.ConnConfig, target string) error {
+	if reservedDatabases[target] {
+		return fmt.Errorf("%s is a reserved database and cannot be dropped", target)
+	}
+	if err := maintenanceExec(ctx, connConfig, "DROP DATABASE IF EXISTS "+pgx.Identifier{target}.Sanitize()+" WITH (FORCE)"); err != nil {
+		return fmt.Errorf("drop database %s: %w", target, err)
+	}
+	return nil
+}
+
+func createDatabase(ctx context.Context, connConfig *pgx.ConnConfig, target string) error {
+	if err := maintenanceExec(ctx, connConfig, "CREATE DATABASE "+pgx.Identifier{target}.Sanitize()); err != nil {
+		return fmt.Errorf("create database %s: %w", target, err)
+	}
+	return nil
+}
+
+// maintenanceExec runs one statement on the first of postgres or template1 that accepts a
+// connection, since a database cannot be created or dropped from inside itself.
+func maintenanceExec(ctx context.Context, connConfig *pgx.ConnConfig, statement string) error {
 	var lastErr error
 	for _, maintenance := range []string{"postgres", "template1"} {
-		conn, err := pgx.ConnectConfig(ctx, mustConfig(connConfig, maintenance))
+		conn, err := pgx.ConnectConfig(ctx, forDatabase(connConfig, maintenance))
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		_, err = conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{target}.Sanitize()+" WITH (FORCE)")
+		_, err = conn.Exec(ctx, statement)
 		_ = conn.Close(ctx)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
 	}
-	return fmt.Errorf("drop database %s: %w", target, lastErr)
+	return lastErr
 }
 
-// createDatabase connects to the maintenance database and creates the target. It uses the first
-// of postgres or template1 that accepts a connection.
-func (s *Service) createDatabase(ctx context.Context, connConfig *pgx.ConnConfig, target string) error {
-	var lastErr error
-	for _, maintenance := range []string{"postgres", "template1"} {
-		conn, err := pgx.ConnectConfig(ctx, mustConfig(connConfig, maintenance))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		_, err = conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{target}.Sanitize())
-		_ = conn.Close(ctx)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-	}
-	return fmt.Errorf("create database %s: %w", target, lastErr)
-}
-
-func mustConfig(connConfig *pgx.ConnConfig, database string) *pgx.ConnConfig {
+// forDatabase is connConfig pointed at another database on the same server.
+func forDatabase(connConfig *pgx.ConnConfig, database string) *pgx.ConnConfig {
 	clone := connConfig.Copy()
 	clone.Database = database
 	return clone
 }
 
 func runRestore(ctx context.Context, connConfig *pgx.ConnConfig, path, target string) error {
-	command := exec.CommandContext(ctx, "psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--dbname="+databaseConnString(connConfig, target), "--file="+path)
+	return runClient(ctx, connConfig, "psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--dbname="+databaseConnString(connConfig, target), "--file="+path)
+}
+
+// runClient runs pg_dump or psql against the server. The password travels in the environment,
+// never argv, and a failure reports the tool's first output line.
+func runClient(ctx context.Context, connConfig *pgx.ConnConfig, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
 	command.Env = processEnv(connConfig)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s: %s", filepath.Base(command.Path), firstLine(string(output)))
+		message := firstLine(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("%s: %s", name, message)
 	}
 	return nil
 }

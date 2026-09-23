@@ -17,11 +17,12 @@ import (
 	"time"
 
 	"dboss/internal/apps"
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/diskusage"
 	"dboss/internal/logstore"
 	"dboss/internal/ops"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 	"dboss/internal/sysinfo"
 	"dboss/internal/version"
 )
@@ -41,25 +42,25 @@ func (f *fakeSys) Refresh(context.Context) sysinfo.Snapshot {
 }
 
 type fakeManager struct {
-	snapshots   []super.Snapshot
+	snapshots   []supervisor.Snapshot
 	logs        map[string][]string
 	actions     []string
 	warnings    []error
-	hooks       map[string][]super.HookInfo
+	hooks       map[string][]supervisor.HookInfo
 	hookSecrets map[string]string
 }
 
-func (m *fakeManager) Snapshots() []super.Snapshot {
-	return append([]super.Snapshot(nil), m.snapshots...)
+func (m *fakeManager) Snapshots() []supervisor.Snapshot {
+	return append([]supervisor.Snapshot(nil), m.snapshots...)
 }
 
-func (m *fakeManager) Snapshot(app string) (super.Snapshot, error) {
+func (m *fakeManager) Snapshot(app string) (supervisor.Snapshot, error) {
 	for _, snapshot := range m.snapshots {
 		if snapshot.Name == app {
 			return snapshot, nil
 		}
 	}
-	return super.Snapshot{}, errors.New("unknown app")
+	return supervisor.Snapshot{}, errors.New("unknown app")
 }
 
 func (m *fakeManager) Ports() map[string]int { return map[string]int{} }
@@ -106,12 +107,12 @@ func (m *fakeManager) RunHook(app, hook string) error {
 	return nil
 }
 
-func (m *fakeManager) RotateHook(app, hook string) (super.HookInfo, error) {
+func (m *fakeManager) RotateHook(app, hook string) (supervisor.HookInfo, error) {
 	m.actions = append(m.actions, fmt.Sprintf("hook-rotate %s %s", app, hook))
-	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://dboss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
+	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://dboss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
 }
 
-func (m *fakeManager) Hooks(app string) ([]super.HookInfo, error) {
+func (m *fakeManager) Hooks(app string) ([]supervisor.HookInfo, error) {
 	return m.hooks[app], nil
 }
 
@@ -127,9 +128,9 @@ func (m *fakeManager) HostHookSecret(name string) (string, error) {
 	return "host-secret", nil
 }
 
-func (m *fakeManager) Exec(app string, argv []string, timeout time.Duration) (super.ExecResult, error) {
+func (m *fakeManager) Exec(app string, argv []string, timeout time.Duration) (supervisor.ExecResult, error) {
 	m.actions = append(m.actions, fmt.Sprintf("exec %s %s", app, strings.Join(argv, " ")))
-	return super.ExecResult{Output: "ran\n", ExitCode: 0}, nil
+	return supervisor.ExecResult{Output: "ran\n", ExitCode: 0}, nil
 }
 
 func (m *fakeManager) Rescan() ([]error, error) {
@@ -223,6 +224,8 @@ func (s *fakeStore) EnsureLocal(app string) (apps.ConfigFile, error) {
 	return s.CreateLocal(app)
 }
 
+func (s *fakeStore) CreateHostLocal() (apps.ConfigFile, error) { return s.Read("host") }
+
 func (s *fakeStore) Effective(app string) (string, error) {
 	if app != "sinatra" {
 		return "", errors.New("unknown app")
@@ -259,14 +262,17 @@ func (s *fakeStore) Restore(id, revision string) (apps.ConfigFile, error) {
 
 type fakeRates map[string]logstore.Rates
 
-func (rates fakeRates) Rates(app string) (logstore.Rates, error) {
-	if value, ok := rates[app]; ok {
+// fakeLogs is the log store the console tests read; rates answers the request counters.
+type fakeLogs struct{ rates fakeRates }
+
+func (f fakeLogs) Rates(app string) (logstore.Rates, error) {
+	if value, ok := f.rates[app]; ok {
 		return value, nil
 	}
 	return logstore.Rates{}, errors.New("missing rate fixture")
 }
 
-type fakeLogs struct{}
+func (fakeLogs) Window(string, time.Time) (logstore.Window, error) { return logstore.Window{}, nil }
 
 func (fakeLogs) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, error) {
 	return []logstore.LogEntry{{Time: time.Now(), Source: "process", Process: "web", Level: "error", Message: "boom"}}, nil
@@ -303,7 +309,7 @@ func (fakeLogs) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error)
 }
 
 func TestConsoleBootstrapAndActions(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "sinatra", State: super.Running, Hosts: []string{"sinatra.lvh.me"}}}}
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "sinatra", State: supervisor.Running, Hosts: []string{"sinatra.lvh.me"}}}}
 	handler := newTestHandler(t, manager, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}})
 	cookie, session := sessionCookie(t, handler)
 
@@ -350,7 +356,7 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 }
 
 func TestConsoleRunsCronJob(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "bun"}}}
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "bun"}}}
 	handler := newTestHandler(t, manager, nil)
 	cookie, session := sessionCookie(t, handler)
 	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"bun","action":"cron-run","job":"heartbeat"}`))
@@ -471,7 +477,7 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	}
 }
 
-func newTestHandler(t *testing.T, manager *fakeManager, rates ops.Rates) *Handler {
+func newTestHandler(t *testing.T, manager *fakeManager, rates fakeRates) *Handler {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Apps = "/apps"
@@ -491,9 +497,9 @@ func newDevTestHandler(t *testing.T, manager *fakeManager) *Handler {
 	return handlerFor(t, cfg, manager, nil)
 }
 
-func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates ops.Rates) *Handler {
+func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates fakeRates) *Handler {
 	t.Helper()
-	handler, err := New(cfg, ops.New(manager, rates, fakeLogs{}, nil, nil, nil), newFakeStore(), nil, &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{rates: rates}, nil, nil, nil, nil), newFakeStore(), &fakeSys{snapshot: sysinfo.Snapshot{Host: sysinfo.Host{Hostname: "box"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,8 +558,8 @@ func TestConsoleRefreshesAppDiskUsage(t *testing.T) {
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "sinatra", State: super.Running}}}
-	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil, &fakeDisk{}), newFakeStore(), nil, &fakeSys{})
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "sinatra", State: supervisor.Running}}}
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{}, nil, nil, &fakeDisk{}, nil), newFakeStore(), &fakeSys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +664,7 @@ func TestConsoleConfigEditorRoundTrip(t *testing.T) {
 		t.Fatalf("stale write should answer 409 with the current file: %d %s", stale.Code, stale.Body.String())
 	}
 	written := call(t, handler, cookie, session, http.MethodPut, "/api/config/file", `{"id":"app:sinatra","contents":"procfile:\n  web: ./other\n","revision":"`+file.Revision+`"}`)
-	var result writeResponse
+	var result ops.ConfigResult
 	if err := json.Unmarshal(written.Body.Bytes(), &result); err != nil || written.Code != http.StatusOK || result.File.Revision == file.Revision || len(result.Invalid) != 1 || manager.actions[len(manager.actions)-1] != "rescan" {
 		t.Fatalf("unexpected write: %d %s actions=%v", written.Code, written.Body.String(), manager.actions)
 	}
@@ -786,7 +792,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
 	store := apps.NewStore(cfg)
 	manager := &fakeManager{}
-	handler, err := New(cfg, ops.New(manager, nil, fakeLogs{}, nil, nil, nil), store, nil, &fakeSys{})
+	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{}, nil, nil, nil, nil), store, &fakeSys{})
 	if err != nil {
 		t.Fatal(err)
 	}

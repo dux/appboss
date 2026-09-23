@@ -33,9 +33,9 @@ var keySpecs = map[string]KeySpec{
 	"proxy.tls.cache_dir":                    {Block: "proxy", Name: "Certificate cache", Description: "directory holding issued certificates; defaults to state_dir/acme", Example: "/var/lib/dboss/state/acme"},
 	"proxy.tls.redirect":                     {Block: "proxy", Name: "Redirect to HTTPS", Description: "send plain-HTTP requests to HTTPS; ACME challenges are still answered on port 80"},
 	"proxy.wake.retry_after":                 {Block: "proxy", Name: "Wake retry after", Description: "seconds sent in Retry-After and the starting page refresh", Example: "10"},
-	"proxy.wake.starting_page":               {Block: "proxy", Name: "Starting page", Description: "page served while an app is stopped or starting"},
-	"proxy.wake.crashed_page":                {Block: "proxy", Name: "Crashed page", Description: "page served when an app has crashed"},
-	"proxy.wake.unknown_page":                {Block: "proxy", Name: "Unknown host page", Description: "page served when no app matches the host"},
+	"proxy.wake.starting_page":               {Block: "proxy", Name: "Starting page", Description: "HTML file served while an app is stopped or starting; empty uses the built-in page", Example: "pages/starting.html"},
+	"proxy.wake.crashed_page":                {Block: "proxy", Name: "Crashed page", Description: "HTML file served when an app has crashed; empty uses the built-in page", Example: "pages/crashed.html"},
+	"proxy.wake.unknown_page":                {Block: "proxy", Name: "Unknown host page", Description: "HTML file served when no app matches the host; empty uses the built-in page", Example: "pages/404.html"},
 	"proxy.upstream.dial_timeout":            {Block: "proxy", Name: "Dial timeout", Description: "connect timeout to an app port"},
 	"proxy.upstream.response_header_timeout": {Block: "proxy", Name: "Response header timeout", Description: "how long an app may take to start responding"},
 	"proxy.upstream.idle_conn_timeout":       {Block: "proxy", Name: "Idle connection timeout", Description: "idle keep-alive connection lifetime to an app"},
@@ -60,6 +60,7 @@ var keySpecs = map[string]KeySpec{
 	"daemon.vacuum_at":           {Block: "daemon", Name: "Vacuum time", Description: "local time of the daily SQLite VACUUM; empty disables it", Example: "04:00"},
 	"daemon.log_level":           {Block: "daemon", Name: "Log level", Description: "dboss's own log level", Enum: []string{"debug", "info", "warn", "error"}},
 	"daemon.log_ingest_interval": {Block: "daemon", Name: "Log ingest interval", Description: "how often process log segments are sealed and ingested into the log store"},
+	"daemon.log_flush":           {Block: "daemon", Name: "Log flush", Description: "how often queued request and log rows are written to the log store", Example: "5s"},
 	"daemon.audit_retention":     {Block: "daemon", Name: "Audit retention", Description: "how long operator audit rows are kept; 0 keeps them forever", Example: "720h"},
 
 	// --- Notifications ---
@@ -107,7 +108,6 @@ var keySpecs = map[string]KeySpec{
 	"log_tail_lines":      {Block: "runtime", Name: "Tail lines", Description: "lines kept in memory for dboss logs"},
 	"log_retention":       {Block: "runtime", Name: "Log retention", Description: "how long request rows and app log files are kept; 0 disables the whole log store for the app", Example: "72h"},
 	"stdout_retention":    {Block: "runtime", Name: "Stdout retention", Description: "how long process stdout and the dboss daemon log are kept; 0 disables both"},
-	"log_flush":           {Block: "runtime", Name: "Log flush", Description: "request log batch insert interval", Example: "5s"},
 	"tmp_clean":           {Block: "runtime", Name: "Tmp cleanup", Description: "delete files under the app's ./tmp older than this once a day; false or 0 never cleans", Example: "7d"},
 	"shell":               {Block: "runtime", Name: "Run through shell", Description: "run commands through sh -c instead of exec"},
 	"env":                 {Block: "runtime", Name: "Environment", Description: "extra environment for every process, lowest priority", Example: "{RAILS_ENV: production}"},

@@ -91,11 +91,11 @@ func TestUniqueDumpKeepsIDsApartWithinOneSecond(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Date(2026, 9, 21, 4, 0, 0, 0, time.UTC)
 
-	first, firstPath := uniqueDump(dir, "app", at)
+	first, firstPath := uniqueDump(dir, at)
 	if err := os.WriteFile(firstPath, []byte("one"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	second, secondPath := uniqueDump(dir, "app", at)
+	second, secondPath := uniqueDump(dir, at)
 	if second == first || secondPath == firstPath {
 		t.Fatalf("a second dump in the same second needs its own name, got %q twice", first)
 	}

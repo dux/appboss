@@ -8,12 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
 	"dboss/internal/config"
-	"dboss/internal/super"
+	"dboss/internal/secret"
+	"dboss/internal/supervisor"
 )
 
 // outBuffer is how many messages may queue for one slow subscriber before it is dropped.
@@ -57,20 +59,17 @@ type App struct {
 // its own path, secret and channel namespace.
 type hubID struct{ app, process string }
 
-// secretKey is the state file key for a hub's generated publish secret.
-func secretKey(app, process string) string { return app + "/" + process }
-
 // Service owns every web process's channels. It is a daemon module: Start runs the janitor that
 // drops idle empty channels, Close disconnects every subscriber.
 type Service struct {
 	mu      sync.Mutex
 	hubs    map[hubID]*appHub
-	secrets *secretStore
+	secrets *secret.Store
 	client  []byte
 }
 
 func New(stateDir string) (*Service, error) {
-	secrets, err := openSecrets(stateDir)
+	secrets, err := secret.Open(filepath.Join(stateDir, "pubsub-secrets.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +102,7 @@ func (s *Service) Secret(app, process string, cfg config.Pubsub) (string, error)
 	if cfg.Secret != "" {
 		return cfg.Secret, nil
 	}
-	return s.secrets.ensure(secretKey(app, process))
+	return s.secrets.Ensure(app, process)
 }
 
 // Rotate mints a new generated secret. A secret that comes from the config is rejected.
@@ -111,14 +110,7 @@ func (s *Service) Rotate(app, process string, cfg config.Pubsub) (string, error)
 	if cfg.Secret != "" {
 		return "", errors.New("secret comes from the config; change it there")
 	}
-	secret, err := generateSecret()
-	if err != nil {
-		return "", err
-	}
-	if err := s.secrets.set(secretKey(app, process), secret); err != nil {
-		return "", err
-	}
-	return secret, nil
+	return s.secrets.Rotate(app, process)
 }
 
 // Publish sends a message to a channel on behalf of the CLI or console.
@@ -127,16 +119,19 @@ func (s *Service) Publish(app, process, channel string, msg Message, replay int)
 }
 
 // Reconcile drops generated secrets for hubs that no longer serve channels.
-func (s *Service) Reconcile(snapshots []super.Snapshot) {
-	live := map[string]bool{}
+func (s *Service) Reconcile(snapshots []supervisor.Snapshot) {
+	live := map[string]map[string]bool{}
 	for _, snapshot := range snapshots {
 		for _, web := range snapshot.WebProcesses {
 			if web.Pubsub.Enabled() {
-				live[secretKey(snapshot.Name, web.Name)] = true
+				if live[snapshot.Name] == nil {
+					live[snapshot.Name] = map[string]bool{}
+				}
+				live[snapshot.Name][web.Name] = true
 			}
 		}
 	}
-	_ = s.secrets.reconcile(live)
+	_ = s.secrets.Reconcile(live)
 }
 
 // Stats is per-app counters aggregated across the app's web processes, keyed by app name.
@@ -155,7 +150,7 @@ func (s *Service) Stats() map[string]Stats {
 }
 
 // Snapshot lists every web process that serves channels, with its channels and subscriber counts.
-func (s *Service) Snapshot(snapshots []super.Snapshot) []App {
+func (s *Service) Snapshot(snapshots []supervisor.Snapshot) []App {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := make([]App, 0, len(snapshots))

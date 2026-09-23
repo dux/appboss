@@ -54,7 +54,7 @@ func TestWindowSummarizesRequests(t *testing.T) {
 	}
 }
 
-func TestWindowNeverCreatesADatabase(t *testing.T) {
+func TestReadsNeverCreateADatabase(t *testing.T) {
 	dir := t.TempDir()
 	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
 	defer store.Close()
@@ -63,7 +63,25 @@ func TestWindowNeverCreatesADatabase(t *testing.T) {
 	if err != nil || window != (Window{}) {
 		t.Fatalf("app without a database: %v %+v", err, window)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "quiet")); !os.IsNotExist(err) {
-		t.Fatalf("Window created %s: %v", filepath.Join(dir, "quiet"), err)
+	// Every read path, not just Window: the console polls rates for apps that may never log.
+	if rates, err := store.Rates("quiet"); err != nil || rates != (Rates{}) {
+		t.Fatalf("Rates: %v %+v", err, rates)
+	}
+	if _, err := store.SearchLogs("quiet", LogFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SearchRequests("quiet", RequestFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if offsets, err := store.TailOffsets("quiet"); err != nil || offsets == nil {
+		t.Fatalf("TailOffsets: %v %v", err, offsets)
+	}
+	if _, err := store.SearchAudit(AuditFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, app := range []string{"quiet", HostApp} {
+		if _, err := os.Stat(filepath.Join(dir, app)); !os.IsNotExist(err) {
+			t.Fatalf("a read created %s: %v", filepath.Join(dir, app), err)
+		}
 	}
 }

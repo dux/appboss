@@ -6,8 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"dboss/internal/config"
 	"dboss/internal/logx"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // printBanner writes the startup summary of a hand-run session. It is terminal-only, the same
@@ -52,7 +53,7 @@ func (d *Daemon) printBanner() {
 // same colored prefix that process logs under, so the address and its later output line up.
 // Web processes carry a clickable URL, workers say so, and every row ends in the app's state,
 // which is how an app that has not started yet is still visible.
-func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, port string, secure devHTTPS, echo *super.Echo) []string {
+func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme, port string, secure devHTTPS, echo *supervisor.Echo) []string {
 	rows := make([]bannerRow, 0, len(snapshots))
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
 	secureURL := ""
@@ -61,7 +62,7 @@ func banner(snapshots []super.Snapshot, console, consoleNote string, scheme, por
 		for _, process := range app.WebProcesses {
 			web[process.Name] = true
 			rows = append(rows, newRow(echo, app.Name, process.Name, webURL(process, scheme, port), stateLabel(app, true), true))
-			if secureURL == "" && displayHost(process) != "" {
+			if secureURL == "" && config.PrimaryHost(process.CanonicalHost, process.Hosts) != "" {
 				secureURL = webURL(process, "https", secure.port)
 			}
 		}
@@ -115,7 +116,7 @@ type bannerRow struct {
 	pad      bool
 }
 
-func newRow(echo *super.Echo, app, proc, address, note string, pad bool) bannerRow {
+func newRow(echo *supervisor.Echo, app, proc, address, note string, pad bool) bannerRow {
 	return bannerRow{
 		key:      echo.Key(app, proc),
 		keyWidth: len(echo.Name(app, proc)) + len(" | "),
@@ -128,8 +129,8 @@ func newRow(echo *super.Echo, app, proc, address, note string, pad bool) bannerR
 // webURL is the address to open for one web process. A pattern that matches only subdomains has
 // no address of its own, so it is printed as written instead of being turned into a link that
 // would not resolve.
-func webURL(web super.WebProcessSnapshot, scheme, port string) string {
-	host := displayHost(web)
+func webURL(web supervisor.WebProcessSnapshot, scheme, port string) string {
+	host := config.PrimaryHost(web.CanonicalHost, web.Hosts)
 	if host == "" {
 		return strings.Join(web.Hosts, ", ")
 	}
@@ -139,37 +140,17 @@ func webURL(web super.WebProcessSnapshot, scheme, port string) string {
 	return scheme + "://" + host
 }
 
-// displayHost picks the one hostname worth printing: the canonical host when the process
-// declares one (every other host redirects to it anyway), then the first concrete host, then a
-// leading-dot pattern, which matches its own apex.
-func displayHost(web super.WebProcessSnapshot) string {
-	if web.CanonicalHost != "" {
-		return web.CanonicalHost
-	}
-	for _, host := range web.Hosts {
-		if !strings.HasPrefix(host, "*.") && !strings.HasPrefix(host, ".") {
-			return host
-		}
-	}
-	for _, host := range web.Hosts {
-		if strings.HasPrefix(host, ".") {
-			return strings.TrimPrefix(host, ".")
-		}
-	}
-	return ""
-}
-
 // stateLabel says what the app is doing and, on a web row, what would start it. Only a web row
 // gets the hint: a request is what wakes an app, and nobody sends one to a worker.
-func stateLabel(app super.Snapshot, web bool) string {
+func stateLabel(app supervisor.Snapshot, web bool) string {
 	if app.Maintenance {
 		return "maintenance"
 	}
-	if app.State != super.Stopped {
+	if app.State != supervisor.Stopped {
 		return string(app.State)
 	}
 	if !web {
-		return string(super.Stopped)
+		return string(supervisor.Stopped)
 	}
 	if app.WakeButton {
 		return "stopped, needs the start button"

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"dboss/internal/authcog"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const authCogEnabled = "authcog:\n  login: true\n"
@@ -34,7 +34,7 @@ type authCogCapture struct{ request *http.Request }
 
 func captureAuthCog(handler *Handler) *authCogCapture {
 	capture := &authCogCapture{}
-	handler.filters = []Filter{handler.authCog, func(_ http.ResponseWriter, r *http.Request, _ super.Snapshot, _ func()) {
+	handler.filters = []Filter{handler.authCog, func(_ http.ResponseWriter, r *http.Request, _ supervisor.Snapshot, _ func()) {
 		capture.request = r
 	}}
 	return capture

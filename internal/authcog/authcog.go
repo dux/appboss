@@ -135,7 +135,7 @@ func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate) {
 	}
 	f.challenges[state] = challenge{audience: gate.Audience, destination: destination, redirectTo: redirectTo, expiresAt: now.Add(stateTTL)}
 	f.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: gate.StateCookie, Value: state, Path: "/", MaxAge: int(stateTTL.Seconds()), HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: gate.StateCookie, Value: state, Path: "/", MaxAge: int(stateTTL.Seconds()), HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode})
 	login := url.URL{Scheme: "https", Host: gate.Realm, Path: destination}
 	query := login.Query()
 	query.Set("state", state)
@@ -246,7 +246,7 @@ func (f *Flow) SetSession(w http.ResponseWriter, r *http.Request, gate Gate, ema
 	// Lax, not Strict: the callback redirects inside a navigation that AuthCog started
 	// cross-site, and browsers withhold Strict cookies on that whole redirect chain, so Strict
 	// would bounce every fresh login straight back to the login page.
-	http.SetCookie(w, &http.Cookie{Name: gate.SessionCookie, Value: encoded + "." + f.sign(encoded), Path: "/", Expires: expires, MaxAge: int(gate.TTL.Seconds()), HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: gate.SessionCookie, Value: encoded + "." + f.sign(encoded), Path: "/", Expires: expires, MaxAge: int(gate.TTL.Seconds()), HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode})
 	return nil
 }
 
@@ -286,7 +286,7 @@ func (f *Flow) ClearSession(w http.ResponseWriter, r *http.Request, gate Gate) {
 }
 
 func clearCookie(w http.ResponseWriter, r *http.Request, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode})
 }
 
 func (f *Flow) sign(value string) string {
@@ -328,15 +328,15 @@ func safeRedirect(target, callbackPath string) string {
 
 // Scheme is the scheme the browser used, which is what an Origin header must match.
 func Scheme(r *http.Request) string {
-	if Secure(r) {
+	if secure(r) {
 		return "https"
 	}
 	return "http"
 }
 
-// Secure follows AuthCog's rule for local development: localhost, *.lvh.me and bare IPs are
+// secure follows AuthCog's rule for local development: localhost, *.lvh.me and bare IPs are
 // plain http, every other host is served over https by the edge.
-func Secure(r *http.Request) bool {
+func secure(r *http.Request) bool {
 	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
 		return true
 	}

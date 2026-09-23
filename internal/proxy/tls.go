@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"dboss/internal/config"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // ACME terminates TLS with certificates obtained on demand. A host that resolves to one of the
@@ -26,7 +26,7 @@ type ACME struct {
 // NewACME builds the certificate manager. The cache defaults to <state_dir>/acme; directory
 // selects the authority (empty is Let's Encrypt production, staging its test endpoint, anything
 // else is used as a directory URL). AcceptTOS is granted because the operator enables TLS.
-func NewACME(cfg config.Config, manager *super.Manager) (*ACME, error) {
+func NewACME(cfg config.Config, manager *supervisor.Manager) (*ACME, error) {
 	cache := cfg.Proxy.TLS.CacheDir
 	if cache == "" {
 		cache = filepath.Join(cfg.StateDir, "acme")
@@ -77,13 +77,13 @@ func (a *ACME) HTTPHandler(fallback http.Handler) http.Handler {
 
 // hostAllowed reports whether host belongs to an app of this host or to the console. It is the
 // on-demand policy, evaluated against the live app table so a rescanned app needs no restart.
-func hostAllowed(cfg config.Config, manager *super.Manager, host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.Split(host, ":")[0], "."))
+func hostAllowed(cfg config.Config, manager *supervisor.Manager, host string) bool {
+	host = config.NormalizeHost(host)
 	if host == "" {
 		return false
 	}
 	for _, name := range cfg.Management.Host {
-		if strings.EqualFold(strings.TrimSuffix(name, "."), host) {
+		if config.NormalizePattern(name) == host {
 			return true
 		}
 	}

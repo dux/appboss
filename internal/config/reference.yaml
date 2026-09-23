@@ -145,11 +145,11 @@ proxy:
   wake:
     # Seconds sent in Retry-After and in the meta refresh of the starting page.
     retry_after: 5
-    # Files served for the three non-forwarding cases. Relative paths resolve
-    # against the dboss binary's web/ directory; absolute paths are used as is.
-    starting_page: web/starting.html   # app stopped or starting, GET + Accept: text/html
-    crashed_page:  web/crashed.html    # app crashed (max_restarts hit), GET + Accept: text/html
-    unknown_page:  web/404.html        # host matches no app
+    # Files served for the three non-forwarding cases instead of the built-in pages. Empty
+    # keeps the built-in page; a relative path resolves against the config directory.
+    starting_page: ""   # app stopped or starting, GET + Accept: text/html
+    crashed_page:  ""   # app crashed (max_restarts hit), GET + Accept: text/html
+    unknown_page:  ""   # host matches no app
 
   # Upstream connection tuning. Rarely needs changing.
   upstream:
@@ -279,7 +279,6 @@ defaults:
   # stdout_retention. 0 disables the matching channels for the app.
   log_retention: 336h       # 14 days for request rows and app log files
   stdout_retention: 3h      # process stdout and the dboss daemon log
-  log_flush: 1s             # batch insert interval
 
   # Housekeeping of the app's own ./tmp directory. Once a day dboss deletes the files last
   # modified longer than tmp_clean ago, then the sub-directories that are left empty. The
@@ -388,6 +387,8 @@ daemon:
   # How often each running process's log segment is sealed and ingested into the per-app
   # log store. A sealed segment stays on disk until its rows are committed.
   log_ingest_interval: 5s
+  # How often queued request and log rows are batch-inserted into the log store.
+  log_flush: 1s
   # How long operator actions in the audit table are kept. 0 keeps them forever. The daily
   # prune drops older rows.
   audit_retention: 8760h
@@ -439,7 +440,7 @@ postgres:
   # Empty means: try /var/run/postgresql, then 127.0.0.1:5432, with the PG* environment merged in.
   dsn: ""
   backup:
-    # Databases dumped by the daily run at 04:00 UTC, keyed by name. A key selects the database.
+    # Databases dumped by the daily run at 04:00 local time, keyed by name. A key selects the database.
     # rotation is the retention window: week keeps 7 days, month keeps 30 days. A manual backup
     # from the console is never rotated away.
     databases:

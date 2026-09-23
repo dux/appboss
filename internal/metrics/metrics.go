@@ -8,29 +8,20 @@ import (
 	"strings"
 	"time"
 
+	"dboss/internal/logstore"
 	"dboss/internal/notify"
-	"dboss/internal/super"
+	"dboss/internal/pubsub"
+	"dboss/internal/supervisor"
 	"dboss/internal/version"
 )
 
 // stateValue maps an app state to the number used by dboss_app_state.
-var stateValue = map[super.State]int{
-	super.Stopped:  0,
-	super.Starting: 1,
-	super.Running:  2,
-	super.Stopping: 3,
-	super.Crashed:  4,
-}
-
-// NotifyStats is the notifier's counter set; the alias keeps the handler's signature stable.
-type NotifyStats = notify.Stats
-
-// Latency is the request duration summary of one app, in milliseconds.
-type Latency struct {
-	Count int
-	P50   float64
-	P95   float64
-	P99   float64
+var stateValue = map[supervisor.State]int{
+	supervisor.Stopped:  0,
+	supervisor.Starting: 1,
+	supervisor.Running:  2,
+	supervisor.Stopping: 3,
+	supervisor.Crashed:  4,
 }
 
 // PGStats is the PostgreSQL state the metrics endpoint exposes: whether the server is reachable,
@@ -54,16 +45,22 @@ type PGBackup struct {
 	Status   string
 }
 
-// PubsubStats is the realtime hub state of one app.
-type PubsubStats struct {
-	Clients  int
-	Channels int
-	Messages uint64
+// Input is everything one scrape reports. ops.Service.Metrics builds it from the same sources
+// the console reads.
+type Input struct {
+	Apps   []supervisor.Snapshot
+	Now    time.Time
+	Notify notify.Stats
+	// Latency is each app's request summary over the last hour.
+	Latency  map[string]logstore.Window
+	Postgres PGStats
+	Pubsub   map[string]pubsub.Stats
 }
 
 // Render writes the Prometheus exposition for apps, the notifier counters, the request latency
 // and the PostgreSQL state, already sorted by name.
-func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency map[string]Latency, postgres PGStats, pubsub map[string]PubsubStats) string {
+func Render(in Input) string {
+	apps, now, latency, postgres, pubsub := in.Apps, in.Now, in.Latency, in.Postgres, in.Pubsub
 	var b strings.Builder
 	metric := func(name, help, kind string) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, kind)
@@ -80,7 +77,7 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 	metric("dboss_app_up", "1 when the app is running, 0 otherwise.", "gauge")
 	for _, app := range apps {
 		up := 0.0
-		if app.State == super.Running {
+		if app.State == supervisor.Running {
 			up = 1
 		}
 		sample("dboss_app_up", name(app.Name), up)
@@ -188,9 +185,9 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 	}
 
 	metric("dboss_notifications_total", "Operator webhook sends by result.", "counter")
-	sample("dboss_notifications_total", `{result="sent"}`, float64(notify.Sent))
-	sample("dboss_notifications_total", `{result="failed"}`, float64(notify.Failed))
-	sample("dboss_notifications_total", `{result="dropped"}`, float64(notify.Dropped))
+	sample("dboss_notifications_total", `{result="sent"}`, float64(in.Notify.Sent))
+	sample("dboss_notifications_total", `{result="failed"}`, float64(in.Notify.Failed))
+	sample("dboss_notifications_total", `{result="dropped"}`, float64(in.Notify.Dropped))
 
 	metric("dboss_request_duration_ms", "Request duration over the last hour, milliseconds, by quantile.", "gauge")
 	for _, app := range apps {
@@ -205,10 +202,6 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 			labels := "{app=" + quote(app.Name) + ",quantile=" + quote(quantile.label) + "}"
 			sample("dboss_request_duration_ms", labels, quantile.value)
 		}
-	}
-	metric("dboss_request_duration_ms_samples", "Requests sampled for the duration quantiles.", "gauge")
-	for _, app := range apps {
-		sample("dboss_request_duration_ms_samples", name(app.Name), float64(latency[app.Name].Count))
 	}
 
 	metric("dboss_pubsub_clients", "Subscribers connected to an app's realtime channels.", "gauge")
@@ -266,10 +259,10 @@ func Render(apps []super.Snapshot, now time.Time, notify NotifyStats, latency ma
 }
 
 // uptimeStart is the earliest start time among an app's running processes.
-func uptimeStart(app super.Snapshot) (time.Time, bool) {
+func uptimeStart(app supervisor.Snapshot) (time.Time, bool) {
 	var earliest time.Time
 	for _, process := range app.Processes {
-		if process.State != super.Running || process.StartedAt.IsZero() {
+		if process.State != supervisor.Running || process.StartedAt.IsZero() {
 			continue
 		}
 		if earliest.IsZero() || process.StartedAt.Before(earliest) {

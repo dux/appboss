@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +19,7 @@ import (
 	"dboss/internal/notify"
 	"dboss/internal/pg"
 	"dboss/internal/pubsub"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // ErrUnknownAction is returned by Do for a method it does not implement, so a transport can tell
@@ -71,8 +70,8 @@ var auditActions = map[string]bool{
 
 // Runtime is the supervisor surface the service drives.
 type Runtime interface {
-	Snapshots() []super.Snapshot
-	Snapshot(name string) (super.Snapshot, error)
+	Snapshots() []supervisor.Snapshot
+	Snapshot(name string) (supervisor.Snapshot, error)
 	Start(name string) error
 	Stop(name string) error
 	Restart(name string) error
@@ -80,11 +79,11 @@ type Runtime interface {
 	SetMaintenance(name string, on bool) error
 	RunCron(name, job string) error
 	RunHook(name, hook string) error
-	RotateHook(name, hook string) (super.HookInfo, error)
-	Hooks(name string) ([]super.HookInfo, error)
+	RotateHook(name, hook string) (supervisor.HookInfo, error)
+	Hooks(name string) ([]supervisor.HookInfo, error)
 	HookSecret(name, hook string) (string, error)
 	HostHookSecret(name string) (string, error)
-	Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error)
+	Exec(name string, argv []string, timeout time.Duration) (supervisor.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
 	HostConfig() config.Config
@@ -92,17 +91,25 @@ type Runtime interface {
 	Ports() map[string]int
 }
 
-// Rates reads how many requests an app has answered, for snapshots to carry.
-type Rates interface {
-	Rates(app string) (logstore.Rates, error)
-}
-
-// LogStore reads the per-app log database for the console and CLI viewers.
+// LogStore is the per-app log database; logstore.Store is the only one. It carries the request
+// rates, the log and request viewers, the Traffic tab, the metrics latency and the audit trail, so
+// a nil store turns all of them off together.
 type LogStore interface {
+	Rates(app string) (logstore.Rates, error)
+	Window(app string, since time.Time) (logstore.Window, error)
+	Traffic(app string, since time.Time) (logstore.Traffic, error)
 	SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error)
 	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
 	Channels(app string) ([]logstore.Channel, error)
 	Tree(names []string) ([]logstore.AppTree, error)
+	RecordAudit(logstore.AuditEntry) error
+	SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error)
+}
+
+// Notifier is the operator webhook: notify.Notifier implements it.
+type Notifier interface {
+	Send(notify.Event)
+	Stats() notify.Stats
 }
 
 // Disk reads what an app occupies on disk. diskusage.Module implements it; a nil value leaves
@@ -110,24 +117,6 @@ type LogStore interface {
 type Disk interface {
 	Usage(app string) (diskusage.Usage, bool)
 	Refresh(app string) (diskusage.Usage, error)
-}
-
-// Auditor records and reads operator actions. logstore.Store implements it; a store that does not
-// simply disables auditing.
-type Auditor interface {
-	RecordAudit(logstore.AuditEntry) error
-	SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error)
-}
-
-// LatencyStore reads request duration quantiles; logstore.Store implements it.
-type LatencyStore interface {
-	Latency(app string, since time.Time) (logstore.Latency, error)
-}
-
-// TrafficStore aggregates the request log for the console's Traffic tab; logstore.Store
-// implements it.
-type TrafficStore interface {
-	Traffic(app string, since time.Time) (logstore.Traffic, error)
 }
 
 // PG is the PostgreSQL inspection and backup surface. pg.Service implements it; a nil value
@@ -156,24 +145,26 @@ type Pubsub interface {
 	Secret(app, process string, cfg config.Pubsub) (string, error)
 	Rotate(app, process string, cfg config.Pubsub) (string, error)
 	Publish(app, process, channel string, msg pubsub.Message, replay int) int
-	Snapshot(snapshots []super.Snapshot) []pubsub.App
+	Snapshot(snapshots []supervisor.Snapshot) []pubsub.App
 	Stats() map[string]pubsub.Stats
-	Reconcile(snapshots []super.Snapshot)
+	Reconcile(snapshots []supervisor.Snapshot)
 }
 
 // Request is one action in transport-neutral form. The control socket decodes it from JSON and
 // the console builds it from the HTTP body.
 type Request struct {
-	Method   string          `json:"method"`
-	App      string          `json:"app,omitempty"`
-	Process  string          `json:"process,omitempty"`
-	Job      string          `json:"job,omitempty"`
-	Hook     string          `json:"hook,omitempty"`
-	Argv     []string        `json:"argv,omitempty"`
-	Timeout  time.Duration   `json:"timeout,omitempty"`
-	Lines    int             `json:"lines,omitempty"`
-	On       bool            `json:"on,omitempty"`
-	Actor    string          `json:"actor,omitempty"`
+	Method  string        `json:"method"`
+	App     string        `json:"app,omitempty"`
+	Process string        `json:"process,omitempty"`
+	Job     string        `json:"job,omitempty"`
+	Hook    string        `json:"hook,omitempty"`
+	Argv    []string      `json:"argv,omitempty"`
+	Timeout time.Duration `json:"timeout,omitempty"`
+	Lines   int           `json:"lines,omitempty"`
+	On      bool          `json:"on,omitempty"`
+	Actor   string        `json:"actor,omitempty"`
+	// ByActor filters the audit search; Actor is who is asking.
+	ByActor  string          `json:"by_actor,omitempty"`
 	Action   string          `json:"action,omitempty"`
 	Query    string          `json:"query,omitempty"`
 	Level    string          `json:"level,omitempty"`
@@ -194,76 +185,28 @@ type Request struct {
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
 // host keys that only apply on the next start.
 type RescanResult struct {
-	Apps            []super.Snapshot `json:"apps"`
-	Invalid         []string         `json:"invalid"`
-	RestartRequired []string         `json:"restart_required"`
+	Apps            []supervisor.Snapshot `json:"apps"`
+	Invalid         []string              `json:"invalid"`
+	RestartRequired []string              `json:"restart_required"`
 }
 
-// Service implements every action once. rates and store may be nil, then snapshots carry no
-// request rates and the log viewer is unavailable. When store also implements Auditor, every
-// mutating action is audited.
+// Service implements every action once. Every dependency but runtime may be nil, which turns
+// its feature off: no store means no rates, log viewer or audit trail.
 type Service struct {
-	runtime Runtime
-	rates   Rates
-	store   LogStore
-	auditor Auditor
-	sink    notify.Sink
-	pg      PG
-	pubsub  Pubsub
-	disk    Disk
+	runtime  Runtime
+	store    LogStore
+	notifier Notifier
+	pg       PG
+	pubsub   Pubsub
+	disk     Disk
 	// previews serializes the built-in github_pr deploys per app, so two pushes to one branch
 	// never race the same checkout while different branches deploy in parallel.
 	previewMu    sync.Mutex
 	previewLocks map[string]*sync.Mutex
 }
 
-func New(runtime Runtime, rates Rates, store LogStore, postgres PG, realtime Pubsub, sizes Disk, sinks ...notify.Sink) *Service {
-	service := &Service{runtime: runtime, rates: rates, store: store, pg: postgres, pubsub: realtime, disk: sizes}
-	if auditor, ok := store.(Auditor); ok {
-		service.auditor = auditor
-	}
-	if len(sinks) > 0 {
-		service.sink = sinks[0]
-	}
-	return service
-}
-
-// SearchLogs and SearchRequests are the read side of the log store, shared by the console and
-// any future `dboss logs --search`.
-func (s *Service) SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error) {
-	if s.store == nil {
-		return nil, errors.New("log store is not enabled")
-	}
-	return s.store.SearchLogs(app, filter)
-}
-
-func (s *Service) SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error) {
-	if s.store == nil {
-		return nil, errors.New("log store is not enabled")
-	}
-	return s.store.SearchRequests(app, filter)
-}
-
-// Channels lists the log types an app has for the console viewer.
-func (s *Service) Channels(app string) ([]logstore.Channel, error) {
-	if s.store == nil {
-		return nil, errors.New("log store is not enabled")
-	}
-	return s.store.Channels(app)
-}
-
-// LogTree is the log viewer's left nav: every app, sqlite size on disk, and the channels inside.
-func (s *Service) LogTree() ([]logstore.AppTree, error) {
-	if s.store == nil {
-		return nil, errors.New("log store is not enabled")
-	}
-	names := make([]string, 0, len(s.runtime.Snapshots())+1)
-	for _, snapshot := range s.runtime.Snapshots() {
-		names = append(names, snapshot.Name)
-	}
-	slices.Sort(names)
-	names = append(names, logstore.HostApp)
-	return s.store.Tree(names)
+func New(runtime Runtime, store LogStore, postgres PG, realtime Pubsub, sizes Disk, notifier Notifier) *Service {
+	return &Service{runtime: runtime, store: store, notifier: notifier, pg: postgres, pubsub: realtime, disk: sizes}
 }
 
 // Do runs one action by name. Both transports call it, so the name-to-method mapping and the
@@ -279,37 +222,37 @@ func (s *Service) dispatch(request Request) (any, error) {
 	case ActionList:
 		return s.Apps(), nil
 	case ActionStatus:
-		return s.App(request.App)
+		return s.app(request.App)
 	case ActionStart:
-		return nil, s.Start(request.App)
+		return nil, s.start(request.App)
 	case ActionStop:
-		return nil, s.Stop(request.App)
+		return nil, s.stop(request.App)
 	case ActionRestart:
-		return nil, s.Restart(request.App)
+		return nil, s.restart(request.App)
 	case ActionDestroy:
-		return nil, s.Destroy(request.App)
+		return nil, s.destroy(request.App)
 	case ActionMaintenance:
-		return nil, s.Maintenance(request.App, request.On)
+		return nil, s.maintenance(request.App, request.On)
 	case ActionRescan:
-		return s.Rescan()
+		return s.rescan()
 	case ActionLogs:
-		return s.Logs(request.App, request.Process, request.Lines)
+		return s.logs(request.App, request.Process, request.Lines)
 	case ActionPorts:
-		return s.Ports(), nil
+		return s.ports(), nil
 	case ActionCron:
-		return s.Cron(request.App)
+		return s.cron(request.App)
 	case ActionCronRun:
-		return nil, s.RunCron(request.App, request.Job)
+		return nil, s.runCron(request.App, request.Job)
 	case ActionHook:
 		return s.Hooks(request.App)
 	case ActionHookRun:
-		return nil, s.RunHook(request.App, request.Hook)
+		return nil, s.runHook(request.App, request.Hook)
 	case ActionHostHookRun:
-		return nil, s.RunHostHook(request.Hook, request.Params)
+		return nil, s.runHostHook(request.Hook, request.Params)
 	case ActionHookRotate:
-		return s.RotateHook(request.App, request.Hook)
+		return s.rotateHook(request.App, request.Hook)
 	case ActionExec:
-		return s.Exec(request.App, request.Argv, request.Timeout)
+		return s.exec(request.App, request.Argv, request.Timeout)
 	case ActionAudit:
 		return s.SearchAudit(auditFilter(request))
 	case ActionLogSearch:
@@ -317,25 +260,25 @@ func (s *Service) dispatch(request Request) (any, error) {
 	case ActionPG:
 		return s.PGSnapshot(true)
 	case ActionPGBackup:
-		return s.RunBackup(request.Database)
+		return s.runBackup(request.Database)
 	case ActionPGBackups:
 		return s.Backups(), nil
 	case ActionPGRestore:
-		return s.Restore(pg.RestoreRequest{ID: request.BackupID, Target: request.Target, Replace: request.Replace, Confirm: request.Confirm})
+		return s.restore(pg.RestoreRequest{ID: request.BackupID, Target: request.Target, Replace: request.Replace, Confirm: request.Confirm})
 	case ActionPGDrop:
-		return request.Database, s.DropDatabase(request.Database, request.Confirm)
+		return request.Database, s.dropDatabase(request.Database, request.Confirm)
 	case ActionPGDeleteDump:
-		return request.BackupID, s.DeleteBackup(request.BackupID)
+		return request.BackupID, s.deleteBackup(request.BackupID)
 	case ActionPGQuery:
-		return s.RunQuery(request.Database, request.SQL)
+		return s.runQuery(request.Database, request.SQL)
 	case ActionPubsub:
 		return s.PubsubApps(), nil
 	case ActionPubsubSecret:
 		return s.PubsubSecret(request.App, request.Process)
 	case ActionPubsubRotate:
-		return s.PubsubRotate(request.App, request.Process)
+		return s.pubsubRotate(request.App, request.Process)
 	case ActionPubsubPublish:
-		return s.PubsubPublish(request.App, request.Process, request.Channel, request.Event, request.Data)
+		return s.pubsubPublish(request.App, request.Process, request.Channel, request.Event, request.Data)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -343,15 +286,15 @@ func (s *Service) dispatch(request Request) (any, error) {
 
 // SearchAudit returns audit rows for the console and CLI.
 func (s *Service) SearchAudit(filter logstore.AuditFilter) ([]logstore.AuditEntry, error) {
-	if s.auditor == nil {
+	if s.store == nil {
 		return nil, errors.New("audit is not enabled")
 	}
-	return s.auditor.SearchAudit(filter)
+	return s.store.SearchAudit(filter)
 }
 
 // Audit records one operator action that does not go through Do, such as a config file write.
 func (s *Service) Audit(actor, app, action, detail string, err error) {
-	if s.auditor == nil {
+	if s.store == nil {
 		return
 	}
 	if actor == "" {
@@ -361,16 +304,16 @@ func (s *Service) Audit(actor, app, action, detail string, err error) {
 	if err != nil {
 		result, message = "error", err.Error()
 	}
-	_ = s.auditor.RecordAudit(logstore.AuditEntry{Time: time.Now(), Actor: actor, App: app, Action: action, Detail: detail, Result: result, Error: message})
+	_ = s.store.RecordAudit(logstore.AuditEntry{Time: time.Now(), Actor: actor, App: app, Action: action, Detail: detail, Result: result, Error: message})
 }
 
-// Notify sends one operator notification through the host webhook, for actions outside the
+// notify sends one operator notification through the host webhook, for actions outside the
 // supervisor (a config change that needs a restart).
-func (s *Service) Notify(eventType, app, detail string) {
-	if s.sink == nil {
+func (s *Service) notify(eventType, app, detail string) {
+	if s.notifier == nil {
 		return
 	}
-	s.sink.Send(notify.Event{Type: eventType, App: app, Error: detail, Time: time.Now()})
+	s.notifier.Send(notify.Event{Type: eventType, App: app, Error: detail, Time: time.Now()})
 }
 
 func (s *Service) auditRequest(request Request, err error) {
@@ -412,408 +355,5 @@ func auditDetail(request Request) string {
 }
 
 func auditFilter(request Request) logstore.AuditFilter {
-	return logstore.AuditFilter{App: request.App, Actor: request.Actor, Action: request.Action, Limit: request.Lines}
-}
-
-// Apps returns every app snapshot with its request rates and disk usage filled in.
-func (s *Service) Apps() []super.Snapshot {
-	snapshots := s.runtime.Snapshots()
-	for i := range snapshots {
-		s.decorate(&snapshots[i])
-	}
-	return snapshots
-}
-
-func (s *Service) App(name string) (super.Snapshot, error) {
-	snapshot, err := s.runtime.Snapshot(name)
-	if err != nil {
-		return snapshot, err
-	}
-	s.decorate(&snapshot)
-	return snapshot, nil
-}
-
-// DiskRefresh measures one app on demand. It only reads the filesystem, so it writes no audit row.
-func (s *Service) DiskRefresh(name string) (super.DiskUsage, error) {
-	if s.disk == nil {
-		return super.DiskUsage{}, errors.New("disk usage is not enabled")
-	}
-	usage, err := s.disk.Refresh(name)
-	if err != nil {
-		return super.DiskUsage{}, err
-	}
-	return diskUsage(usage), nil
-}
-
-func (s *Service) Start(name string) error   { return s.runtime.Start(name) }
-func (s *Service) Stop(name string) error    { return s.runtime.Stop(name) }
-func (s *Service) Restart(name string) error { return s.runtime.Restart(name) }
-
-func (s *Service) Destroy(name string) error {
-	if err := s.runtime.Destroy(name); err != nil {
-		return err
-	}
-	if s.pubsub != nil {
-		s.pubsub.Reconcile(s.runtime.Snapshots())
-	}
-	return nil
-}
-
-func (s *Service) Maintenance(name string, on bool) error {
-	return s.runtime.SetMaintenance(name, on)
-}
-
-func (s *Service) Logs(name, process string, lines int) (map[string][]string, error) {
-	return s.runtime.Logs(name, process, lines)
-}
-
-func (s *Service) Ports() map[string]int { return s.runtime.Ports() }
-
-// Cron lists the scheduled jobs of one app from its live snapshot.
-func (s *Service) Cron(name string) ([]super.CronSnapshot, error) {
-	snapshot, err := s.runtime.Snapshot(name)
-	if err != nil {
-		return nil, err
-	}
-	return snapshot.Cron, nil
-}
-
-// RunCron starts one scheduled job now.
-func (s *Service) RunCron(name, job string) error { return s.runtime.RunCron(name, job) }
-
-// Hooks lists an app's deploy hooks with their effective secrets.
-func (s *Service) Hooks(name string) ([]super.HookInfo, error) { return s.runtime.Hooks(name) }
-
-// RunHook starts one deploy hook now.
-func (s *Service) RunHook(name, hook string) error { return s.runtime.RunHook(name, hook) }
-
-// HostHookSecret returns the effective secret of a host-level hook, for verifying a ping.
-func (s *Service) HostHookSecret(name string) (string, error) {
-	return s.runtime.HostHookSecret(name)
-}
-
-// previewLock returns the mutex that serializes deploys for one preview app.
-func (s *Service) previewLock(name string) *sync.Mutex {
-	s.previewMu.Lock()
-	defer s.previewMu.Unlock()
-	if s.previewLocks == nil {
-		s.previewLocks = map[string]*sync.Mutex{}
-	}
-	lock := s.previewLocks[name]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		s.previewLocks[name] = lock
-	}
-	return lock
-}
-
-// RotateHook mints a new generated secret for one hook and returns it with its URL.
-func (s *Service) RotateHook(name, hook string) (super.HookInfo, error) {
-	return s.runtime.RotateHook(name, hook)
-}
-
-// HookSecret returns the effective secret of one hook, for verifying a ping.
-func (s *Service) HookSecret(name, hook string) (string, error) {
-	return s.runtime.HookSecret(name, hook)
-}
-
-// Exec runs one command in the app's environment and returns its combined output.
-func (s *Service) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
-	return s.runtime.Exec(name, argv, timeout)
-}
-
-// Latency returns request duration quantiles of one app over the last hour, for /metrics.
-func (s *Service) Latency(name string) (logstore.Latency, error) {
-	store, ok := s.store.(LatencyStore)
-	if !ok {
-		return logstore.Latency{}, errors.New("latency is not available")
-	}
-	return store.Latency(name, time.Now().Add(-time.Hour))
-}
-
-// Traffic returns the aggregated request log of one app for requests newer than since.
-func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error) {
-	store, ok := s.store.(TrafficStore)
-	if !ok {
-		return logstore.Traffic{}, errors.New("traffic is not available")
-	}
-	return store.Traffic(name, since)
-}
-
-// PGSnapshot returns the PostgreSQL inspection, refreshing it first when asked.
-func (s *Service) PGSnapshot(refresh bool) (pg.Snapshot, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return pg.Snapshot{}, errors.New("postgres is not enabled")
-	}
-	if refresh {
-		return s.pg.Refresh(context.Background()), nil
-	}
-	return s.pg.Snapshot(), nil
-}
-
-// PGAvailable reports whether the last inspection reached a server, for the console's tab gate.
-func (s *Service) PGAvailable() bool { return s.pg != nil && s.pg.Enabled() && s.pg.Available() }
-
-// Backups lists the recorded dumps.
-func (s *Service) Backups() []pg.Backup {
-	if s.pg == nil {
-		return nil
-	}
-	return s.pg.Backups()
-}
-
-// RunBackup dumps one database, or every selected database when name is empty. An explicit run is
-// a manual backup, so it is never rotated away.
-func (s *Service) RunBackup(database string) ([]pg.Backup, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return nil, errors.New("postgres is not enabled")
-	}
-	if database == "" {
-		return nil, s.pg.BackupAll(context.Background())
-	}
-	entry, err := s.pg.BackupDatabase(context.Background(), database, true)
-	return []pg.Backup{entry}, err
-}
-
-// Restore loads a recorded dump into a database.
-func (s *Service) Restore(request pg.RestoreRequest) (pg.RestoreResult, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return pg.RestoreResult{}, errors.New("postgres is not enabled")
-	}
-	return s.pg.Restore(context.Background(), request)
-}
-
-// DropDatabase removes a database. The operator must repeat the name as confirmation.
-func (s *Service) DropDatabase(database, confirm string) error {
-	if s.pg == nil || !s.pg.Enabled() {
-		return errors.New("postgres is not enabled")
-	}
-	return s.pg.DropDatabase(context.Background(), database, confirm)
-}
-
-// RunQuery executes SQL against one database and returns its last result set. It is a mutating
-// action by nature, so it goes through Do and is audited with the statement.
-func (s *Service) RunQuery(database, sql string) (pg.QueryResult, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return pg.QueryResult{}, errors.New("postgres is not enabled")
-	}
-	return s.pg.Query(context.Background(), database, sql)
-}
-
-// BackupFile returns one recorded dump and the archive's path on disk, for the console download.
-func (s *Service) BackupFile(id string) (pg.Backup, string, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return pg.Backup{}, "", errors.New("postgres is not enabled")
-	}
-	return s.pg.BackupFile(id)
-}
-
-// ImportBackup stores an uploaded archive for a database as a manual dump, so it can be restored
-// like any other recorded backup.
-func (s *Service) ImportBackup(database string, source io.Reader) (pg.Backup, error) {
-	if s.pg == nil || !s.pg.Enabled() {
-		return pg.Backup{}, errors.New("postgres is not enabled")
-	}
-	return s.pg.ImportBackup(database, source)
-}
-
-// DeleteBackup removes one recorded dump from disk and the catalog.
-func (s *Service) DeleteBackup(id string) error {
-	if s.pg == nil || !s.pg.Enabled() {
-		return errors.New("postgres is not enabled")
-	}
-	return s.pg.DeleteBackup(id)
-}
-
-// ApplyPGConfig pushes a freshly saved config into the PostgreSQL service, so PG settings and
-// backup selection apply without a daemon restart.
-func (s *Service) ApplyPGConfig(cfg config.Config) {
-	if s.pg != nil {
-		s.pg.Apply(cfg)
-	}
-}
-
-// PGBackupConfig returns the effective PostgreSQL backup policy.
-func (s *Service) PGBackupConfig() config.PostgresBackup {
-	if s.pg == nil {
-		return config.PostgresBackup{}
-	}
-	return s.pg.BackupConfig()
-}
-
-// PubsubApps lists every app that serves realtime channels, with its channels and subscriber
-// counts.
-func (s *Service) PubsubApps() []pubsub.App {
-	if s.pubsub == nil {
-		return nil
-	}
-	return s.pubsub.Snapshot(s.runtime.Snapshots())
-}
-
-// PubsubStats is the per-app realtime counters for /metrics.
-func (s *Service) PubsubStats() map[string]pubsub.Stats {
-	if s.pubsub == nil {
-		return nil
-	}
-	return s.pubsub.Stats()
-}
-
-// PubsubSecret is a web process's publish credential and the URLs it enables, for the CLI and
-// console.
-type PubsubSecret struct {
-	App       string `json:"app"`
-	Process   string `json:"process"`
-	Path      string `json:"path"`
-	Host      string `json:"host"`
-	Secret    string `json:"secret"`
-	Subscribe string `json:"subscribe_url"`
-	Publish   string `json:"publish_url"`
-}
-
-// PubsubSecret returns a web process's effective publish secret and its example URLs.
-func (s *Service) PubsubSecret(app, process string) (PubsubSecret, error) {
-	snapshot, web, err := s.pubsubHub(app, process)
-	if err != nil {
-		return PubsubSecret{}, err
-	}
-	cfg := web.Pubsub
-	secret, err := s.pubsub.Secret(snapshot.Name, web.Name, cfg)
-	if err != nil {
-		return PubsubSecret{}, err
-	}
-	host := web.CanonicalHost
-	if host == "" && len(web.Hosts) > 0 {
-		host = config.BaseHost(web.Hosts[0])
-	}
-	base := "https://" + host + cfg.Path
-	return PubsubSecret{App: snapshot.Name, Process: web.Name, Path: cfg.Path, Host: host, Secret: secret, Subscribe: base + "/<channel>", Publish: base + "/<channel>"}, nil
-}
-
-// PubsubRotate replaces a web process's generated publish secret and returns the new credential
-// and URLs.
-func (s *Service) PubsubRotate(app, process string) (PubsubSecret, error) {
-	snapshot, web, err := s.pubsubHub(app, process)
-	if err != nil {
-		return PubsubSecret{}, err
-	}
-	if _, err := s.pubsub.Rotate(snapshot.Name, web.Name, web.Pubsub); err != nil {
-		return PubsubSecret{}, err
-	}
-	return s.PubsubSecret(app, web.Name)
-}
-
-// PubsubPublished is the result of a console or CLI publish.
-type PubsubPublished struct {
-	Channel     string `json:"channel"`
-	Subscribers int    `json:"subscribers"`
-}
-
-// PubsubPublish sends one message to a web process's channel from the CLI or console.
-func (s *Service) PubsubPublish(app, process, channel, event string, data json.RawMessage) (PubsubPublished, error) {
-	snapshot, web, err := s.pubsubHub(app, process)
-	if err != nil {
-		return PubsubPublished{}, err
-	}
-	if !pubsub.ValidChannel(channel) {
-		return PubsubPublished{}, fmt.Errorf("invalid channel %q", channel)
-	}
-	if event == "" {
-		event = "message"
-	}
-	if len(data) == 0 {
-		data = json.RawMessage("null")
-	}
-	delivered := s.pubsub.Publish(snapshot.Name, web.Name, channel, pubsub.Message{Event: event, Data: data}, web.Pubsub.Replay)
-	return PubsubPublished{Channel: channel, Subscribers: delivered}, nil
-}
-
-// pubsubHub resolves the web process a pubsub action targets. An empty process picks the app's
-// only hub; an app with several hubs requires naming one.
-func (s *Service) pubsubHub(app, process string) (super.Snapshot, super.WebProcessSnapshot, error) {
-	if s.pubsub == nil {
-		return super.Snapshot{}, super.WebProcessSnapshot{}, errors.New("pubsub is not enabled")
-	}
-	if app == "" {
-		return super.Snapshot{}, super.WebProcessSnapshot{}, errors.New("app is required")
-	}
-	snapshot, err := s.runtime.Snapshot(app)
-	if err != nil {
-		return super.Snapshot{}, super.WebProcessSnapshot{}, err
-	}
-	var enabled []super.WebProcessSnapshot
-	for _, web := range snapshot.WebProcesses {
-		if web.Pubsub.Enabled() {
-			enabled = append(enabled, web)
-		}
-	}
-	if len(enabled) == 0 {
-		return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q has no pubsub path", app)
-	}
-	if process == "" {
-		if len(enabled) > 1 {
-			names := make([]string, len(enabled))
-			for index, web := range enabled {
-				names[index] = web.Name
-			}
-			return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q has several pubsub processes %v; name one", app, names)
-		}
-		return snapshot, enabled[0], nil
-	}
-	for _, web := range enabled {
-		if web.Name == process {
-			return snapshot, web, nil
-		}
-	}
-	return super.Snapshot{}, super.WebProcessSnapshot{}, fmt.Errorf("app %q web process %q has no pubsub path", app, process)
-}
-
-// RestartRequired lists the host keys whose value on disk differs from the running session.
-func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired() }
-
-// Rescan reloads the apps and reports the invalid ones and the host keys waiting for a restart,
-// so every transport answers with the same shape.
-func (s *Service) Rescan() (RescanResult, error) {
-	invalid, err := s.runtime.Rescan()
-	if s.pg != nil {
-		// postgres is a host key that hot-reloads, so a rescan re-applies it like a config save.
-		s.pg.Apply(s.runtime.HostConfig())
-	}
-	if s.pubsub != nil {
-		s.pubsub.Reconcile(s.runtime.Snapshots())
-	}
-	result := RescanResult{Apps: s.Apps(), Invalid: messages(invalid), RestartRequired: s.runtime.RestartRequired()}
-	return result, err
-}
-
-// decorate adds what the supervisor does not know about an app: how many requests it answered and
-// what it occupies on disk. Both sources are optional and a missing one leaves the zero value.
-func (s *Service) decorate(snapshot *super.Snapshot) {
-	if s.rates != nil {
-		s.withRates(snapshot)
-	}
-	if s.disk != nil {
-		if usage, ok := s.disk.Usage(snapshot.Name); ok {
-			snapshot.Disk = diskUsage(usage)
-		}
-	}
-}
-
-func (s *Service) withRates(snapshot *super.Snapshot) {
-	rates, err := s.rates.Rates(snapshot.Name)
-	if err != nil {
-		return
-	}
-	snapshot.RequestRates = super.RequestRates{LastMinute: rates.LastMinute, LastHour: rates.LastHour, LastDay: rates.LastDay}
-}
-
-func diskUsage(usage diskusage.Usage) super.DiskUsage {
-	return super.DiskUsage{AppBytes: usage.AppBytes, LogBytes: usage.LogBytes, TotalBytes: usage.TotalBytes, MeasuredAt: usage.MeasuredAt}
-}
-
-func messages(failures []error) []string {
-	result := make([]string, len(failures))
-	for i, err := range failures {
-		result[i] = err.Error()
-	}
-	return result
+	return logstore.AuditFilter{App: request.App, Actor: request.ByActor, Action: request.Action, Limit: request.Lines}
 }

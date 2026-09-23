@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
-func (s *Service) serveSSE(w http.ResponseWriter, r *http.Request, app string, web super.WebProcessSnapshot, channel string) {
+func (s *Service) serveSSE(w http.ResponseWriter, r *http.Request, app string, web supervisor.WebProcessSnapshot, channel string) {
 	sub, backlog, err := s.subscribe(hubID{app, web.Name}, channel, web.Pubsub)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

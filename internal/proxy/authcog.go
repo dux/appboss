@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"dboss/internal/authcog"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 // authCog is the app-level AuthCog login service. dboss runs the whole round trip at the app's
 // configured path and then forwards one request to that same path with the profile in
 // X-Dboss-User; the app reads it and creates its own session. dboss keeps nothing.
-func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app super.Snapshot, next func()) {
+func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
 	cfg := app.Web.AuthCog
 	if !cfg.Enabled() || r.URL.Path != cfg.Path {
 		next()
@@ -25,10 +25,6 @@ func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app super.Snap
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.signin == nil {
-		http.Error(w, "sign-in is not available", http.StatusServiceUnavailable)
 		return
 	}
 	gate := authCogGate(app)
@@ -53,7 +49,7 @@ func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app super.Snap
 
 // authCogGate describes the app to the shared AuthCog flow. Every host that reaches here already
 // belongs to the app, so the gate answers for all of them. Any AuthCog account is admitted.
-func authCogGate(app super.Snapshot) authcog.Gate {
+func authCogGate(app supervisor.Snapshot) authcog.Gate {
 	return authcog.Gate{
 		Audience:     authCogAudience + app.Name,
 		Realm:        app.Web.AuthCog.RealmHost(),

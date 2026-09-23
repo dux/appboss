@@ -44,7 +44,6 @@ type ProcessOverrides struct {
 	LogTailLines       *int              `yaml:"log_tail_lines,omitempty" json:"log_tail_lines,omitempty"`
 	LogRetention       *Duration         `yaml:"log_retention,omitempty" json:"log_retention,omitempty"`
 	StdoutRetention    *Duration         `yaml:"stdout_retention,omitempty" json:"stdout_retention,omitempty"`
-	LogFlush           *Duration         `yaml:"log_flush,omitempty" json:"log_flush,omitempty"`
 	TmpClean           *Duration         `yaml:"tmp_clean,omitempty" json:"tmp_clean,omitempty"`
 	Shell              *bool             `yaml:"shell,omitempty" json:"shell,omitempty"`
 	Env                map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
@@ -80,59 +79,12 @@ type PubsubOverrides struct {
 	Test           *bool   `yaml:"test,omitempty" json:"test,omitempty"`
 }
 
-func (o *PubsubOverrides) applyOverride(target reflect.Value) {
-	pubsub, ok := target.Addr().Interface().(*Pubsub)
-	if !ok {
-		return
-	}
-	if o.Path != nil {
-		pubsub.Path = *o.Path
-	}
-	if o.Secret != nil {
-		pubsub.Secret = *o.Secret
-	}
-	if o.Replay != nil {
-		pubsub.Replay = *o.Replay
-	}
-	if o.MaxClients != nil {
-		pubsub.MaxClients = *o.MaxClients
-	}
-	if o.MaxMessageSize != nil {
-		pubsub.MaxMessageSize = *o.MaxMessageSize
-	}
-	if o.ClientEvents != nil {
-		pubsub.ClientEvents = *o.ClientEvents
-	}
-	if o.Test != nil {
-		pubsub.Test = *o.Test
-	}
-}
-
 // AlertsOverrides is the alerts block as pointers, merged key by key like pubsub.
 type AlertsOverrides struct {
 	Window      *Duration `yaml:"window,omitempty" json:"window,omitempty"`
 	MinRequests *int      `yaml:"min_requests,omitempty" json:"min_requests,omitempty"`
 	ErrorRate   *int      `yaml:"error_rate,omitempty" json:"error_rate,omitempty"`
 	SlowP95     *Duration `yaml:"slow_p95,omitempty" json:"slow_p95,omitempty"`
-}
-
-func (o *AlertsOverrides) applyOverride(target reflect.Value) {
-	alerts, ok := target.Addr().Interface().(*Alerts)
-	if !ok {
-		return
-	}
-	if o.Window != nil {
-		alerts.Window = *o.Window
-	}
-	if o.MinRequests != nil {
-		alerts.MinRequests = *o.MinRequests
-	}
-	if o.ErrorRate != nil {
-		alerts.ErrorRate = *o.ErrorRate
-	}
-	if o.SlowP95 != nil {
-		alerts.SlowP95 = *o.SlowP95
-	}
 }
 
 // AuthOverrides is the auth block as pointers. allow_emails replaces the host list, like every
@@ -142,19 +94,6 @@ type AuthOverrides struct {
 	SessionTTL  *Duration `yaml:"session_ttl,omitempty" json:"session_ttl,omitempty"`
 }
 
-func (o *AuthOverrides) applyOverride(target reflect.Value) {
-	auth, ok := target.Addr().Interface().(*Auth)
-	if !ok {
-		return
-	}
-	if o.AllowEmails != nil {
-		auth.AllowEmails = o.AllowEmails
-	}
-	if o.SessionTTL != nil {
-		auth.SessionTTL = *o.SessionTTL
-	}
-}
-
 // AuthCogOverrides is the authcog block as pointers, merged key by key like pubsub.
 type AuthCogOverrides struct {
 	Login *bool   `yaml:"login,omitempty" json:"login,omitempty"`
@@ -162,31 +101,11 @@ type AuthCogOverrides struct {
 	Realm *string `yaml:"realm,omitempty" json:"realm,omitempty"`
 }
 
-func (o *AuthCogOverrides) applyOverride(target reflect.Value) {
-	authcog, ok := target.Addr().Interface().(*AuthCog)
-	if !ok {
-		return
-	}
-	if o.Login != nil {
-		authcog.Login = *o.Login
-	}
-	if o.Path != nil {
-		authcog.Path = *o.Path
-	}
-	if o.Realm != nil {
-		authcog.Realm = *o.Realm
-	}
-}
-
-// overrideApplier is a nested shared block that merges itself field by field, so an absent key
-// keeps the value from defaults:.
-type overrideApplier interface {
-	applyOverride(target reflect.Value)
-}
-
 // apply copies every non-nil field of overrides onto the field of the same name in target.
-// Pointers are dereferenced, slices replace, maps merge key by key into a fresh map so the
-// shared defaults are never mutated. Used for host defaults -> app and app -> process.
+// Pointers are dereferenced, a pointer to a nested overrides block merges into its struct key by
+// key (so an absent key keeps the default), slices replace, and maps merge key by key into a
+// fresh map so the shared defaults are never mutated. Used for host defaults -> app and
+// app -> process.
 func apply(target any, overrides any) {
 	applyValue(reflect.ValueOf(target).Elem(), reflect.ValueOf(overrides))
 }
@@ -206,12 +125,12 @@ func applyValue(target, overrides reflect.Value) {
 		if !dest.IsValid() {
 			panic(fmt.Sprintf("config: %s has no field %s", target.Type(), field.Name))
 		}
-		if applier, ok := value.Interface().(overrideApplier); ok {
-			applier.applyOverride(dest)
-			continue
-		}
 		switch value.Kind() {
 		case reflect.Pointer:
+			if value.Elem().Kind() == reflect.Struct && dest.Kind() == reflect.Struct {
+				applyValue(dest, value.Elem())
+				continue
+			}
 			dest.Set(value.Elem())
 		case reflect.Map:
 			merged := reflect.MakeMapWithSize(dest.Type(), dest.Len()+value.Len())

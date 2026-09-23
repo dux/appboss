@@ -42,7 +42,6 @@ demo-watch: build ## Rebuild and restart the demo on changes
 		--watch ./cmd \
 		--watch ./internal \
 		--watch ./demo \
-		--watch ./web \
 		--watch ./go.mod \
 		--watch ./go.sum \
 		--ignore './demo/.dboss/**' \

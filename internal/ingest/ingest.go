@@ -22,7 +22,8 @@ import (
 
 	"dboss/internal/logstore"
 	"dboss/internal/logx"
-	"dboss/internal/super"
+	"dboss/internal/module"
+	"dboss/internal/supervisor"
 )
 
 // Sealer asks the supervisor to seal one app's process log segments.
@@ -32,7 +33,7 @@ type Sealer interface {
 
 // Snapshotter lists the apps whose logs should be ingested.
 type Snapshotter interface {
-	Snapshots() []super.Snapshot
+	Snapshots() []supervisor.Snapshot
 }
 
 // Store is the write side of the log store: it takes parsed rows and remembers how far each app
@@ -51,43 +52,21 @@ type Module struct {
 	apps     Snapshotter
 	store    Store
 	interval time.Duration
-	cancel   context.CancelFunc
-	done     chan struct{}
+	loop     module.Ticker
 }
 
 func New(sealer Sealer, apps Snapshotter, store Store, interval time.Duration) *Module {
-	return &Module{sealer: sealer, apps: apps, store: store, interval: interval, done: make(chan struct{})}
+	return &Module{sealer: sealer, apps: apps, store: store, interval: interval}
 }
 
 func (m *Module) Name() string { return "ingest" }
 
 func (m *Module) Start(ctx context.Context) error {
-	ctx, m.cancel = context.WithCancel(ctx)
-	go m.loop(ctx)
+	m.loop.Run(ctx, m.interval, false, func(context.Context) { m.runOnce() })
 	return nil
 }
 
-func (m *Module) Close() error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	return nil
-}
-
-func (m *Module) loop(ctx context.Context) {
-	defer close(m.done)
-	ticker := time.NewTicker(m.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.runOnce()
-		}
-	}
-}
+func (m *Module) Close() error { return m.loop.Close() }
 
 // runOnce ingests every app's sealed stdout segments and tails its app log files. A segment or
 // an offset that fails to commit stays for the next pass.
@@ -101,7 +80,7 @@ func (m *Module) runOnce() {
 	}
 }
 
-func (m *Module) ingestStdout(snapshot super.Snapshot) {
+func (m *Module) ingestStdout(snapshot supervisor.Snapshot) {
 	if snapshot.StdoutRetention <= 0 {
 		return
 	}
@@ -185,7 +164,7 @@ func carryTail(path string, lines []string, modified time.Time) error {
 
 // tailFiles reads new bytes from every *.log file under the app's ./log directory. The files are
 // the app's, not dboss's: they are never rotated or deleted here.
-func (m *Module) tailFiles(snapshot super.Snapshot) {
+func (m *Module) tailFiles(snapshot supervisor.Snapshot) {
 	dir := filepath.Join(snapshot.Dir, "log")
 	files, err := logFiles(dir)
 	if err != nil {
@@ -215,7 +194,7 @@ func (m *Module) tailFiles(snapshot super.Snapshot) {
 	}
 }
 
-func (m *Module) tailFile(snapshot super.Snapshot, dir, path string, previous logstore.TailOffset) error {
+func (m *Module) tailFile(snapshot supervisor.Snapshot, dir, path string, previous logstore.TailOffset) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err

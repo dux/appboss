@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,9 +16,6 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/schedule"
 )
-
-var processName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
-var hostName = regexp.MustCompile(`^(\*\.|\.)?([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$`)
 
 type Command struct {
 	Name string   `json:"name"`
@@ -148,7 +144,7 @@ func resolveHosts(found []*App, invalid []error) ([]*App, []error, error) {
 	for _, app := range found {
 		conflict := ""
 		for _, host := range app.Config.Hosts {
-			normalized := strings.ToLower(strings.TrimSuffix(host, "."))
+			normalized := config.NormalizePattern(host)
 			if owner := owners[normalized]; owner != "" {
 				conflict = fmt.Sprintf("host pattern %q is already owned by %s", host, owner)
 				break
@@ -159,7 +155,7 @@ func resolveHosts(found []*App, invalid []error) ([]*App, []error, error) {
 			continue
 		}
 		for _, host := range app.Config.Hosts {
-			owners[strings.ToLower(strings.TrimSuffix(host, "."))] = app.Name
+			owners[config.NormalizePattern(host)] = app.Name
 		}
 		valid = append(valid, app)
 	}
@@ -199,42 +195,12 @@ func loadChildApp(cfg config.Config, name, dir string) (*App, error) {
 	return buildApp(name, dir, appCfg)
 }
 
-// validateApp checks what the config loader cannot see on its own: the procfile parses, every
-// referenced process exists and host patterns are well formed. Host conflicts need the whole
-// fleet and stay in resolveHosts.
-func validateApp(appCfg config.App) (map[string]Command, error) {
-	commands, err := ParseProcfile(appCfg.Procfile)
-	if err != nil {
-		return nil, err
-	}
-	for _, web := range appCfg.WebProcesses {
-		if _, ok := commands[web.Name]; !ok {
-			return nil, fmt.Errorf("web process %q is not in procfile", web.Name)
-		}
-	}
-	for process := range appCfg.Processes {
-		if _, ok := commands[process]; !ok {
-			return nil, fmt.Errorf("processes.%s is not in procfile", process)
-		}
-	}
-	for _, host := range appCfg.Hosts {
-		if !hostName.MatchString(strings.ToLower(strings.TrimSuffix(host, "."))) {
-			return nil, fmt.Errorf("invalid host pattern %q", host)
-		}
-	}
-	return commands, nil
-}
-
 func buildApp(name, dir string, appCfg config.App) (*App, error) {
-	commands, err := validateApp(appCfg)
-	if err != nil {
-		return nil, err
+	commands := make(map[string]Command, len(appCfg.Procfile))
+	for name, process := range appCfg.Procfile {
+		commands[name] = newCommand(name, process.Command)
 	}
 	cron, err := buildCron(appCfg.Cron)
-	if err != nil {
-		return nil, err
-	}
-	hooks, err := buildHooks(appCfg.Hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -250,13 +216,19 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 	// environment is assembled (see supervisor.environment).
 	fileEnv := map[string]string{}
 	for _, filename := range []string{".env", ".env.local"} {
-		values, envErr := LoadEnv(filepath.Join(dir, filename))
+		values, envErr := loadEnv(filepath.Join(dir, filename))
 		if envErr != nil {
 			return nil, envErr
 		}
 		merge(fileEnv, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: hooks, Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg}, nil
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: buildHooks(appCfg.Hooks), Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg}, nil
+}
+
+// newCommand is one command line split for exec; config has already refused an empty one.
+func newCommand(name, line string) Command {
+	line = strings.TrimSpace(line)
+	return Command{Name: name, Line: line, Argv: strings.Fields(line)}
 }
 
 // buildCron parses every schedule once so the supervisor only has to work with next run times.
@@ -268,7 +240,7 @@ func buildCron(jobs map[string]config.CronJob) (map[string]CronJob, error) {
 			return nil, fmt.Errorf("cron.%s.schedule: %w", name, err)
 		}
 		result[name] = CronJob{
-			Command:  Command{Name: name, Line: job.Command, Argv: strings.Fields(job.Command)},
+			Command:  newCommand(name, job.Command),
 			Schedule: parsed,
 			Timeout:  job.Timeout.Value(),
 			Overlap:  job.Overlap,
@@ -279,11 +251,11 @@ func buildCron(jobs map[string]config.CronJob) (map[string]CronJob, error) {
 }
 
 // buildHooks parses every hook command once; hooks have no schedule, they only fire on a ping.
-func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
+func buildHooks(hooks map[string]config.Hook) map[string]Hook {
 	result := make(map[string]Hook, len(hooks))
 	for name, hook := range hooks {
 		result[name] = Hook{
-			Command:  Command{Name: name, Line: hook.Command, Argv: strings.Fields(hook.Command)},
+			Command:  newCommand(name, hook.Command),
 			Timeout:  hook.Timeout.Value(),
 			Restart:  hook.Restart,
 			Overlap:  hook.Overlap,
@@ -291,7 +263,7 @@ func buildHooks(hooks map[string]config.Hook) (map[string]Hook, error) {
 			Pull:     hook.Pull,
 		}
 	}
-	return result, nil
+	return result
 }
 
 // buildLifecycle parses each step once and applies the default timeout.
@@ -302,28 +274,12 @@ func buildLifecycle(steps map[string]config.LifecycleCommand) map[string]Step {
 		if timeout == 0 {
 			timeout = config.DefaultLifecycleTimeout
 		}
-		line := strings.TrimSpace(step.Command)
-		result[name] = Step{Command: Command{Name: name, Line: line, Argv: strings.Fields(line)}, Timeout: timeout}
+		result[name] = Step{Command: newCommand(name, step.Command), Timeout: timeout}
 	}
 	return result
 }
 
-func ParseProcfile(procfile map[string]config.ProcessSpec) (map[string]Command, error) {
-	commands := map[string]Command{}
-	for name, process := range procfile {
-		line := strings.TrimSpace(process.Command)
-		if !processName.MatchString(name) {
-			return nil, fmt.Errorf("procfile has invalid process name %q", name)
-		}
-		if line == "" {
-			return nil, fmt.Errorf("procfile.%s command is empty", name)
-		}
-		commands[name] = Command{Name: name, Line: line, Argv: strings.Fields(line)}
-	}
-	return commands, nil
-}
-
-func LoadEnv(path string) (map[string]string, error) {
+func loadEnv(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil

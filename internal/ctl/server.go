@@ -86,12 +86,12 @@ func (s *Server) handle(connection net.Conn) {
 	}
 }
 
-const loginMethod = "login"
+const LoginMethod = "login"
 
 // dispatch runs one control request. Everything but login is the shared ops action; login mints
 // a console link and so stays with the server.
 func (s *Server) dispatch(request Request) Response {
-	if request.Method == loginMethod {
+	if request.Method == LoginMethod {
 		return s.loginResponse()
 	}
 	// The control socket has no user, so audited actions are attributed to the CLI.

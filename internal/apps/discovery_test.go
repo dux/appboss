@@ -9,13 +9,10 @@ import (
 	"dboss/internal/config"
 )
 
-func TestParseProcfile(t *testing.T) {
-	commands, err := ParseProcfile(map[string]config.ProcessSpec{"web": {Command: "./server --port x"}, "worker": {Command: "./jobs"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(commands) != 2 || commands["web"].Argv[0] != "./server" {
-		t.Fatalf("unexpected commands: %#v", commands)
+func TestNewCommandSplitsTheLine(t *testing.T) {
+	command := newCommand("web", "  ./server --port x ")
+	if command.Line != "./server --port x" || len(command.Argv) != 3 || command.Argv[0] != "./server" {
+		t.Fatalf("unexpected command: %#v", command)
 	}
 }
 
@@ -23,23 +20,12 @@ func TestLoadEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/env"
 	writeTestFile(t, path, "A=one\nexport B=two\nC=\"three words\"\nD='${A}'\n")
-	values, err := LoadEnv(path)
+	values, err := loadEnv(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if values["C"] != "three words" || values["D"] != "${A}" {
 		t.Fatalf("unexpected env: %#v", values)
-	}
-}
-
-func TestValidateAppAcceptsShorthandHost(t *testing.T) {
-	app := config.App{Procfile: map[string]config.ProcessSpec{"web": {Command: "./server"}}, WebProcesses: []config.WebProcess{{Name: "web", Hosts: []string{".demo.test"}}}, Hosts: []string{".demo.test"}}
-	if _, err := validateApp(app); err != nil {
-		t.Fatalf("shorthand host rejected: %v", err)
-	}
-	app.Hosts = []string{"demo..test"}
-	if _, err := validateApp(app); err == nil {
-		t.Fatal("malformed host was accepted")
 	}
 }
 

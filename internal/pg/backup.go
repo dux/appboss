@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -81,7 +80,7 @@ func (s *Service) ImportBackup(database string, source io.Reader) (Backup, error
 	}
 
 	started := time.Now()
-	name, finalPath := uniqueDump(dir, database, started)
+	name, finalPath := uniqueDump(dir, started)
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return Backup{}, err
 	}
@@ -122,13 +121,13 @@ func (s *Service) DeleteBackup(id string) error {
 // database, so one failure does not skip the rest.
 func (s *Service) BackupAll(ctx context.Context) error {
 	s.mu.RLock()
-	postgres, connConfig := s.opts.postgres, s.connConfig
+	postgres := s.opts.postgres
 	s.mu.RUnlock()
 	if !postgres.Enabled {
 		return errors.New("postgres is disabled")
 	}
-	if connConfig == nil {
-		return errors.New("no reachable PostgreSQL server")
+	if _, err := s.connection(ctx); err != nil {
+		return err
 	}
 	selected := postgres.Backup.Selected()
 	if len(selected) == 0 {
@@ -160,12 +159,13 @@ func (s *Service) BackupDatabase(ctx context.Context, database string, manual bo
 		s.mu.Unlock()
 	}()
 
-	s.mu.RLock()
-	opts, connConfig := s.opts, s.connConfig
-	s.mu.RUnlock()
-	if connConfig == nil {
-		return Backup{}, errors.New("no reachable PostgreSQL server")
+	connConfig, err := s.connection(ctx)
+	if err != nil {
+		return Backup{}, err
 	}
+	s.mu.RLock()
+	opts := s.opts
+	s.mu.RUnlock()
 	return s.runDump(ctx, connConfig, opts, database, manual)
 }
 
@@ -179,7 +179,7 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	if err != nil {
 		return s.failed(entry, started, err)
 	}
-	name, finalPath := uniqueDump(dir, database, started)
+	name, finalPath := uniqueDump(dir, started)
 	entry.ID = name
 	temp, err := os.CreateTemp(dir, ".dump-*.sql")
 	if err != nil {
@@ -189,7 +189,7 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	_ = temp.Close()
 	defer func() { _ = os.Remove(sqlPath) }()
 
-	if err := s.execDump(ctx, connConfig, database, sqlPath); err != nil {
+	if err := execDump(ctx, connConfig, database, sqlPath); err != nil {
 		return s.failed(entry, started, err)
 	}
 	if err := zipSQL(sqlPath, finalPath); err != nil {
@@ -225,10 +225,10 @@ func (s *Service) dumpDir(opts options, database string) (string, error) {
 // and core objects, without the ownership, ACLs, comments, tablespace or replication metadata that
 // would not restore on another box. The connection password travels in the environment, never
 // argv.
-func (s *Service) execDump(ctx context.Context, connConfig *pgx.ConnConfig, database, path string) error {
-	runCtx, cancel := context.WithTimeout(ctx, backupTimeout)
+func execDump(ctx context.Context, connConfig *pgx.ConnConfig, database, path string) error {
+	ctx, cancel := context.WithTimeout(ctx, backupTimeout)
 	defer cancel()
-	command := exec.CommandContext(runCtx, "pg_dump",
+	return runClient(ctx, connConfig, "pg_dump",
 		"--format=plain",
 		"--no-owner", "--no-privileges",
 		"--no-comments", "--no-tablespaces", "--no-security-labels",
@@ -236,16 +236,6 @@ func (s *Service) execDump(ctx context.Context, connConfig *pgx.ConnConfig, data
 		"--file="+path,
 		"--dbname="+databaseConnString(connConfig, database),
 	)
-	command.Env = processEnv(connConfig)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		message := firstLine(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		return fmt.Errorf("%s: %s", filepath.Base(command.Path), message)
-	}
-	return nil
 }
 
 // zipSQL stores the SQL dump at source in target as a zip archive. The archive holds one entry
@@ -284,7 +274,7 @@ func (s *Service) failed(entry Backup, started time.Time, err error) (Backup, er
 	entry.Status, entry.Error = "failed", err.Error()
 	entry.DurationMS = time.Since(started).Milliseconds()
 	_ = s.catalog.record(entry)
-	s.sink.Send(notify.Event{Type: "backup-failed", App: entry.Database, Error: err.Error(), Time: time.Now()})
+	s.sink.Send(notify.Event{Type: notify.BackupFailed, App: entry.Database, Error: err.Error(), Time: time.Now()})
 	return entry, err
 }
 
@@ -325,20 +315,20 @@ func (s *Service) prune() {
 	}
 }
 
-func dumpName(database string, at time.Time) string {
+func dumpName(at time.Time) string {
 	return "BACKUP_" + at.UTC().Format("2006-01-02T15-04-05Z") + ".zip"
 }
 
 // uniqueDump names a dump and returns its path. The stamp is second-resolution, so a second dump
 // within the same second takes a suffix rather than overwriting the first and stealing its id.
-func uniqueDump(dir, database string, at time.Time) (string, string) {
-	name := dumpName(database, at)
+func uniqueDump(dir string, at time.Time) (string, string) {
+	name := dumpName(at)
 	path := filepath.Join(dir, name)
 	for index := 2; ; index++ {
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			return name, path
 		}
-		name = fmt.Sprintf("%s_%d.zip", strings.TrimSuffix(dumpName(database, at), ".zip"), index)
+		name = fmt.Sprintf("%s_%d.zip", strings.TrimSuffix(dumpName(at), ".zip"), index)
 		path = filepath.Join(dir, name)
 	}
 }

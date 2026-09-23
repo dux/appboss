@@ -36,23 +36,6 @@ func SetLevel(name string) {
 	}
 }
 
-// Enabled reports whether the named level prints, for callers that must build an expensive
-// argument first.
-func Enabled(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "debug":
-		return current.Load() <= int32(debugLevel)
-	case "info":
-		return current.Load() <= int32(infoLevel)
-	case "warn":
-		return current.Load() <= int32(warnLevel)
-	case "error":
-		return current.Load() <= int32(errorLevel)
-	default:
-		return true
-	}
-}
-
 func Debugf(format string, args ...any) {
 	if current.Load() <= int32(debugLevel) {
 		log.Printf(format, args...)

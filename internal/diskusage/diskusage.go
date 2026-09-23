@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"dboss/internal/logx"
-	"dboss/internal/super"
+	"dboss/internal/module"
+	"dboss/internal/supervisor"
 )
 
 // interval is how often every app is measured.
@@ -21,7 +22,7 @@ const interval = 24 * time.Hour
 
 // Snapshotter lists the apps to measure and where they live.
 type Snapshotter interface {
-	Snapshots() []super.Snapshot
+	Snapshots() []supervisor.Snapshot
 }
 
 // Usage is one app's footprint, split into the app's own files and the log store dboss keeps for
@@ -37,8 +38,7 @@ type Usage struct {
 type Module struct {
 	apps   Snapshotter
 	logDir string
-	cancel context.CancelFunc
-	done   chan struct{}
+	loop   module.Ticker
 
 	// walk serializes the walks: two at once on one disk are slower than one after the other.
 	// mu only ever guards the maps, never a walk.
@@ -49,39 +49,18 @@ type Module struct {
 }
 
 func New(apps Snapshotter, logDir string) *Module {
-	return &Module{apps: apps, logDir: logDir, done: make(chan struct{}), usage: map[string]Usage{}, measuring: map[string]bool{}}
+	return &Module{apps: apps, logDir: logDir, usage: map[string]Usage{}, measuring: map[string]bool{}}
 }
 
 func (m *Module) Name() string { return "diskusage" }
 
 func (m *Module) Start(ctx context.Context) error {
-	ctx, m.cancel = context.WithCancel(ctx)
-	go m.loop(ctx)
+	// Measures once on start, so the first console load after a restart already has numbers.
+	m.loop.Run(ctx, interval, true, func(context.Context) { m.runOnce() })
 	return nil
 }
 
-func (m *Module) Close() error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	return nil
-}
-
-// loop measures once on start, so the first console load after a restart already has numbers.
-func (m *Module) loop(ctx context.Context) {
-	defer close(m.done)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		m.runOnce()
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
+func (m *Module) Close() error { return m.loop.Close() }
 
 // Usage returns the last measurement of one app. The second result is false until it has been
 // measured, so a caller can tell an unmeasured app from an empty one.
@@ -125,7 +104,7 @@ func (m *Module) runOnce() {
 // measure walks one app and caches what it found. A walk that could not read everything still
 // stores the partial sum, so the console shows a number rather than nothing. While a walk for this
 // app is already running the cached value is returned instead of queueing a second one.
-func (m *Module) measure(snapshot super.Snapshot) (Usage, error) {
+func (m *Module) measure(snapshot supervisor.Snapshot) (Usage, error) {
 	if !m.claim(snapshot.Name) {
 		usage, _ := m.Usage(snapshot.Name)
 		return usage, nil
@@ -142,7 +121,7 @@ func (m *Module) measure(snapshot super.Snapshot) (Usage, error) {
 		logRoot = ""
 	}
 	appBytes, appErr := dirBytes(snapshot.Dir, logRoot)
-	logBytes, logErr := DirBytes(logPath)
+	logBytes, logErr := dirBytes(logPath, "")
 	usage := Usage{AppBytes: appBytes, LogBytes: logBytes, TotalBytes: appBytes + logBytes, MeasuredAt: time.Now()}
 	m.mu.Lock()
 	m.usage[snapshot.Name] = usage
@@ -167,14 +146,11 @@ func (m *Module) release(app string) {
 	m.mu.Unlock()
 }
 
-// DirBytes sums the size of every regular file under dir. It is apparent size, what `du
+// dirBytes sums the size of every regular file under dir. It is apparent size, what `du
 // --apparent-size` prints: a sparse file counts as written and two hard links to one file count
 // twice. A missing directory is 0, and a file that cannot be read is skipped and reported, so the
-// caller still gets the rest of the sum.
-func DirBytes(dir string) (int64, error) { return dirBytes(dir, "") }
-
-// dirBytes is DirBytes with one subtree left out. skip is an already resolved path; an empty one
-// never matches.
+// caller still gets the rest of the sum. skip leaves out one subtree, an already resolved path;
+// an empty one never matches.
 func dirBytes(dir, skip string) (int64, error) {
 	// An app entry is usually a symlink to the current release, so the root is resolved before the
 	// walk; entries below it are not, so a tmp or log symlink out of the app counts as the link

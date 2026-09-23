@@ -194,16 +194,16 @@ func TestSafeRedirectRejectsAuthorityAndCallbackPaths(t *testing.T) {
 
 func TestSecureFollowsAuthCogLocalRules(t *testing.T) {
 	for _, target := range []string{"http://dboss.lvh.me/", "http://dboss.lvh.me:8081/", "http://127.0.0.1:3100/"} {
-		if Secure(httptest.NewRequest(http.MethodGet, target, nil)) {
+		if secure(httptest.NewRequest(http.MethodGet, target, nil)) {
 			t.Fatalf("%s should use an HTTP callback", target)
 		}
 	}
 	forwarded := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)
 	forwarded.Header.Set("X-Forwarded-Proto", "https")
-	if !Secure(forwarded) {
+	if !secure(forwarded) {
 		t.Fatal("forwarded HTTPS should use an HTTPS callback")
 	}
-	if !Secure(httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil)) {
+	if !secure(httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil)) {
 		t.Fatal("non-local AuthCog destination should use an HTTPS callback")
 	}
 }

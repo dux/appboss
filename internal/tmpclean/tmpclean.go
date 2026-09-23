@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"dboss/internal/logx"
-	"dboss/internal/super"
+	"dboss/internal/module"
+	"dboss/internal/supervisor"
 )
 
 // interval is how often every app is swept. The age itself is per app.
@@ -20,48 +21,26 @@ const interval = 24 * time.Hour
 
 // Snapshotter lists the apps to sweep.
 type Snapshotter interface {
-	Snapshots() []super.Snapshot
+	Snapshots() []supervisor.Snapshot
 }
 
 // Module sweeps the tmp directory of every app on a timer.
 type Module struct {
-	apps   Snapshotter
-	cancel context.CancelFunc
-	done   chan struct{}
+	apps Snapshotter
+	loop module.Ticker
 }
 
-func New(apps Snapshotter) *Module { return &Module{apps: apps, done: make(chan struct{})} }
+func New(apps Snapshotter) *Module { return &Module{apps: apps} }
 
 func (m *Module) Name() string { return "tmpclean" }
 
 func (m *Module) Start(ctx context.Context) error {
-	ctx, m.cancel = context.WithCancel(ctx)
-	go m.loop(ctx)
+	// Sweeps once on start, so a box that is restarted daily is still cleaned.
+	m.loop.Run(ctx, interval, true, func(context.Context) { m.runOnce(time.Now()) })
 	return nil
 }
 
-func (m *Module) Close() error {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-	}
-	return nil
-}
-
-// loop sweeps once on start, so a box that is restarted daily is still cleaned.
-func (m *Module) loop(ctx context.Context) {
-	defer close(m.done)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		m.runOnce(time.Now())
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
+func (m *Module) Close() error { return m.loop.Close() }
 
 func (m *Module) runOnce(now time.Time) {
 	for _, snapshot := range m.apps.Snapshots() {

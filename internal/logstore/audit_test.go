@@ -82,24 +82,6 @@ func TestAuditRecordSearchAndPrune(t *testing.T) {
 	}
 }
 
-func TestLatencyQuantiles(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
-	defer store.Close()
-	for _, duration := range []int64{10, 20, 30, 40, 100} {
-		if err := store.Record("web", time.Hour, RequestEntry{Time: time.Now(), DurationMS: duration}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	time.Sleep(20 * time.Millisecond)
-	latency, err := store.Latency("web", time.Now().Add(-time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latency.Count != 5 || latency.P50 != 30 || latency.P95 != 100 || latency.P99 != 100 {
-		t.Fatalf("latency = %+v", latency)
-	}
-}
-
 func TestVacuumKeepsDatabaseUsable(t *testing.T) {
 	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
 	defer store.Close()

@@ -5,7 +5,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"strings"
+
+	"dboss/internal/config"
 )
 
 // HostSwitch serves the management console on any of its hostnames and everything else as
@@ -13,10 +14,10 @@ import (
 func HostSwitch(managementHosts []string, management, apps http.Handler) http.Handler {
 	hosts := make(map[string]bool, len(managementHosts))
 	for _, host := range managementHosts {
-		hosts[strings.ToLower(host)] = true
+		hosts[config.NormalizePattern(host)] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hosts[hostOnly(r.Host)] {
+		if hosts[config.NormalizeHost(r.Host)] {
 			management.ServeHTTP(w, r)
 			return
 		}
@@ -39,7 +40,7 @@ func TrustedOnly(cidrs []string, next http.Handler) (http.Handler, error) {
 		prefixes = append(prefixes, prefix)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !trusted(r.RemoteAddr, prefixes) {
+		if !inPrefixes(r.RemoteAddr, prefixes) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -63,27 +64,20 @@ func CloudflareOnly(enabled bool, next http.Handler) http.Handler {
 	})
 }
 
-func trusted(remoteAddr string, prefixes []netip.Prefix) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
+// inPrefixes reports whether an address, with or without a port, lies in any of prefixes.
+func inPrefixes(address string, prefixes []netip.Prefix) bool {
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		address = host
 	}
-	address, err := netip.ParseAddr(host)
+	ip, err := netip.ParseAddr(address)
 	if err != nil {
 		return false
 	}
-	address = address.Unmap()
+	ip = ip.Unmap()
 	for _, prefix := range prefixes {
-		if prefix.Contains(address) {
+		if prefix.Contains(ip) {
 			return true
 		}
 	}
 	return false
-}
-
-func hostOnly(host string) string {
-	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		host = parsed
-	}
-	return strings.ToLower(strings.TrimSuffix(host, "."))
 }

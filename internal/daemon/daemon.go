@@ -21,6 +21,7 @@ import (
 
 	"dboss/internal/alerts"
 	"dboss/internal/apps"
+	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/console"
 	"dboss/internal/ctl"
@@ -36,7 +37,7 @@ import (
 	"dboss/internal/ports"
 	"dboss/internal/proxy"
 	"dboss/internal/pubsub"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 	"dboss/internal/sysinfo"
 	"dboss/internal/tmpclean"
 )
@@ -45,7 +46,7 @@ import (
 // cancelled, then Close drains it.
 type Daemon struct {
 	cfg            config.Config
-	manager        *super.Manager
+	manager        *supervisor.Manager
 	modules        *module.Manager
 	control        *ctl.Server
 	management     *console.Handler
@@ -54,7 +55,7 @@ type Daemon struct {
 	listen         []string
 	devHTTPS       string // actual address of the dev session's HTTPS listener
 	devTLS         *devtls.Authority
-	echo           *super.Echo
+	echo           *supervisor.Echo
 	managementPort int
 }
 
@@ -68,14 +69,14 @@ var devCADir = devtls.DefaultDir
 // Build prepares the session: directories, port range, supervisor, modules, the proxy pipeline,
 // the console and the control socket. Listeners bind here, so a returned error leaves nothing
 // behind.
-func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
+func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 	logx.SetLevel(cfg.Daemon.LogLevel)
 	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, err
 		}
 	}
-	cleared, err := super.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	cleared, err := ports.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	}
 	allocator, managementPort := newAllocator(cfg)
 	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: cfg.Notify.Format, Events: cfg.Notify.Events, MinInterval: cfg.Notify.MinInterval.Value(), Headers: cfg.Notify.Headers})
-	manager, invalid, err := super.New(cfg, allocator, echo, notifier)
+	manager, invalid, err := supervisor.New(cfg, allocator, echo, notifier)
 	if err != nil {
 		notifier.Close()
 		return nil, err
@@ -92,7 +93,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	for _, scanErr := range invalid {
 		logx.Warnf("skip invalid app: %v", scanErr)
 	}
-	logs := logstore.New(cfg.LogDir, cfg.Defaults.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Daemon.VacuumAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
+	logs := logstore.New(cfg.LogDir, cfg.Daemon.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Daemon.VacuumAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
@@ -112,12 +113,18 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 	sizes := diskusage.New(manager, cfg.LogDir)
 	postgres := pg.New(cfg, notifier)
 	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort}
-	service := ops.New(manager, logs, logs, postgres, channels, sizes, notifier)
+	service := ops.New(manager, logs, postgres, channels, sizes, notifier)
+	// One AuthCog flow for the console and every app gate: one signing key, one challenge map.
+	flow, err := authcog.New(cfg.StateDir)
+	if err != nil {
+		d.Close()
+		return nil, err
+	}
 	// The console has its own loopback listener, so it is built and bound outside the proxy
 	// block: a dev session with proxy.listen turned off still gets a console and `dboss login`.
 	var management *console.Handler
 	if cfg.ConsoleEnabled() {
-		management, err = console.New(cfg, service, apps.NewStore(cfg), notifier.Stats, sysInfo.Inspector())
+		management, err = console.New(cfg, flow, service, apps.NewStore(cfg), sysInfo.Inspector())
 		if err != nil {
 			d.Close()
 			return nil, fmt.Errorf("management console: %w", err)
@@ -125,7 +132,7 @@ func Build(cfg config.Config, echo *super.Echo) (*Daemon, error) {
 		d.management = management
 	}
 	if len(cfg.Proxy.Listen) > 0 {
-		edge, err := edgeHandler(cfg, manager, logs, management, channels)
+		edge, err := edgeHandler(cfg, flow, manager, logs, management, channels)
 		if err != nil {
 			d.Close()
 			return nil, err
@@ -243,8 +250,8 @@ func managementAddress(port int) string { return "127.0.0.1:" + strconv.Itoa(por
 // edgeHandler is the single public listener: Cloudflare hands it the full request and the
 // host header picks the console or an app. Only the app proxy is affected by the trusted CIDRs.
 // A console with no management.host is left off the switch; it is reached on its own port.
-func edgeHandler(cfg config.Config, manager *super.Manager, logs proxy.Recorder, management *console.Handler, channels *pubsub.Service) (http.Handler, error) {
-	appProxy, err := proxy.New(cfg, manager, logs, channels, channels.Filter)
+func edgeHandler(cfg config.Config, flow *authcog.Flow, manager *supervisor.Manager, logs proxy.Recorder, management *console.Handler, channels *pubsub.Service) (http.Handler, error) {
+	appProxy, err := proxy.New(cfg, flow, manager, logs, channels, channels.Filter)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,24 @@ type Event struct {
 	Time  time.Time `json:"time"`
 }
 
-// Sink is what the supervisor calls. A nil or disabled notifier drops the event.
+// The events an operator can subscribe to with notify.events.
+const (
+	Crash         = "crash"
+	RestartLoop   = "restart-loop"
+	HealthTimeout = "health-timeout"
+	WakeFailed    = "wake-failed"
+	HookFailed    = "hook-failed"
+	Deploy        = "deploy"
+	ConfigChanged = "config-changed"
+	BackupFailed  = "backup-failed"
+	ErrorRate     = "error-rate"
+	Slow          = "slow"
+)
+
+// Events lists every event; the default notify.events subscribes to all of them.
+var Events = []string{Crash, RestartLoop, HealthTimeout, WakeFailed, HookFailed, Deploy, ConfigChanged, BackupFailed, ErrorRate, Slow}
+
+// Sink is what the supervisor calls. A disabled notifier drops the event.
 type Sink interface {
 	Send(Event)
 }

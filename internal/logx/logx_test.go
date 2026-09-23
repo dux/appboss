@@ -32,11 +32,10 @@ func TestLevelFiltering(t *testing.T) {
 	if !strings.Contains(buffer.String(), "debug line") {
 		t.Fatal("debug level should print debug lines")
 	}
-	if !Enabled("debug") || !Enabled("warn") {
-		t.Fatal("debug level should enable every level")
-	}
+	buffer.Reset()
 	SetLevel("error")
-	if Enabled("warn") || !Enabled("error") {
-		t.Fatal("error level should only enable error")
+	Warnf("warn line")
+	if buffer.Len() != 0 {
+		t.Fatalf("error level printed a warning: %q", buffer.String())
 	}
 }

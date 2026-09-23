@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 func TestHealthAndReadyEndpoints(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{
-		{Name: "web", State: super.Running, Autostart: true},
-		{Name: "worker", State: super.Running, Autostart: true},
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{
+		{Name: "web", State: supervisor.Running, Autostart: true},
+		{Name: "worker", State: supervisor.Running, Autostart: true},
 	}}
 	handler := newTestHandler(t, manager, nil)
 
@@ -30,10 +30,10 @@ func TestHealthAndReadyEndpoints(t *testing.T) {
 }
 
 func TestReadyzFailsWhileAnAutostartAppIsDown(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{
-		{Name: "web", State: super.Running, Autostart: true},
-		{Name: "worker", State: super.Starting, Autostart: true},
-		{Name: "optional", State: super.Stopped, Autostart: false},
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{
+		{Name: "web", State: supervisor.Running, Autostart: true},
+		{Name: "worker", State: supervisor.Starting, Autostart: true},
+		{Name: "optional", State: supervisor.Stopped, Autostart: false},
 	}}
 	handler := newTestHandler(t, manager, nil)
 	response := httptest.NewRecorder()
@@ -47,9 +47,9 @@ func TestReadyzFailsWhileAnAutostartAppIsDown(t *testing.T) {
 }
 
 func TestReadyzCountsASleepingAutostartAppAsReady(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{
-		{Name: "web", State: super.Running, Autostart: true},
-		{Name: "sleepy", State: super.Stopped, Autostart: true},
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{
+		{Name: "web", State: supervisor.Running, Autostart: true},
+		{Name: "sleepy", State: supervisor.Stopped, Autostart: true},
 	}}
 	handler := newTestHandler(t, manager, nil)
 	response := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestReadyzCountsASleepingAutostartAppAsReady(t *testing.T) {
 }
 
 func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
-	manager := &fakeManager{snapshots: []super.Snapshot{{Name: "web", State: super.Running, Autostart: true}}}
+	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "web", State: supervisor.Running, Autostart: true}}}
 	handler := newTestHandler(t, manager, nil)
 
 	open := httptest.NewRecorder()
@@ -87,6 +87,7 @@ func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
 func TestMetricsDisabledHidesEndpoints(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	handler.metricsEnabled = false
+	handler.mux = handler.routes()
 	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081"+path, nil))

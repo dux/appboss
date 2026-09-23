@@ -11,7 +11,7 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/ops"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // fakeRuntime satisfies ops.Runtime with the bare minimum the control-socket tests exercise.
@@ -19,9 +19,11 @@ type fakeRuntime struct {
 	started []string
 }
 
-func (f *fakeRuntime) Snapshots() []super.Snapshot { return []super.Snapshot{{Name: "alpha"}} }
-func (f *fakeRuntime) Snapshot(string) (super.Snapshot, error) {
-	return super.Snapshot{}, errors.New("unknown app")
+func (f *fakeRuntime) Snapshots() []supervisor.Snapshot {
+	return []supervisor.Snapshot{{Name: "alpha"}}
+}
+func (f *fakeRuntime) Snapshot(string) (supervisor.Snapshot, error) {
+	return supervisor.Snapshot{}, errors.New("unknown app")
 }
 func (f *fakeRuntime) Start(name string) error { f.started = append(f.started, name); return nil }
 func (f *fakeRuntime) Stop(string) error       { return nil }
@@ -32,16 +34,16 @@ func (f *fakeRuntime) SetMaintenance(string, bool) error {
 }
 func (f *fakeRuntime) RunCron(string, string) error { return nil }
 func (f *fakeRuntime) RunHook(string, string) error { return nil }
-func (f *fakeRuntime) RotateHook(name, hook string) (super.HookInfo, error) {
-	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}}, nil
+func (f *fakeRuntime) RotateHook(name, hook string) (supervisor.HookInfo, error) {
+	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}}, nil
 }
-func (f *fakeRuntime) Hooks(string) ([]super.HookInfo, error) { return nil, nil }
+func (f *fakeRuntime) Hooks(string) ([]supervisor.HookInfo, error) { return nil, nil }
 func (f *fakeRuntime) HookSecret(string, string) (string, error) {
 	return "", nil
 }
 func (f *fakeRuntime) HostHookSecret(string) (string, error) { return "", nil }
-func (f *fakeRuntime) Exec(string, []string, time.Duration) (super.ExecResult, error) {
-	return super.ExecResult{}, nil
+func (f *fakeRuntime) Exec(string, []string, time.Duration) (supervisor.ExecResult, error) {
+	return supervisor.ExecResult{}, nil
 }
 func (f *fakeRuntime) Rescan() ([]error, error) { return nil, nil }
 func (f *fakeRuntime) RestartRequired() []string {
@@ -54,8 +56,11 @@ func (f *fakeRuntime) Ports() map[string]int                                 { r
 // auditStore implements both the read side (ops.LogStore) and ops.Auditor so a test can see the
 // actor a transport attributed an action to.
 type auditStore struct {
+	ops.LogStore
 	audits []logstore.AuditEntry
 }
+
+func (s *auditStore) Rates(string) (logstore.Rates, error) { return logstore.Rates{}, nil }
 
 func (s *auditStore) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, error) {
 	return nil, nil
@@ -76,7 +81,7 @@ func (s *auditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, e
 func TestDispatchAttributesActionsToCLI(t *testing.T) {
 	runtime := &fakeRuntime{}
 	store := &auditStore{}
-	server := &Server{service: ops.New(runtime, nil, store, nil, nil, nil)}
+	server := &Server{service: ops.New(runtime, store, nil, nil, nil, nil)}
 
 	if response := server.dispatch(Request{Method: ops.ActionStart, App: "alpha"}); !response.OK {
 		t.Fatalf("start failed: %s", response.Error)
@@ -106,7 +111,7 @@ func TestDispatchReturnsActionErrors(t *testing.T) {
 
 func TestLoginResponse(t *testing.T) {
 	withoutLogin := &Server{service: ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil)}
-	if response := withoutLogin.dispatch(Request{Method: loginMethod}); response.OK || response.Error == "" {
+	if response := withoutLogin.dispatch(Request{Method: LoginMethod}); response.OK || response.Error == "" {
 		t.Fatalf("login without handler = %+v", response)
 	}
 
@@ -114,7 +119,7 @@ func TestLoginResponse(t *testing.T) {
 		service: ops.New(&fakeRuntime{}, nil, nil, nil, nil, nil),
 		login:   func() (string, string, error) { return "http://local", "https://public", nil },
 	}
-	response := withLogin.dispatch(Request{Method: loginMethod})
+	response := withLogin.dispatch(Request{Method: LoginMethod})
 	if !response.OK {
 		t.Fatalf("login failed: %s", response.Error)
 	}
@@ -151,7 +156,7 @@ func TestListenServesAndRefusesASecondServer(t *testing.T) {
 		t.Fatal("second Listen on an active socket should fail")
 	}
 
-	var apps []super.Snapshot
+	var apps []supervisor.Snapshot
 	if err := (Client{Socket: socket, Timeout: time.Second}).Call(Request{Method: ops.ActionList}, &apps); err != nil {
 		t.Fatal(err)
 	}
@@ -165,4 +170,33 @@ func TestListenServesAndRefusesASecondServer(t *testing.T) {
 	if _, err := os.Stat(socket); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("socket still present after Close: %v", err)
 	}
+}
+
+// The actor filter of an audit search is not the caller: the CLI's own identity must not narrow
+// the rows to its own actions.
+func TestAuditSearchIsNotFilteredByTheCaller(t *testing.T) {
+	store := &filterStore{}
+	server := &Server{service: ops.New(&fakeRuntime{}, store, nil, nil, nil, nil)}
+	if response := server.dispatch(Request{Method: ops.ActionAudit}); !response.OK {
+		t.Fatalf("audit failed: %s", response.Error)
+	}
+	if store.filter.Actor != "" {
+		t.Fatalf("audit filtered by actor %q, want every actor", store.filter.Actor)
+	}
+	if response := server.dispatch(Request{Method: ops.ActionAudit, ByActor: "bob"}); !response.OK {
+		t.Fatalf("audit failed: %s", response.Error)
+	}
+	if store.filter.Actor != "bob" {
+		t.Fatalf("audit filter actor = %q, want bob", store.filter.Actor)
+	}
+}
+
+type filterStore struct {
+	auditStore
+	filter logstore.AuditFilter
+}
+
+func (s *filterStore) SearchAudit(filter logstore.AuditFilter) ([]logstore.AuditEntry, error) {
+	s.filter = filter
+	return nil, nil
 }

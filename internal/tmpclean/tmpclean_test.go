@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 // write creates path with the given age, making the parent directories as it goes.
@@ -116,9 +116,9 @@ func TestSweepMissingDirectoryIsNoError(t *testing.T) {
 	}
 }
 
-type stubApps struct{ snapshots []super.Snapshot }
+type stubApps struct{ snapshots []supervisor.Snapshot }
 
-func (s stubApps) Snapshots() []super.Snapshot { return s.snapshots }
+func (s stubApps) Snapshots() []supervisor.Snapshot { return s.snapshots }
 
 func TestRunOnceSkipsAppsThatNeverClean(t *testing.T) {
 	off := t.TempDir()
@@ -126,7 +126,7 @@ func TestRunOnceSkipsAppsThatNeverClean(t *testing.T) {
 	on := t.TempDir()
 	write(t, filepath.Join(on, "tmp", "old.cache"), 30*24*time.Hour)
 
-	module := New(stubApps{snapshots: []super.Snapshot{
+	module := New(stubApps{snapshots: []supervisor.Snapshot{
 		{Name: "off", Dir: off},
 		{Name: "on", Dir: on, TmpClean: 7 * 24 * time.Hour},
 	}})

@@ -11,11 +11,11 @@ import (
 	"dboss/internal/diskusage"
 	"dboss/internal/logstore"
 	"dboss/internal/pg"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 type fakeRuntime struct {
-	snapshots  []super.Snapshot
+	snapshots  []supervisor.Snapshot
 	actions    []string
 	invalid    []error
 	restart    []string
@@ -23,17 +23,17 @@ type fakeRuntime struct {
 	destroyErr error
 }
 
-func (f *fakeRuntime) Snapshots() []super.Snapshot {
-	return append([]super.Snapshot(nil), f.snapshots...)
+func (f *fakeRuntime) Snapshots() []supervisor.Snapshot {
+	return append([]supervisor.Snapshot(nil), f.snapshots...)
 }
 
-func (f *fakeRuntime) Snapshot(name string) (super.Snapshot, error) {
+func (f *fakeRuntime) Snapshot(name string) (supervisor.Snapshot, error) {
 	for _, snapshot := range f.snapshots {
 		if snapshot.Name == name {
 			return snapshot, nil
 		}
 	}
-	return super.Snapshot{}, errors.New("unknown app")
+	return supervisor.Snapshot{}, errors.New("unknown app")
 }
 
 func (f *fakeRuntime) Start(name string) error {
@@ -71,14 +71,14 @@ func (f *fakeRuntime) RunHook(name, hook string) error {
 	return nil
 }
 
-func (f *fakeRuntime) RotateHook(name, hook string) (super.HookInfo, error) {
+func (f *fakeRuntime) RotateHook(name, hook string) (supervisor.HookInfo, error) {
 	f.actions = append(f.actions, "hook-rotate "+name+"/"+hook)
-	return super.HookInfo{HookSnapshot: super.HookSnapshot{Name: hook}, URL: "https://dboss.example.com/hooks/" + name + "/" + hook}, nil
+	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}, URL: "https://dboss.example.com/hooks/" + name + "/" + hook}, nil
 }
 
-func (f *fakeRuntime) Hooks(name string) ([]super.HookInfo, error) {
+func (f *fakeRuntime) Hooks(name string) ([]supervisor.HookInfo, error) {
 	f.actions = append(f.actions, "hook "+name)
-	return []super.HookInfo{{HookSnapshot: super.HookSnapshot{Name: "deploy"}}}, nil
+	return []supervisor.HookInfo{{HookSnapshot: supervisor.HookSnapshot{Name: "deploy"}}}, nil
 }
 
 func (f *fakeRuntime) HookSecret(name, hook string) (string, error) {
@@ -89,9 +89,9 @@ func (f *fakeRuntime) HostHookSecret(name string) (string, error) {
 	return "secret", nil
 }
 
-func (f *fakeRuntime) Exec(name string, argv []string, timeout time.Duration) (super.ExecResult, error) {
+func (f *fakeRuntime) Exec(name string, argv []string, timeout time.Duration) (supervisor.ExecResult, error) {
 	f.actions = append(f.actions, "exec "+name)
-	return super.ExecResult{Output: "ok", ExitCode: 0}, nil
+	return supervisor.ExecResult{Output: "ok", ExitCode: 0}, nil
 }
 
 func (f *fakeRuntime) Rescan() ([]error, error) {
@@ -109,10 +109,14 @@ func (f *fakeRuntime) Logs(name, process string, lines int) (map[string][]string
 
 func (f *fakeRuntime) Ports() map[string]int { return map[string]int{"web": 3100} }
 
-type fakeRates map[string]logstore.Rates
+// fakeRates answers only the request counters; any other store call panics on the nil LogStore.
+type fakeRates struct {
+	LogStore
+	rates map[string]logstore.Rates
+}
 
 func (r fakeRates) Rates(app string) (logstore.Rates, error) {
-	rates, ok := r[app]
+	rates, ok := r.rates[app]
 	if !ok {
 		return logstore.Rates{}, errors.New("missing rate fixture")
 	}
@@ -120,7 +124,7 @@ func (r fakeRates) Rates(app string) (logstore.Rates, error) {
 }
 
 func TestDoRoutesToTheSameMethodForEveryTransport(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}}
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra"}}}
 	service := New(runtime, nil, nil, nil, nil, nil)
 	cases := []struct {
 		request Request
@@ -153,13 +157,13 @@ func TestDoRejectsAnUnknownAction(t *testing.T) {
 }
 
 func TestAppsAttachRequestRates(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
-	service := New(runtime, fakeRates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}}, nil, nil, nil, nil)
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
+	service := New(runtime, fakeRates{rates: map[string]logstore.Rates{"sinatra": {LastMinute: 2, LastHour: 7, LastDay: 20}}}, nil, nil, nil, nil)
 	apps := service.Apps()
 	if apps[0].RequestRates.LastHour != 7 {
 		t.Fatalf("sinatra rates = %+v", apps[0].RequestRates)
 	}
-	if apps[1].RequestRates != (super.RequestRates{}) {
+	if apps[1].RequestRates != (supervisor.RequestRates{}) {
 		t.Fatalf("bun should have no rates: %+v", apps[1].RequestRates)
 	}
 }
@@ -181,9 +185,9 @@ func (f fakeDisk) Refresh(app string) (diskusage.Usage, error) {
 }
 
 func TestAppsAttachDiskUsage(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra"}, {Name: "bun"}}}
 	measured := time.Now()
-	service := New(runtime, nil, nil, nil, nil, fakeDisk{"sinatra": {AppBytes: 10, LogBytes: 5, TotalBytes: 15, MeasuredAt: measured}})
+	service := New(runtime, nil, nil, nil, fakeDisk{"sinatra": {AppBytes: 10, LogBytes: 5, TotalBytes: 15, MeasuredAt: measured}}, nil)
 	apps := service.Apps()
 	if apps[0].Disk.TotalBytes != 15 || apps[0].Disk.AppBytes != 10 || apps[0].Disk.LogBytes != 5 {
 		t.Fatalf("sinatra disk = %+v", apps[0].Disk)
@@ -191,7 +195,7 @@ func TestAppsAttachDiskUsage(t *testing.T) {
 	if !apps[1].Disk.MeasuredAt.IsZero() {
 		t.Fatalf("bun has not been measured: %+v", apps[1].Disk)
 	}
-	one, err := service.App("sinatra")
+	one, err := service.app("sinatra")
 	if err != nil || one.Disk.TotalBytes != 15 {
 		t.Fatalf("App(sinatra) disk = %+v, err = %v", one.Disk, err)
 	}
@@ -205,9 +209,9 @@ func TestAppsAttachDiskUsage(t *testing.T) {
 }
 
 func TestAppsWithoutADiskModule(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}}
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra"}}}
 	service := New(runtime, nil, nil, nil, nil, nil)
-	if apps := service.Apps(); len(apps) != 1 || apps[0].Disk != (super.DiskUsage{}) {
+	if apps := service.Apps(); len(apps) != 1 || apps[0].Disk != (supervisor.DiskUsage{}) {
 		t.Fatalf("apps = %+v", apps)
 	}
 	if _, err := service.DiskRefresh("sinatra"); err == nil {
@@ -216,16 +220,16 @@ func TestAppsWithoutADiskModule(t *testing.T) {
 }
 
 func TestCronReturnsScheduledJobs(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra", Cron: []super.CronSnapshot{{Name: "cleanup"}}}}}
-	jobs, err := New(runtime, nil, nil, nil, nil, nil).Cron("sinatra")
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra", Cron: []supervisor.CronSnapshot{{Name: "cleanup"}}}}}
+	jobs, err := New(runtime, nil, nil, nil, nil, nil).cron("sinatra")
 	if err != nil || len(jobs) != 1 || jobs[0].Name != "cleanup" {
 		t.Fatalf("jobs = %+v, err = %v", jobs, err)
 	}
 }
 
 func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
-	runtime := &fakeRuntime{snapshots: []super.Snapshot{{Name: "sinatra"}}, invalid: []error{errors.New("bun: bad procfile")}, restart: []string{"proxy"}}
-	result, err := New(runtime, nil, nil, nil, nil, nil).Rescan()
+	runtime := &fakeRuntime{snapshots: []supervisor.Snapshot{{Name: "sinatra"}}, invalid: []error{errors.New("bun: bad procfile")}, restart: []string{"proxy"}}
+	result, err := New(runtime, nil, nil, nil, nil, nil).rescan()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +243,7 @@ func TestRescanReportsInvalidAndRestartRequired(t *testing.T) {
 
 func TestRescanAppliesPostgresConfig(t *testing.T) {
 	postgres := &fakePG{}
-	if _, err := New(&fakeRuntime{}, nil, nil, postgres, nil, nil).Rescan(); err != nil {
+	if _, err := New(&fakeRuntime{}, nil, postgres, nil, nil, nil).rescan(); err != nil {
 		t.Fatal(err)
 	}
 	if postgres.applied != 1 {
@@ -297,7 +301,7 @@ func (f *fakePG) Apply(config.Config)                 { f.applied++ }
 
 func TestPGActionsDispatch(t *testing.T) {
 	postgres := &fakePG{enabled: true, available: true, backups: []pg.Backup{{ID: "b1", Database: "app"}}}
-	service := New(&fakeRuntime{}, nil, nil, postgres, nil, nil)
+	service := New(&fakeRuntime{}, nil, postgres, nil, nil, nil)
 
 	if !service.PGAvailable() {
 		t.Fatal("PGAvailable should be true")
@@ -320,7 +324,10 @@ func TestPGActionsDispatch(t *testing.T) {
 	if entries := service.Backups(); len(entries) != 1 {
 		t.Fatalf("backups = %+v", entries)
 	}
-	service.ApplyPGConfig(config.Default())
+	// postgres hot-reloads: a rescan re-applies the host block.
+	if _, err := service.rescan(); err != nil {
+		t.Fatal(err)
+	}
 	if postgres.applied != 1 {
 		t.Fatalf("apply count = %d", postgres.applied)
 	}
@@ -336,35 +343,14 @@ func TestPGActionsDisabledWithoutService(t *testing.T) {
 	}
 }
 
-// fakeAuditStore implements both LogStore and Auditor, which is what makes ops.New turn auditing on.
-type fakeAuditStore struct {
-	audits []logstore.AuditEntry
-}
-
-func (s *fakeAuditStore) SearchLogs(string, logstore.LogFilter) ([]logstore.LogEntry, error) {
-	return nil, nil
-}
-func (s *fakeAuditStore) SearchRequests(string, logstore.RequestFilter) ([]logstore.RequestEntry, error) {
-	return nil, nil
-}
-func (s *fakeAuditStore) Channels(string) ([]logstore.Channel, error) { return nil, nil }
-func (s *fakeAuditStore) Tree([]string) ([]logstore.AppTree, error)   { return nil, nil }
-func (s *fakeAuditStore) RecordAudit(entry logstore.AuditEntry) error {
-	s.audits = append(s.audits, entry)
-	return nil
-}
-func (s *fakeAuditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error) {
-	return s.audits, nil
-}
-
 func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
-	store := &fakeAuditStore{}
-	service := New(&fakeRuntime{}, nil, store, nil, nil, nil)
+	store := &auditStore{}
+	service := New(&fakeRuntime{}, store, nil, nil, nil, nil)
 
 	if _, err := service.Do(Request{Method: ActionStart, App: "sinatra"}); err != nil {
 		t.Fatal(err)
 	}
-	entry := store.audits[0]
+	entry := store.rows[0]
 	if entry.Actor != "cli" || entry.Action != ActionStart || entry.Result != "ok" {
 		t.Fatalf("audit = %+v", entry)
 	}
@@ -372,43 +358,43 @@ func TestAuditedActionsRecordTheActorAndResult(t *testing.T) {
 	if _, err := service.Do(Request{Method: ActionStop, App: "sinatra", Actor: "bob"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := store.audits[1].Actor; got != "bob" {
+	if got := store.rows[1].Actor; got != "bob" {
 		t.Fatalf("explicit actor = %q", got)
 	}
 
 	if _, err := service.Do(Request{Method: ActionDestroy, App: "sinatra", Actor: "bob"}); err != nil {
 		t.Fatal(err)
 	}
-	entry = store.audits[2]
+	entry = store.rows[2]
 	if entry.Actor != "bob" || entry.Action != ActionDestroy || entry.Result != "ok" {
 		t.Fatalf("destroy audit = %+v", entry)
 	}
 
-	failing := New(&fakeRuntime{startErr: errors.New("port busy")}, nil, store, nil, nil, nil)
+	failing := New(&fakeRuntime{startErr: errors.New("port busy")}, store, nil, nil, nil, nil)
 	if _, err := failing.Do(Request{Method: ActionStart, App: "sinatra"}); err == nil {
 		t.Fatal("expected start error")
 	}
-	last := store.audits[len(store.audits)-1]
+	last := store.rows[len(store.rows)-1]
 	if last.Result != "error" || last.Error != "port busy" {
 		t.Fatalf("failed audit = %+v", last)
 	}
 
-	failing = New(&fakeRuntime{destroyErr: errors.New("not deletable")}, nil, store, nil, nil, nil)
+	failing = New(&fakeRuntime{destroyErr: errors.New("not deletable")}, store, nil, nil, nil, nil)
 	if _, err := failing.Do(Request{Method: ActionDestroy, App: "sinatra"}); err == nil {
 		t.Fatal("expected destroy error")
 	}
-	last = store.audits[len(store.audits)-1]
+	last = store.rows[len(store.rows)-1]
 	if last.Action != ActionDestroy || last.Result != "error" || last.Error != "not deletable" {
 		t.Fatalf("failed destroy audit = %+v", last)
 	}
 }
 
 func TestNonAuditedActionsWriteNoRow(t *testing.T) {
-	store := &fakeAuditStore{}
-	if _, err := New(&fakeRuntime{}, nil, store, nil, nil, nil).Do(Request{Method: ActionList}); err != nil {
+	store := &auditStore{}
+	if _, err := New(&fakeRuntime{}, store, nil, nil, nil, nil).Do(Request{Method: ActionList}); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.audits) != 0 {
-		t.Fatalf("ls must not audit: %+v", store.audits)
+	if len(store.rows) != 0 {
+		t.Fatalf("ls must not audit: %+v", store.rows)
 	}
 }

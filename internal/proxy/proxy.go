@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,7 +27,7 @@ import (
 	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
 const maintenanceRetryAfter = 30
@@ -39,12 +40,12 @@ type Recorder interface {
 // PublishAuthorizer lets a module vouch for a request that basic_auth would otherwise reject, so
 // a pubsub publisher needs only its own publish secret. A nil authorizer disables the check.
 type PublishAuthorizer interface {
-	AuthorizesPublish(r *http.Request, app super.Snapshot) bool
+	AuthorizesPublish(r *http.Request, app supervisor.Snapshot) bool
 }
 
 type Handler struct {
 	cfg         config.Config
-	manager     *super.Manager
+	manager     *supervisor.Manager
 	recorder    Recorder
 	pubsub      PublishAuthorizer
 	signin      *authcog.Flow
@@ -55,42 +56,31 @@ type Handler struct {
 	button      []byte
 	maintenance []byte
 	failed      []byte
+	denied      []byte
 	filters     []Filter
 }
 
 // New builds the proxy. extra stages are inserted before the forward stage, which is where a
 // module hooks its own filter into the pipeline.
-func New(cfg config.Config, manager *super.Manager, recorder Recorder, authorizer PublishAuthorizer, extra ...Filter) (*Handler, error) {
-	starting, err := readPage(cfg.Proxy.Wake.StartingPage)
+func New(cfg config.Config, signin *authcog.Flow, manager *supervisor.Manager, recorder Recorder, authorizer PublishAuthorizer, extra ...Filter) (*Handler, error) {
+	starting, err := readPage(cfg.Proxy.Wake.StartingPage, "starting.html")
 	if err != nil {
 		return nil, err
 	}
-	crashed, err := readPage(cfg.Proxy.Wake.CrashedPage)
+	crashed, err := readPage(cfg.Proxy.Wake.CrashedPage, "crashed.html")
 	if err != nil {
 		return nil, err
 	}
-	unknown, err := readPage(cfg.Proxy.Wake.UnknownPage)
+	unknown, err := readPage(cfg.Proxy.Wake.UnknownPage, "404.html")
 	if err != nil {
 		return nil, err
 	}
-	button, err := readPage("web/button.html")
-	if err != nil {
-		return nil, err
-	}
-	maintenance, err := readPage("web/maintenance.html")
-	if err != nil {
-		return nil, err
-	}
-	failed, err := readPage("web/error.html")
-	if err != nil {
-		return nil, err
-	}
-	signin, err := authcog.New(cfg.StateDir)
-	if err != nil {
-		return nil, err
-	}
+	button, _ := builtinPages.ReadFile("pages/button.html")
+	maintenance, _ := builtinPages.ReadFile("pages/maintenance.html")
+	failed, _ := builtinPages.ReadFile("pages/error.html")
+	denied, _ := builtinPages.ReadFile("pages/forbidden.html")
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, signin: signin, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, signin: signin, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed, denied: denied}
 	h.initFilters(extra...)
 	return h, nil
 }
@@ -123,7 +113,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // else dboss's own TLS, else plain HTTP. Assuming https here sent a plain-HTTP origin, and every
 // local session, to a port nothing listens on.
 func redirectCanonical(w http.ResponseWriter, r *http.Request, canonical string) bool {
-	if canonical == "" || strings.EqualFold(hostOnly(r.Host), canonical) {
+	if canonical == "" || config.NormalizeHost(r.Host) == config.NormalizePattern(canonical) {
 		return false
 	}
 	http.Redirect(w, r, requestScheme(r)+"://"+canonical+r.URL.RequestURI(), http.StatusMovedPermanently)
@@ -131,25 +121,12 @@ func redirectCanonical(w http.ResponseWriter, r *http.Request, canonical string)
 }
 
 func allowed(ip string, prefixes []netip.Prefix) bool {
-	if len(prefixes) == 0 {
-		return true
-	}
-	address, err := netip.ParseAddr(ip)
-	if err != nil {
-		return false
-	}
-	address = address.Unmap()
-	for _, prefix := range prefixes {
-		if prefix.Contains(address) {
-			return true
-		}
-	}
-	return false
+	return len(prefixes) == 0 || inPrefixes(ip, prefixes)
 }
 
 // authorized checks basic_auth. The user lookup is a plain map hit because the user list is not
 // secret; the password comparison is bcrypt's own constant-time compare.
-func authorized(r *http.Request, snapshot super.Snapshot) bool {
+func authorized(r *http.Request, snapshot supervisor.Snapshot) bool {
 	if len(snapshot.Web.BasicAuth) == 0 {
 		return true
 	}
@@ -164,7 +141,7 @@ func authorized(r *http.Request, snapshot super.Snapshot) bool {
 // serveStatic answers GET and HEAD for files under the static directory. Missing files and
 // directories fall through to the app. The directory is resolved on every request so a release
 // symlink swap is picked up immediately, and os.Root keeps the lookup inside it.
-func serveStatic(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) bool {
+func serveStatic(w http.ResponseWriter, r *http.Request, snapshot supervisor.Snapshot) bool {
 	web, ok := snapshot.WebForHost(r.Host)
 	if !ok || web.Static == "" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		return false
@@ -304,14 +281,14 @@ func (s *spillWriter) close() {
 	_ = os.Remove(name)
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot supervisor.Snapshot) {
 	// A draining app is stopping or restarting: answer new requests now, let in-flight ones run.
 	if snapshot.Draining {
 		h.unavailablePage(w, r, h.starting, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
 		return
 	}
-	if snapshot.State != super.Running {
-		if snapshot.State == super.Stopped {
+	if snapshot.State != supervisor.Running {
+		if snapshot.State == supervisor.Stopped {
 			// A button app only wakes on the deliberate POST of its start page, so a GET for
 			// a favicon or a crawler never starts it.
 			if snapshot.WakeButton && r.Method != http.MethodPost {
@@ -327,7 +304,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 				return
 			}
 		}
-		if snapshot.State == super.Crashed {
+		if snapshot.State == supervisor.Crashed {
 			h.unavailablePage(w, r, h.crashed, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
 			return
 		}
@@ -341,7 +318,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	}
 	port := 0
 	for _, process := range snapshot.Processes {
-		if process.Name == web.Name && process.State == super.Running {
+		if process.Name == web.Name && process.State == supervisor.Running {
 			port = process.Port
 			break
 		}
@@ -375,7 +352,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 }
 
 // customErrorPage reads the app's error_page_path on every request, so a deploy can replace it.
-func customErrorPage(snapshot super.Snapshot) ([]byte, bool) {
+func customErrorPage(snapshot supervisor.Snapshot) ([]byte, bool) {
 	if snapshot.Web.ErrorPagePath == "" {
 		return nil, false
 	}
@@ -386,7 +363,7 @@ func customErrorPage(snapshot super.Snapshot) ([]byte, bool) {
 // errorPage answers a failure of the proxy itself. An HTML GET gets the app's error_page_path, or
 // the built-in page when there is none; anything else gets the bare status. The file is sent as
 // it is on disk, with no placeholder substitution.
-func (h *Handler) errorPage(w http.ResponseWriter, r *http.Request, snapshot super.Snapshot, status int) {
+func (h *Handler) errorPage(w http.ResponseWriter, r *http.Request, snapshot supervisor.Snapshot, status int) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !wantsHTML(r) {
 		w.WriteHeader(status)
@@ -404,7 +381,7 @@ func (h *Handler) errorPage(w http.ResponseWriter, r *http.Request, snapshot sup
 // replaceAppError swaps the body of an app 5xx answer to an HTML GET for the app's
 // error_page_path and keeps the status. It only acts when the key is set and the file is
 // readable, so an app keeps its own error page by default and API answers are never rewritten.
-func replaceAppError(response *http.Response, r *http.Request, snapshot super.Snapshot) {
+func replaceAppError(response *http.Response, r *http.Request, snapshot supervisor.Snapshot) {
 	if response.StatusCode < http.StatusInternalServerError || !wantsHTML(r) {
 		return
 	}
@@ -476,7 +453,7 @@ func ensureRequestID(r *http.Request) string {
 	return id
 }
 
-func (h *Handler) maintenancePage(snapshot super.Snapshot, host string) []byte {
+func (h *Handler) maintenancePage(snapshot supervisor.Snapshot, host string) []byte {
 	var candidates []string
 	if snapshot.Web.MaintenancePage != "" {
 		candidates = append(candidates, resolveAppPath(snapshot.Dir, snapshot.Web.MaintenancePage))
@@ -501,7 +478,7 @@ func resolveAppPath(dir, value string) string {
 
 func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request) {
 	if wantsHTML(r) {
-		h.page(w, http.StatusForbidden, []byte(defaultForbiddenPage), "")
+		h.page(w, http.StatusForbidden, h.denied, "")
 		return
 	}
 	w.WriteHeader(http.StatusForbidden)
@@ -540,45 +517,18 @@ func (h *Handler) page(w http.ResponseWriter, status int, page []byte, app strin
 	_, _ = w.Write([]byte(contents))
 }
 
-func readPage(path string) ([]byte, error) {
-	if filepath.IsAbs(path) {
+// builtinPages are the pages dboss serves when the config names no file of its own.
+//
+//go:embed pages/*.html
+var builtinPages embed.FS
+
+// readPage returns the operator's file when the config sets one, else the built-in page.
+func readPage(path, builtin string) ([]byte, error) {
+	if path != "" {
 		return os.ReadFile(path)
 	}
-	if data, err := os.ReadFile(path); err == nil {
-		return data, nil
-	}
-	executable, err := os.Executable()
-	if err == nil {
-		if data, readErr := os.ReadFile(filepath.Join(filepath.Dir(executable), path)); readErr == nil {
-			return data, nil
-		}
-	}
-	switch filepath.Base(path) {
-	case "starting.html":
-		return []byte(defaultStartingPage), nil
-	case "crashed.html":
-		return []byte(defaultCrashedPage), nil
-	case "button.html":
-		return []byte(defaultButtonPage), nil
-	case "404.html":
-		return []byte(defaultUnknownPage), nil
-	case "maintenance.html":
-		return []byte(defaultMaintenancePage), nil
-	case "error.html":
-		return []byte(defaultErrorPage), nil
-	default:
-		return nil, fmt.Errorf("read page %s: file not found", path)
-	}
+	return builtinPages.ReadFile("pages/" + builtin)
 }
-
-const pageStyle = `<style>body{background:#111;color:#eee;font:16px system-ui;display:grid;min-height:100vh;place-items:center;margin:0}main{text-align:center}p{color:#aaa}button{font:inherit;padding:.6em 1.4em;border:0;border-radius:6px;background:#3b82f6;color:#fff;cursor:pointer}</style>`
-const defaultStartingPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta http-equiv="refresh" content="{{RETRY_AFTER}}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Starting {{APP_NAME}}</title>` + pageStyle + `<main><h1>Starting {{APP_NAME}}</h1><p>This page will refresh shortly.</p></main></html>`
-const defaultButtonPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is stopped</title>` + pageStyle + `<main><h1>{{APP_NAME}} is stopped</h1><p>Start it to continue.</p><form method="post"><button type="submit">Start app: {{APP_NAME}}</button></form></main></html>`
-const defaultCrashedPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is unavailable</title>` + pageStyle + `<main><h1>{{APP_NAME}} is unavailable</h1><p>The application could not be started.</p></main></html>`
-const defaultUnknownPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Not found</title>` + pageStyle + `<main><h1>Application not found</h1></main></html>`
-const defaultMaintenancePage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is down for maintenance</title>` + pageStyle + `<main><h1>Down for maintenance</h1><p>{{APP_NAME}} will be back shortly.</p></main></html>`
-const defaultErrorPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{APP_NAME}} is not responding</title>` + pageStyle + `<main><h1>Something went wrong</h1><p>{{APP_NAME}} did not answer. Please try again in a moment.</p></main></html>`
-const defaultForbiddenPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forbidden</title>` + pageStyle + `<main><h1>Forbidden</h1><p>Your address is not allowed to reach this application.</p></main></html>`
 
 func clientIP(r *http.Request, headers []string) string {
 	for _, header := range headers {

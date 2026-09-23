@@ -2,6 +2,8 @@ package logstore
 
 import (
 	"database/sql"
+	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,26 +30,44 @@ func (w Window) ErrorRate() float64 {
 	return float64(w.Errors) * 100 / float64(w.Count)
 }
 
-// read runs fn against the app database without creating one; an app that never logged skips fn.
-func (s *Store) read(app string, fn func(*sql.DB) error) error {
+// dbPath is where one app's database lives.
+func (s *Store) dbPath(app string) string { return filepath.Join(s.dir, app, "dboss.sqlite") }
+
+// exists reports whether app has a database on disk.
+func (s *Store) exists(app string) (bool, error) {
+	_, err := os.Stat(s.dbPath(app))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// reader opens the app database for reading without creating one. It returns a nil db, and no
+// error, for an app that never logged; done releases a connection opened just for this read.
+func (s *Store) reader(app string) (db *sql.DB, done func(), err error) {
 	s.mu.Lock()
 	w := s.apps[app]
 	s.mu.Unlock()
 	if w != nil {
-		return fn(w.db)
+		return w.db, func() {}, nil
 	}
-	path := filepath.Join(s.dir, app, "dboss.sqlite")
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	if exists, err := s.exists(app); !exists {
+		return nil, nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(s.dbPath(app))+"?mode=ro")
 	if err != nil {
+		return nil, nil, err
+	}
+	return db, func() { _ = db.Close() }, nil
+}
+
+// read runs fn against the app database without creating one; an app that never logged skips fn.
+func (s *Store) read(app string, fn func(*sql.DB) error) error {
+	db, done, err := s.reader(app)
+	if err != nil || db == nil {
 		return err
 	}
-	defer db.Close()
+	defer done()
 	return fn(db)
 }
 
@@ -80,4 +100,36 @@ func (s *Store) Window(app string, since time.Time) (Window, error) {
 		return nil
 	})
 	return window, err
+}
+
+// Rates counts requests in the last minute, hour and day.
+func (s *Store) Rates(app string) (Rates, error) {
+	db, done, err := s.reader(app)
+	if err != nil || db == nil {
+		return Rates{}, err
+	}
+	defer done()
+	now := time.Now().UTC()
+	var rates Rates
+	for cutoff, target := range map[time.Duration]*int64{time.Minute: &rates.LastMinute, time.Hour: &rates.LastHour, 24 * time.Hour: &rates.LastDay} {
+		if err := db.QueryRow(`SELECT count(*) FROM requests WHERE ts >= ?`, stamp(now.Add(-cutoff))).Scan(target); err != nil {
+			return Rates{}, err
+		}
+	}
+	return rates, nil
+}
+
+// percentile picks the nearest-rank value from an ascending slice: ceil(q*n)-1, clamped.
+func percentile(sorted []int64, q float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	index := int(math.Ceil(q*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return float64(sorted[index])
 }

@@ -16,8 +16,8 @@ import (
 
 const (
 	authCallbackPath  = "/authcog"
-	authStateCookie   = "app_boss_console_auth_state"
-	authSessionCookie = "app_boss_console_session"
+	authStateCookie   = "dboss_console_auth_state"
+	authSessionCookie = "dboss_console_session"
 	authAudience      = "console"
 	// `dboss login` mints a one-time link for a local operator; the session it creates belongs
 	// to cliEmail, which AuthCog can never vouch for.
@@ -43,14 +43,6 @@ type authenticator struct {
 	cliTokens  map[string]cliToken
 	dev        bool
 	devSession authSession // the one local session a dev run hands out, minted at startup
-}
-
-func newAuthenticator(cfg config.Config) (*authenticator, error) {
-	flow, err := authcog.New(cfg.StateDir)
-	if err != nil {
-		return nil, err
-	}
-	return consoleAuthenticator(flow, cfg.Management, cfg.Dev())
 }
 
 func consoleAuthenticator(flow *authcog.Flow, management config.Management, dev bool) (*authenticator, error) {
@@ -247,4 +239,20 @@ func (a *authenticator) validCSRF(r *http.Request, session authSession) bool {
 
 func (a *authenticator) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	a.flow.ClearSession(w, r, a.gate)
+}
+
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	h.auth.clearSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) requireCSRF(w http.ResponseWriter, r *http.Request, session authSession) bool {
+	if h.auth.validCSRF(r, session) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "invalid CSRF token")
+	return false
 }

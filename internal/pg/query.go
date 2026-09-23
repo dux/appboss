@@ -51,16 +51,16 @@ func (s *Service) Query(ctx context.Context, database, sql string) (QueryResult,
 	if !s.Enabled() {
 		return QueryResult{}, errors.New("postgres is not enabled")
 	}
-	connConfig := s.connection(ctx)
-	if connConfig == nil {
-		return QueryResult{}, errors.New("no reachable PostgreSQL server")
+	connConfig, err := s.connection(ctx)
+	if err != nil {
+		return QueryResult{}, err
 	}
 
 	// The context outlives statement_timeout, so the server's own error wins whenever it can:
 	// it names the statement, a cancelled context only says the run was too slow.
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout+connectTimeout)
 	defer cancel()
-	conn, err := pgx.ConnectConfig(ctx, mustConfig(connConfig, database))
+	conn, err := pgx.ConnectConfig(ctx, forDatabase(connConfig, database))
 	if err != nil {
 		return QueryResult{}, fmt.Errorf("connect to %s: %w", database, err)
 	}

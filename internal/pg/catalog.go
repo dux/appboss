@@ -1,11 +1,13 @@
 package pg
 
 import (
-	"encoding/json"
-	"os"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"dboss/internal/fsutil"
+	"dboss/internal/logx"
 )
 
 // Backup is one dump recorded in the catalog. A failed entry has no files but keeps the error so
@@ -27,35 +29,39 @@ type Backup struct {
 // long stream of failed runs from growing the file without bound.
 const catalogKeep = 2000
 
-// catalog is the daemon-written list of dumps under state_dir/pg-backups.json.
+// catalog is the daemon-written list of dumps under state_dir/pg-backups.json. A file that fails
+// to load stays the source of truth: loadErr blocks every write, so the next dump cannot replace
+// the whole history with one entry.
 type catalog struct {
 	mu      sync.Mutex
 	path    string
 	entries []Backup
 	loaded  bool
+	loadErr error
 }
 
 func newCatalog(stateDir string) *catalog {
 	return &catalog{path: filepath.Join(stateDir, "pg-backups.json")}
 }
 
-func (c *catalog) load() {
+func (c *catalog) load() error {
 	if c.loaded {
-		return
+		return c.loadErr
 	}
 	c.loaded = true
-	data, err := os.ReadFile(c.path)
-	if err != nil {
-		return
+	if err := fsutil.ReadJSON(c.path, &c.entries); err != nil {
+		c.entries = nil
+		c.loadErr = fmt.Errorf("backup catalog %s: %w", c.path, err)
+		logx.Warnf("postgres: %v", c.loadErr)
 	}
-	_ = json.Unmarshal(data, &c.entries)
+	return c.loadErr
 }
 
 // list returns the entries newest first.
 func (c *catalog) list() []Backup {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.load()
+	_ = c.load()
 	result := append([]Backup(nil), c.entries...)
 	sort.Slice(result, func(i, j int) bool { return result[i].Time > result[j].Time })
 	return result
@@ -73,7 +79,9 @@ func (c *catalog) get(id string) (Backup, bool) {
 func (c *catalog) record(entry Backup) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.load()
+	if err := c.load(); err != nil {
+		return err
+	}
 	c.entries = append(c.entries, entry)
 	if len(c.entries) > catalogKeep {
 		c.entries = c.entries[len(c.entries)-catalogKeep:]
@@ -88,7 +96,9 @@ func (c *catalog) forget(ids map[string]bool) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.load()
+	if err := c.load(); err != nil {
+		return err
+	}
 	kept := c.entries[:0]
 	for _, entry := range c.entries {
 		if !ids[entry.ID] {
@@ -101,16 +111,5 @@ func (c *catalog) forget(ids map[string]bool) error {
 
 // save writes the catalog atomically.
 func (c *catalog) save() error {
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o750); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(c.entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	temp := c.path + ".tmp"
-	if err := os.WriteFile(temp, append(data, '\n'), 0o640); err != nil {
-		return err
-	}
-	return os.Rename(temp, c.path)
+	return fsutil.WriteJSON(c.path, c.entries, 0o640)
 }

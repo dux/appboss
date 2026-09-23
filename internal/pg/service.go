@@ -2,22 +2,22 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"dboss/internal/config"
 	"dboss/internal/logx"
 	"dboss/internal/notify"
+	"dboss/internal/schedule"
 
 	"github.com/jackc/pgx/v5"
 )
 
-const (
-	// defaultInterval is how often the server facts are refreshed, matching the sysinfo module.
-	defaultInterval = 30 * time.Second
-	// backupTick is how often the scheduler checks for a due backup. It bounds how late a run can be.
-	backupTick = 30 * time.Second
-)
+// defaultInterval is how often the server facts are refreshed, matching the sysinfo module.
+const defaultInterval = 30 * time.Second
+
+var errNoServer = errors.New("no reachable PostgreSQL server")
 
 // Service owns PostgreSQL inspection and scheduled backups for one host session. It implements
 // module.Module, so the daemon registers it once and drives the console and CLI from the same
@@ -29,13 +29,13 @@ type Service struct {
 	opts       options
 	connConfig *pgx.ConnConfig
 	snapshot   Snapshot
-	next       time.Time
 
 	refreshMu sync.Mutex
 	// detectMu serialises the on-demand detect in connection(), so concurrent callers resolve
 	// the server once.
 	detectMu sync.Mutex
 
+	// catalog is fixed for the session: state_dir only changes with a daemon restart.
 	catalog *catalog
 
 	running         map[string]bool
@@ -43,7 +43,8 @@ type Service struct {
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
-	done    chan struct{}
+	// loops tracks the refresh loop and the backup schedule, including a backup in flight.
+	loops sync.WaitGroup
 }
 
 // New builds the service. A nil sink disables backup notifications.
@@ -51,7 +52,7 @@ func New(cfg config.Config, sink notify.Sink) *Service {
 	if sink == nil {
 		sink = discardSink{}
 	}
-	return &Service{sink: sink, opts: optionsFrom(cfg), catalog: newCatalog(cfg.StateDir), running: map[string]bool{}, done: make(chan struct{})}
+	return &Service{sink: sink, opts: optionsFrom(cfg), catalog: newCatalog(cfg.StateDir), running: map[string]bool{}}
 }
 
 type discardSink struct{}
@@ -67,15 +68,26 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	// Detection talks to the network, so it runs off the start path and never delays the daemon.
 	s.ApplyConfig()
-	go s.infoLoop(ctx)
-	go s.backupLoop(ctx)
+	s.loops.Add(2)
+	go func() {
+		defer s.loops.Done()
+		s.infoLoop(ctx)
+	}()
+	go func() {
+		defer s.loops.Done()
+		schedule.Daily(ctx, backupAt, func() {
+			if err := s.BackupAll(ctx); err != nil {
+				logx.Warnf("postgres backup: %v", err)
+			}
+		})
+	}()
 	return nil
 }
 
 func (s *Service) Close() error {
 	if s.cancel != nil {
 		s.cancel()
-		<-s.done
+		s.loops.Wait()
 	}
 	return nil
 }
@@ -84,12 +96,9 @@ func (s *Service) Close() error {
 // so the console can change the selection without a daemon restart. Detection runs in the
 // background, so a slow or missing server never blocks the caller.
 func (s *Service) ApplyConfig() {
-	s.mu.Lock()
-	if s.next.IsZero() {
-		s.next = nextRun(backupAt, time.Now())
-	}
+	s.mu.RLock()
 	ctx := s.baseCtx
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -105,7 +114,6 @@ func (s *Service) Apply(cfg config.Config) {
 	s.opts = optionsFrom(cfg)
 	s.connConfig = nil
 	s.mu.Unlock()
-	s.catalog = newCatalog(cfg.StateDir)
 	s.ApplyConfig()
 }
 
@@ -139,12 +147,12 @@ func (s *Service) Snapshot() Snapshot {
 
 // connection returns the resolved server, detecting once when startup has not got there yet.
 // Detection runs off the daemon's start path on purpose, so a console action can arrive first.
-func (s *Service) connection(ctx context.Context) *pgx.ConnConfig {
+func (s *Service) connection(ctx context.Context) (*pgx.ConnConfig, error) {
 	s.mu.RLock()
 	connConfig := s.connConfig
 	s.mu.RUnlock()
 	if connConfig != nil {
-		return connConfig
+		return connConfig, nil
 	}
 	s.detectMu.Lock()
 	defer s.detectMu.Unlock()
@@ -153,12 +161,15 @@ func (s *Service) connection(ctx context.Context) *pgx.ConnConfig {
 	connConfig = s.connConfig
 	s.mu.RUnlock()
 	if connConfig != nil {
-		return connConfig
+		return connConfig, nil
 	}
 	s.detect(ctx)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.connConfig
+	if s.connConfig == nil {
+		return nil, errNoServer
+	}
+	return s.connConfig, nil
 }
 
 // detect resolves a connection string and records availability. It never fails: an unreachable
@@ -178,7 +189,7 @@ func (s *Service) detect(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil || connConfig == nil {
-		message := "no reachable PostgreSQL server"
+		message := errNoServer.Error()
 		if err != nil {
 			message = err.Error()
 		}
@@ -215,7 +226,7 @@ func (s *Service) Refresh(ctx context.Context) Snapshot {
 		snapshot := s.snapshot
 		s.mu.RUnlock()
 		if snapshot.CollectedAt.IsZero() {
-			snapshot = Snapshot{CollectedAt: time.Now(), Error: "no reachable PostgreSQL server"}
+			snapshot = Snapshot{CollectedAt: time.Now(), Error: errNoServer.Error()}
 		}
 		return snapshot
 	}
@@ -236,7 +247,6 @@ func (s *Service) Refresh(ctx context.Context) Snapshot {
 }
 
 func (s *Service) infoLoop(ctx context.Context) {
-	defer close(s.done)
 	ticker := time.NewTicker(defaultInterval)
 	defer ticker.Stop()
 	for {
@@ -247,52 +257,4 @@ func (s *Service) infoLoop(ctx context.Context) {
 			s.Refresh(ctx)
 		}
 	}
-}
-
-func (s *Service) backupLoop(ctx context.Context) {
-	ticker := time.NewTicker(backupTick)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.maybeBackup(ctx, time.Now())
-		}
-	}
-}
-
-// maybeBackup fires the daily run when one is due. The actual work runs off the loop.
-func (s *Service) maybeBackup(ctx context.Context, now time.Time) {
-	s.mu.Lock()
-	next := s.next
-	if next.IsZero() || now.Before(next) {
-		s.mu.Unlock()
-		return
-	}
-	s.next = nextRun(backupAt, now)
-	s.mu.Unlock()
-	go func() {
-		if err := s.BackupAll(ctx); err != nil {
-			logx.Warnf("postgres backup: %v", err)
-		}
-	}()
-}
-
-// nextRun is the next occurrence of the UTC time of day at, strictly after now. An empty or invalid
-// at disables the schedule.
-func nextRun(at string, now time.Time) time.Time {
-	if at == "" {
-		return time.Time{}
-	}
-	moment, err := time.Parse("15:04", at)
-	if err != nil {
-		return time.Time{}
-	}
-	now = now.UTC()
-	next := time.Date(now.Year(), now.Month(), now.Day(), moment.Hour(), moment.Minute(), 0, 0, time.UTC)
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	return next
 }

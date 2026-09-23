@@ -5,31 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"dboss/internal/super"
+	"dboss/internal/supervisor"
 )
 
-func TestDisplayHostPicksOneAddress(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		web  super.WebProcessSnapshot
-		want string
-	}{
-		{"canonical wins", super.WebProcessSnapshot{Hosts: []string{"a.example.com", "b.example.com"}, CanonicalHost: "b.example.com"}, "b.example.com"},
-		{"first concrete host", super.WebProcessSnapshot{Hosts: []string{"a.example.com", "b.example.com"}}, "a.example.com"},
-		{"leading dot matches its apex", super.WebProcessSnapshot{Hosts: []string{".sinatra.lvh.me"}}, "sinatra.lvh.me"},
-		{"concrete beats a pattern", super.WebProcessSnapshot{Hosts: []string{"*.example.com", "app.example.com"}}, "app.example.com"},
-		{"subdomains only has no apex", super.WebProcessSnapshot{Hosts: []string{"*.example.com"}}, ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := displayHost(test.web); got != test.want {
-				t.Fatalf("displayHost = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
 func TestWebURLCarriesSchemeAndPort(t *testing.T) {
-	web := super.WebProcessSnapshot{Hosts: []string{"app.example.com"}}
+	web := supervisor.WebProcessSnapshot{Hosts: []string{"app.example.com"}}
 	if got := webURL(web, "http", ""); got != "http://app.example.com" {
 		t.Fatalf("default port should be dropped, got %q", got)
 	}
@@ -41,7 +21,7 @@ func TestWebURLCarriesSchemeAndPort(t *testing.T) {
 	}
 	// A pattern with no apex cannot be linked, so it is shown as written rather than as a URL
 	// that would not resolve.
-	wildcard := super.WebProcessSnapshot{Hosts: []string{"*.example.com"}}
+	wildcard := supervisor.WebProcessSnapshot{Hosts: []string{"*.example.com"}}
 	if got := webURL(wildcard, "http", ""); got != "*.example.com" {
 		t.Fatalf("wildcard should print as written, got %q", got)
 	}
@@ -62,7 +42,7 @@ func TestBannerPortDropsTheSchemeDefault(t *testing.T) {
 }
 
 func TestStateLabelHintsOnlyOnWebRows(t *testing.T) {
-	stopped := super.Snapshot{State: super.Stopped}
+	stopped := supervisor.Snapshot{State: supervisor.Stopped}
 	if got := stateLabel(stopped, true); got != "stopped, wakes on the first request" {
 		t.Fatalf("web row = %q", got)
 	}
@@ -70,31 +50,31 @@ func TestStateLabelHintsOnlyOnWebRows(t *testing.T) {
 	if got := stateLabel(stopped, false); got != "stopped" {
 		t.Fatalf("worker row = %q", got)
 	}
-	if got := stateLabel(super.Snapshot{State: super.Stopped, WakeButton: true}, true); got != "stopped, needs the start button" {
+	if got := stateLabel(supervisor.Snapshot{State: supervisor.Stopped, WakeButton: true}, true); got != "stopped, needs the start button" {
 		t.Fatalf("button app = %q", got)
 	}
-	if got := stateLabel(super.Snapshot{State: super.Running, Maintenance: true}, true); got != "maintenance" {
+	if got := stateLabel(supervisor.Snapshot{State: supervisor.Running, Maintenance: true}, true); got != "maintenance" {
 		t.Fatalf("maintenance should win, got %q", got)
 	}
-	if got := stateLabel(super.Snapshot{State: super.Crashed}, true); got != "crashed" {
+	if got := stateLabel(supervisor.Snapshot{State: supervisor.Crashed}, true); got != "crashed" {
 		t.Fatalf("crashed = %q", got)
 	}
 }
 
 func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
-	echo := super.NewEcho(io.Discard)
-	snapshots := []super.Snapshot{
+	echo := supervisor.NewEcho(io.Discard)
+	snapshots := []supervisor.Snapshot{
 		{
 			Name:         "sinatra",
-			State:        super.Stopped,
-			WebProcesses: []super.WebProcessSnapshot{{Name: "web", Hosts: []string{".sinatra.lvh.me"}, CanonicalHost: "sinatra.lvh.me"}},
-			Processes:    []super.ProcessSnapshot{{Name: "web"}, {Name: "job"}},
+			State:        supervisor.Stopped,
+			WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{".sinatra.lvh.me"}, CanonicalHost: "sinatra.lvh.me"}},
+			Processes:    []supervisor.ProcessSnapshot{{Name: "web"}, {Name: "job"}},
 		},
 		{
 			Name:         "bun",
-			State:        super.Running,
-			WebProcesses: []super.WebProcessSnapshot{{Name: "web", Hosts: []string{"bun.lvh.me"}}},
-			Processes:    []super.ProcessSnapshot{{Name: "web"}},
+			State:        supervisor.Running,
+			WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{"bun.lvh.me"}}},
+			Processes:    []supervisor.ProcessSnapshot{{Name: "web"}},
 		},
 	}
 	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "signed in for an hour", "http", "", devHTTPS{}, echo)
@@ -136,7 +116,7 @@ func stripANSI(line string) string {
 
 // A dev session admits this machine without a session, so its console row is the plain address.
 func TestBannerConsoleRowCarriesItsNote(t *testing.T) {
-	echo := super.NewEcho(io.Discard)
+	echo := supervisor.NewEcho(io.Discard)
 	lines := banner(nil, "http://127.0.0.1:3100", "open on this machine", "http", "", devHTTPS{}, echo)
 	if len(lines) != 1 || !strings.Contains(lines[0], "http://127.0.0.1:3100") || !strings.Contains(lines[0], "open on this machine") {
 		t.Fatalf("console row = %v", lines)
@@ -148,8 +128,8 @@ func TestBannerConsoleRowCarriesItsNote(t *testing.T) {
 
 // A dev session's HTTPS listener gets one row with the first web host and the trust hint.
 func TestBannerShowsDevHTTPSRow(t *testing.T) {
-	echo := super.NewEcho(io.Discard)
-	snapshots := []super.Snapshot{{Name: "shop", State: super.Running, WebProcesses: []super.WebProcessSnapshot{{Name: "web", Hosts: []string{"shop.lvh.me"}}}}}
+	echo := supervisor.NewEcho(io.Discard)
+	snapshots := []supervisor.Snapshot{{Name: "shop", State: supervisor.Running, WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{"shop.lvh.me"}}}}}
 	lines := banner(snapshots, "", "", "http", "", devHTTPS{port: "3101", note: "run `dboss trust` once"}, echo)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %v", lines)
