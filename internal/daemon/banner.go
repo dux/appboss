@@ -61,7 +61,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 		web := map[string]bool{}
 		for _, process := range app.WebProcesses {
 			web[process.Name] = true
-			rows = append(rows, newRow(echo, app.Name, process.Name, webURL(process, scheme, port), stateLabel(app, true), true))
+			rows = append(rows, newRow(app.Name, process.Name, webURL(process, scheme, port), stateLabel(app, true), true))
 			if secureURL == "" && config.PrimaryHost(process.CanonicalHost, process.Hosts) != "" {
 				secureURL = webURL(process, "https", secure.port)
 			}
@@ -70,20 +70,23 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 			if web[process.Name] {
 				continue
 			}
-			rows = append(rows, newRow(echo, app.Name, process.Name, "worker", stateLabel(app, false), true))
+			rows = append(rows, newRow(app.Name, process.Name, "worker", stateLabel(app, false), true))
 		}
 	}
 	if secure.note != "" && secureURL != "" {
-		rows = append(rows, newRow(echo, "dboss", "https", secureURL, secure.note, true))
+		rows = append(rows, newRow("dboss", "https", secureURL, secure.note, true))
 	}
 	if console != "" {
 		// A sign-in link carries a token, so it is far longer than any hostname. Keeping it out
 		// of the column width stops one row from stretching every other one.
-		rows = append(rows, newRow(echo, "dboss", "console", console, consoleNote, false))
+		rows = append(rows, newRow("dboss", "console", console, consoleNote, false))
 	}
-	keyWidth, addressWidth := 0, 0
+	// Register every name before rendering any key, so all rows pad to the widest one.
 	for _, row := range rows {
-		keyWidth = max(keyWidth, row.keyWidth)
+		echo.Key(row.app, row.proc)
+	}
+	addressWidth := 0
+	for _, row := range rows {
 		if row.pad {
 			addressWidth = max(addressWidth, len(row.address))
 		}
@@ -94,7 +97,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 		if row.pad {
 			address = fmt.Sprintf("%-*s", addressWidth, address)
 		}
-		lines = append(lines, row.key+strings.Repeat(" ", keyWidth-row.keyWidth)+address+"  "+row.note)
+		lines = append(lines, echo.Key(row.app, row.proc)+address+"  "+row.note)
 	}
 	return lines
 }
@@ -106,24 +109,17 @@ type devHTTPS struct {
 	note string
 }
 
-// bannerRow is one line. key carries the color escapes, so its printed width has to be tracked
-// separately or every column after it is misaligned.
+// bannerRow is one line: the process it names, its address and a note. pad lines the address up
+// with the other rows.
 type bannerRow struct {
-	key      string
-	keyWidth int
-	address  string
-	note     string
-	pad      bool
+	app, proc string
+	address   string
+	note      string
+	pad       bool
 }
 
-func newRow(echo *supervisor.Echo, app, proc, address, note string, pad bool) bannerRow {
-	return bannerRow{
-		key:      echo.Key(app, proc),
-		keyWidth: len(echo.Name(app, proc)) + len(" | "),
-		address:  address,
-		note:     note,
-		pad:      pad,
-	}
+func newRow(app, proc, address, note string, pad bool) bannerRow {
+	return bannerRow{app: app, proc: proc, address: address, note: note, pad: pad}
 }
 
 // webURL is the address to open for one web process. A pattern that matches only subdomains has

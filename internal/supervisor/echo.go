@@ -9,11 +9,13 @@ import (
 
 // Echo mirrors process output to the terminal with a colored "app/proc | " prefix, foreman style.
 // Lines from different processes never interleave because every write goes through one mutex.
+// Every name is padded to the widest one seen, so the pipes line up in one column.
 type Echo struct {
 	mu     sync.Mutex
 	out    io.Writer
 	next   int
-	keys   map[string]string
+	colors map[string]int
+	width  int
 	soloed bool
 }
 
@@ -28,14 +30,6 @@ func (e *Echo) Solo() {
 	e.soloed = true
 }
 
-// Name is the plain process label behind a key, which is also its printed width once the color
-// escapes are stripped.
-func (e *Echo) Name(app, proc string) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.name(app, proc)
-}
-
 func (e *Echo) name(app, proc string) string {
 	if e.soloed {
 		return proc
@@ -43,28 +37,27 @@ func (e *Echo) name(app, proc string) string {
 	return app + "/" + proc
 }
 
-// Key is the colored "app/proc |" prefix for one process, assigned on first ask and kept for
-// the session. The startup banner prints a row under the same key the process will later log
-// under, and a restart keeps its color, so a key always means the same process on screen.
+// Key is the colored "app/proc |" prefix for one process. Its color is assigned on first ask and
+// kept for the session, so the startup banner row and the process's later log lines share it and
+// a restart keeps it. The name is padded to the widest name registered so far.
 func (e *Echo) Key(app, proc string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.key(app, proc)
+	return e.key(e.name(app, proc))
 }
 
-func (e *Echo) key(app, proc string) string {
-	name := e.name(app, proc)
-	if prefix, ok := e.keys[name]; ok {
-		return prefix
+func (e *Echo) key(name string) string {
+	color, ok := e.colors[name]
+	if !ok {
+		if e.colors == nil {
+			e.colors = map[string]int{}
+		}
+		color = 31 + e.next%6
+		e.next++
+		e.colors[name] = color
+		e.width = max(e.width, len(name))
 	}
-	if e.keys == nil {
-		e.keys = map[string]string{}
-	}
-	color := 31 + e.next%6
-	e.next++
-	prefix := fmt.Sprintf("\x1b[%dm%s |\x1b[0m ", color, name)
-	e.keys[name] = prefix
-	return prefix
+	return fmt.Sprintf("\x1b[%dm%-*s |\x1b[0m ", color, e.width, name)
 }
 
 // Print writes one already-keyed line through the same lock the process writers use, so a
@@ -78,12 +71,14 @@ func (e *Echo) Print(line string) {
 func (e *Echo) writer(app, proc string) *echoWriter {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return &echoWriter{echo: e, prefix: e.key(app, proc)}
+	name := e.name(app, proc)
+	e.key(name)
+	return &echoWriter{echo: e, name: name}
 }
 
 type echoWriter struct {
 	echo    *Echo
-	prefix  string
+	name    string
 	partial []byte
 }
 
@@ -112,6 +107,7 @@ func (w *echoWriter) flush() {
 }
 
 func (w *echoWriter) emit(line []byte) {
-	_, _ = io.WriteString(w.echo.out, w.prefix)
+	// Rendered per line, so a process named before a wider one still lines up afterwards.
+	_, _ = io.WriteString(w.echo.out, w.echo.key(w.name))
 	_, _ = w.echo.out.Write(line)
 }

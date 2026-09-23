@@ -22,8 +22,8 @@ func TestEchoKeyIsStableAndSharedWithTheWriter(t *testing.T) {
 	}
 
 	writer := echo.writer("sinatra", "web")
-	if writer.prefix != key {
-		t.Fatalf("writer prefix %q does not match the banner key %q", writer.prefix, key)
+	if prefix := echo.key(writer.name); prefix != key {
+		t.Fatalf("writer prefix %q does not match the banner key %q", prefix, key)
 	}
 
 	other := echo.Key("bun", "web")
@@ -38,15 +38,12 @@ func TestEchoSoloDropsTheAppSegment(t *testing.T) {
 	echo := NewEcho(&out)
 	echo.Solo()
 
-	if name := echo.Name("sinatra", "job"); name != "job" {
-		t.Fatalf("name = %q, want job", name)
-	}
 	key := echo.Key("sinatra", "job")
 	if !strings.Contains(key, "job |") || strings.Contains(key, "sinatra") {
 		t.Fatalf("key = %q, want a bare job key", key)
 	}
-	if writer := echo.writer("sinatra", "job"); writer.prefix != key {
-		t.Fatalf("writer prefix %q does not match the key %q", writer.prefix, key)
+	if writer := echo.writer("sinatra", "job"); echo.key(writer.name) != key {
+		t.Fatalf("writer prefix %q does not match the key %q", echo.key(writer.name), key)
 	}
 }
 
@@ -66,5 +63,24 @@ func TestEchoPrintGoesThroughTheSameLock(t *testing.T) {
 		if !strings.HasPrefix(line, echo.Key("bun", "web")) {
 			t.Fatalf("line %q does not start with the process key", line)
 		}
+	}
+}
+
+// The pipe is one column: a short name is padded to the widest one, and a line logged by a process
+// named before a wider one still lines up with it.
+func TestEchoPadsEveryNameToTheWidest(t *testing.T) {
+	var out bytes.Buffer
+	echo := NewEcho(&out)
+	writer := echo.writer("bun", "web")
+	wide := echo.Key("dboss", "console")
+	if _, err := writer.Write([]byte("listening\n")); err != nil {
+		t.Fatal(err)
+	}
+	short := echo.Key("bun", "web")
+	if strings.Index(short, "|") != strings.Index(wide, "|") {
+		t.Fatalf("pipes differ: %q vs %q", short, wide)
+	}
+	if !strings.HasPrefix(out.String(), short) {
+		t.Fatalf("log line %q is not padded like %q", out.String(), short)
 	}
 }
