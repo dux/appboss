@@ -27,21 +27,6 @@ func TestDumpNameIsBackupZip(t *testing.T) {
 	}
 }
 
-func TestHumanBytes(t *testing.T) {
-	cases := map[int64]string{
-		0:           "0B",
-		1023:        "1023B",
-		1024:        "1.0K",
-		1536:        "1.5K",
-		1024 * 1024: "1.0M",
-	}
-	for size, want := range cases {
-		if got := humanBytes(size); got != want {
-			t.Fatalf("humanBytes(%d) = %q, want %q", size, got, want)
-		}
-	}
-}
-
 func TestConnStringsStripThePassword(t *testing.T) {
 	connConfig := connConfig(t, "postgres://app:secret@127.0.0.1:5432/app?sslmode=disable")
 	if got := serverConnString(connConfig); strings.Contains(got, "secret") {

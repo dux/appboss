@@ -1,8 +1,10 @@
-// Package fsutil holds the file writes every daemon-owned state file shares.
+// Package fsutil holds the file writes every daemon-owned state file shares, and the size format
+// messages about files and disks use.
 package fsutil
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -48,4 +50,18 @@ func ReadJSON(path string, value any) error {
 		return err
 	}
 	return json.Unmarshal(data, value)
+}
+
+// HumanBytes renders a size for a log line or a message: 1023B, 1.5K, 2.0G.
+func HumanBytes(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%dB", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%c", float64(size)/float64(div), "KMGTPE"[exp])
 }

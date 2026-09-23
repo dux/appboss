@@ -47,3 +47,18 @@ func TestReadJSONRejectsCorruptFile(t *testing.T) {
 		t.Fatal("corrupt file read without error")
 	}
 }
+
+func TestHumanBytes(t *testing.T) {
+	cases := map[int64]string{
+		0:           "0B",
+		1023:        "1023B",
+		1024:        "1.0K",
+		1536:        "1.5K",
+		1024 * 1024: "1.0M",
+	}
+	for size, want := range cases {
+		if got := HumanBytes(size); got != want {
+			t.Fatalf("HumanBytes(%d) = %q, want %q", size, got, want)
+		}
+	}
+}

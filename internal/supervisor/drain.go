@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// drainPoll is how often a drain re-reads an in-flight counter.
+const drainPoll = 20 * time.Millisecond
+
 // drain marks the app as draining so the proxy stops sending new requests, then waits for the
 // in-flight ones to finish, bounded by the host stop_timeout. It runs on the caller's goroutine,
 // never the app's, so snapshots stay responsive while it waits.
@@ -22,22 +25,27 @@ func (m *Manager) drain(runtime *appRuntime, name string) {
 		if counter.Load() == 0 {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(drainPoll)
 	}
 }
 
-// Enter registers one in-flight proxied request and returns the counter Leave expects.
-func (m *Manager) Enter(name string) *atomic.Int64 {
-	counter := m.traffic(name)
+// Pick chooses the ready copy of a web process a proxied request goes to and counts the request
+// as in flight, on the copy and on the app, until done is called. ok is false when no copy is
+// ready.
+func (m *Manager) Pick(app, web string) (port int, done func(), ok bool) {
+	if m == nil {
+		return 0, nil, false
+	}
+	chosen := m.routes.pick(app, web)
+	if chosen == nil {
+		return 0, nil, false
+	}
+	counter := m.traffic(app)
 	counter.Add(1)
-	return counter
-}
-
-// Leave clears one in-flight request.
-func (m *Manager) Leave(counter *atomic.Int64) {
-	if counter != nil {
+	return chosen.port, func() {
+		chosen.inflight.Add(-1)
 		counter.Add(-1)
-	}
+	}, true
 }
 
 func (m *Manager) traffic(name string) *atomic.Int64 {

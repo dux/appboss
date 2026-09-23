@@ -3,12 +3,15 @@ package supervisor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"dboss/internal/notify"
 	"dboss/internal/ports"
+	"dboss/internal/res"
 )
 
 type recordingSink struct {
@@ -120,5 +123,49 @@ func TestWakeFailureEmitsNotification(t *testing.T) {
 	manager.Wake("demo")
 	if event := sink.waitFor(t, "wake-failed"); event.App != "demo" || event.Error == "" {
 		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestCronFailureEmitsNotification(t *testing.T) {
+	sink := &recordingSink{}
+	cfg := cronTestConfig(t, [2]int{33600, 33620}, "cron:\n  tick:\n    schedule: every 1m\n    command: /bin/sh -c 'exit 3'\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.RunCron("demo", "tick"); err != nil {
+		t.Fatal(err)
+	}
+	if event := sink.waitFor(t, "cron-failed"); event.App != "demo" || !strings.Contains(event.Error, "exit code 3") {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+// oomBackend reports one more OOM kill on every read, so each exit looks like an OOM kill.
+type oomBackend struct {
+	res.Procgroup
+	reads atomic.Int64
+}
+
+func (b *oomBackend) Name() string                  { return "cgroup" }
+func (b *oomBackend) OOMKills(string, string) int64 { return b.reads.Add(1) }
+
+func TestOOMKillEmitsNotification(t *testing.T) {
+	fastRestart(t)
+	sink := &recordingSink{}
+	cfg := hookConfig(t, [2]int{33620, 33640}, "procfile:\n  web:\n    command: /usr/bin/false\n    hosts: [demo.test]\nautostart: true\nrestart: never\nmemory_max: 64m\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.apps["demo"].cgroup = &oomBackend{}
+	manager.Boot()
+	defer manager.Close()
+	if event := sink.waitFor(t, "oom"); !strings.Contains(event.Error, "memory_max 64m") {
+		t.Fatalf("oom event = %+v", event)
+	}
+	if event := sink.waitFor(t, "crash"); !strings.Contains(event.Error, "out of memory") {
+		t.Fatalf("crash event = %+v", event)
 	}
 }

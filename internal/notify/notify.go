@@ -31,15 +31,18 @@ const (
 	HealthTimeout = "health-timeout"
 	WakeFailed    = "wake-failed"
 	HookFailed    = "hook-failed"
+	CronFailed    = "cron-failed"
 	Deploy        = "deploy"
 	ConfigChanged = "config-changed"
 	BackupFailed  = "backup-failed"
 	ErrorRate     = "error-rate"
 	Slow          = "slow"
+	OOM           = "oom"
+	DiskLow       = "disk-low"
 )
 
 // Events lists every event; the default notify.events subscribes to all of them.
-var Events = []string{Crash, RestartLoop, HealthTimeout, WakeFailed, HookFailed, Deploy, ConfigChanged, BackupFailed, ErrorRate, Slow}
+var Events = []string{Crash, RestartLoop, HealthTimeout, WakeFailed, HookFailed, CronFailed, Deploy, ConfigChanged, BackupFailed, ErrorRate, Slow, OOM, DiskLow}
 
 // Sink is what the supervisor calls. A disabled notifier drops the event.
 type Sink interface {

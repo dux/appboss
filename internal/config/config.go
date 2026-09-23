@@ -26,6 +26,7 @@ type Config struct {
 	LogLevel       string     `yaml:"log_level" json:"log_level"`
 	AuditRetention Duration   `yaml:"audit_retention" json:"audit_retention"`
 	MaintenanceAt  string     `yaml:"maintenance_at" json:"maintenance_at"`
+	DiskAlert      int        `yaml:"disk_alert" json:"disk_alert"`
 	AuthCogRealm   string     `yaml:"authcog_realm" json:"authcog_realm"`
 	Tokens         Tokens     `yaml:"tokens" json:"tokens"`
 	Proxy          Proxy      `yaml:"proxy" json:"proxy"`
@@ -116,6 +117,7 @@ func Default() Config {
 		LogLevel:       "info",
 		AuditRetention: Duration(8760 * time.Hour),
 		MaintenanceAt:  "04:10",
+		DiskAlert:      90,
 		AuthCogRealm:   "auth.authcog.com",
 		Proxy:          Proxy{Listen: List{":80"}, Timeout: Duration(60 * time.Second)},
 		Defaults:       Defaults{Process: Process{Health: "tcp", LivenessInterval: Duration(10 * time.Second), HealthTimeout: Duration(60 * time.Second), UnhealthyThreshold: 3, StopTimeout: Duration(20 * time.Second), StopSignal: "TERM", Restart: "on-failure", MaxRestarts: 5, LogRetention: Duration(336 * time.Hour), StdoutRetention: Duration(3 * time.Hour), TmpClean: Duration(7 * 24 * time.Hour), Env: map[string]string{}}, Web: Web{HealthEndpoint: "/.well-known/dboss/health", StaticImmutable: List{"/assets/"}, StaticExtensions: List{"css", "js", "mjs", "map", "json", "txt", "xml", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "pdf", "wasm", "webmanifest"}, BasicAuth: map[string]string{}, Headers: map[string]string{}, Alerts: Alerts{ErrorRate: 10}, SessionTTL: Duration(24 * time.Hour)}},

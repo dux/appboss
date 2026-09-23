@@ -8,11 +8,20 @@ import (
 	"dboss/internal/logstore"
 	"dboss/internal/notify"
 	"dboss/internal/supervisor"
+	"dboss/internal/sysinfo"
 )
 
-type fakeApps struct{ snapshots []supervisor.Snapshot }
+type fakeApps struct {
+	snapshots []supervisor.Snapshot
+	host      config.Config
+}
 
 func (f fakeApps) Snapshots() []supervisor.Snapshot { return f.snapshots }
+func (f fakeApps) HostConfig() config.Config        { return f.host }
+
+type fakeDisks []sysinfo.Dir
+
+func (f fakeDisks) Snapshot() sysinfo.Snapshot { return sysinfo.Snapshot{Dirs: f} }
 
 type fakeStore struct {
 	windows map[string]logstore.Window
@@ -54,7 +63,7 @@ func TestRunOnceFiresOverThreshold(t *testing.T) {
 	sink := &recordingSink{}
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 
-	New(apps, store, sink).runOnce(now)
+	New(apps, store, nil, sink).runOnce(now)
 
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %+v, want error-rate and slow for shop only", sink.events)
@@ -73,5 +82,31 @@ func TestRunOnceFiresOverThreshold(t *testing.T) {
 		if _, read := store.since[skipped]; read {
 			t.Fatalf("%s must not be read at all", skipped)
 		}
+	}
+}
+
+func TestDiskLowNamesEachFullFilesystemOnce(t *testing.T) {
+	apps := fakeApps{host: config.Config{DiskAlert: 90}}
+	disks := fakeDisks{
+		{Name: "config", Path: "/srv/dboss", TotalBytes: 100 << 30, FreeBytes: 5 << 30, Percent: 95, Device: 1},
+		{Name: "dir/log", Path: "/srv/dboss/.dboss/log", TotalBytes: 100 << 30, FreeBytes: 5 << 30, Percent: 95, Device: 1},
+		{Name: "apps", Path: "/data/apps", TotalBytes: 100 << 30, FreeBytes: 50 << 30, Percent: 50, Device: 2},
+		{Name: "dir", Path: "/gone", Error: "no such file"},
+	}
+	sink := &recordingSink{}
+	New(apps, &fakeStore{since: map[string]time.Time{}}, disks, sink).runOnce(time.Now())
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %+v, want one disk-low", sink.events)
+	}
+	event := sink.events[0]
+	if event.Type != "disk-low" || event.App != "" || event.Error != "/srv/dboss 95.0% used, 5.0G free (config, dir/log)" {
+		t.Fatalf("unexpected disk-low event: %+v", event)
+	}
+
+	apps.host.DiskAlert = 0
+	sink.events = nil
+	New(apps, &fakeStore{since: map[string]time.Time{}}, disks, sink).runOnce(time.Now())
+	if len(sink.events) != 0 {
+		t.Fatalf("disk_alert 0 still sent %+v", sink.events)
 	}
 }

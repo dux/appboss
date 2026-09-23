@@ -33,7 +33,8 @@ func TestStopDrainsInFlightRequests(t *testing.T) {
 	}
 	defer manager.Close()
 
-	counter := manager.Enter("demo")
+	counter := manager.traffic("demo")
+	counter.Add(1)
 	done := make(chan error, 1)
 	go func() { done <- manager.Stop("demo") }()
 
@@ -57,7 +58,7 @@ func TestStopDrainsInFlightRequests(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	manager.Leave(counter)
+	counter.Add(-1)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestDrainGivesUpAfterStopTimeout(t *testing.T) {
 	}
 	defer manager.Close()
 
-	manager.Enter("demo") // never left: the drain must time out
+	manager.traffic("demo").Add(1) // never left: the drain must time out
 	start := time.Now()
 	if err := manager.Stop("demo"); err != nil {
 		t.Fatal(err)

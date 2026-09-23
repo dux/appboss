@@ -92,6 +92,10 @@ audit_retention: 8760h
 # off peak, since VACUUM rewrites each database.
 maintenance_at: "04:10"
 
+# Post disk-low once a filesystem holding the config, the apps or the runtime folder is fuller
+# than this percent. Checked once a minute; 0 disables it. Applies on rescan.
+disk_alert: 90
+
 # AuthCog host the console and every app sign-in (auth, authcog) use.
 authcog_realm: auth.authcog.com
 
@@ -315,12 +319,15 @@ notify:
   #   health-timeout  the readiness check gave up, or a web process failed its liveness checks
   #   wake-failed     a request tried to start a stopped app and the start failed
   #   hook-failed     a deploy hook exited non-zero
+  #   cron-failed     a cron job exited non-zero, timed out or could not start
   #   deploy          a deploy hook with restart: true succeeded and the app rolled
   #   config-changed  a config write needs a restart (host keys changed on disk)
   #   backup-failed   a PostgreSQL backup dump or upload failed
   #   error-rate      an app answered with too many 5xx in the last 5 minutes
   #   slow            an app's p95 latency crossed alerts.slow_p95
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow]
+  #   oom             the kernel OOM killer stopped a process at its memory_max (cgroup backend)
+  #   disk-low        a filesystem dboss writes to is fuller than disk_alert percent
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, cron-failed, deploy, config-changed, backup-failed, error-rate, slow, oom, disk-low]
   # Extra headers sent with every request.
   headers: {}
   #   Authorization: "Bearer $TOKEN"
@@ -403,6 +410,16 @@ postgres:
 # and realtime traffic never wakes it. Subscribe GET <path>/<channel> (WebSocket or SSE);
 # publish POST with the secret. Channels are one path segment; client.js, _test and _selftest are
 # reserved. `dboss pubsub help` prints a copy-paste guide.
+#
+# `count` runs that many copies of one entry (default 1, at most 64), each with its own PORT and
+# PROC_INSTANCE (1..count). Copies are named <name>.1 .. <name>.<count> in logs, the console and
+# metrics; a single copy keeps the bare name. The proxy sends each request to the ready copy of a
+# web process with the fewest requests in flight, and one copy that crashes leaves the app up on
+# the others. A web process gets one spare port on top of its copies: `dboss restart` (and every
+# deploy restart) starts a new copy there, waits for its health check, moves traffic onto it and
+# drains the old one, one copy at a time, so a running app is never down during a restart. A new
+# copy that never gets healthy is killed and the old one keeps serving. Background processes are
+# stopped and started again, never doubled. A changed count applies on the next restart.
 procfile:
   web:
     command: bundle exec puma -C config/puma.rb
@@ -412,6 +429,7 @@ procfile:
     static: ./public
     health: /up
     canonical_host: myapp.com
+    count: 2
   worker: bundle exec lux jobs:work
   cron: bundle exec lux jobs:cron
 
@@ -601,7 +619,8 @@ alerts:
 #     cron-style processes that never listen. Not configurable. A PORT set in
 #     .env or .env.local is overwritten and a warning is logged.
 #   - Env available to every command, in priority order (highest first):
-#       PORT, APP_NAME, PROC_TYPE, DBOSS_SOCKET    injected by dboss, always win
+#       PORT, APP_NAME, PROC_TYPE,                injected by dboss, always win
+#       PROC_INSTANCE, DBOSS_SOCKET
 #       .env.local                                server-only overrides
 #       .env                                      committed defaults
 #       defaults.env / dboss.yaml env             dboss config

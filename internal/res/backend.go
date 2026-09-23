@@ -28,6 +28,9 @@ type Backend interface {
 	Place(app, proc string, pid int, limits Limits) error
 	Stats(app, proc string, pids []int) (Stats, error)
 	Release(app, proc string) error
+	// OOMKills is the cumulative count of kernel OOM kills in the process's domain; a backend that
+	// cannot tell returns 0.
+	OOMKills(app, proc string) int64
 }
 
 type Procgroup struct{}
@@ -37,6 +40,8 @@ func (Procgroup) Name() string { return "procgroup" }
 func (Procgroup) Place(string, string, int, Limits) error { return nil }
 
 func (Procgroup) Release(string, string) error { return nil }
+
+func (Procgroup) OOMKills(string, string) int64 { return 0 }
 
 func (Procgroup) Stats(_ string, _ string, pids []int) (Stats, error) {
 	stats := Stats{Approximate: true}

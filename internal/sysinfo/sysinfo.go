@@ -60,6 +60,8 @@ type Dir struct {
 	UsedBytes  int64   `json:"used_bytes"`
 	Percent    float64 `json:"percent"`
 	Error      string  `json:"error,omitempty"`
+	// Device identifies the filesystem, so directories on one disk can be reported once.
+	Device uint64 `json:"-"`
 }
 
 // Host is the machine dboss runs on. PublicIP is the address DNS would point at and is empty
@@ -335,6 +337,11 @@ func diskUsage(path string, dir *Dir) error {
 	dir.UsedBytes = dir.TotalBytes - int64(stat.Bfree*block)
 	if dir.TotalBytes > 0 {
 		dir.Percent = math.Round(float64(dir.UsedBytes)/float64(dir.TotalBytes)*1000) / 10
+	}
+	if info, err := os.Stat(path); err == nil {
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			dir.Device = uint64(stat.Dev)
+		}
 	}
 	return nil
 }

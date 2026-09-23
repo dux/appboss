@@ -86,7 +86,7 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 			}
 		}
 		for _, process := range app.Processes {
-			if web[process.Name] {
+			if web[process.Type] {
 				continue
 			}
 			rows = append(rows, newRow(app.Name, process.Name, "worker", bannerNote(app), true))

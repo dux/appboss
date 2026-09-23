@@ -182,6 +182,7 @@ func (a *appRuntime) cronTick(now time.Time) {
 		state.next = state.schedule.Next(now)
 		if err := a.startJob(state, now, false); err != nil {
 			logx.Warnf("%s/%s: %v", a.spec.Name, state.channel, err)
+			a.emit(notify.CronFailed, fmt.Sprintf("cron %s could not start: %v", state.name, err))
 		}
 	}
 }
@@ -277,6 +278,9 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 	}
 	if state.kind == "hook" && exitCode != 0 {
 		a.emit(notify.HookFailed, fmt.Sprintf("hook %s exited with code %d", state.name, exitCode))
+	}
+	if state.kind == "cron" && exitCode != 0 {
+		a.emit(notify.CronFailed, fmt.Sprintf("cron %s failed: %s", state.name, state.lastError))
 	}
 	// A deploy hook that finished cleanly brings the app onto the new release. The restart runs
 	// through the manager so it drains first and never touches app state off the app goroutine.

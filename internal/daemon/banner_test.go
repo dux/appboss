@@ -90,13 +90,13 @@ func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
 			Name:         "sinatra",
 			State:        supervisor.Stopped,
 			WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{".sinatra.lvh.me"}, CanonicalHost: "sinatra.lvh.me"}},
-			Processes:    []supervisor.ProcessSnapshot{{Name: "web"}, {Name: "job"}},
+			Processes:    []supervisor.ProcessSnapshot{{Name: "web", Type: "web"}, {Name: "job", Type: "job"}},
 		},
 		{
 			Name:         "bun",
 			State:        supervisor.Running,
 			WebProcesses: []supervisor.WebProcessSnapshot{{Name: "web", Hosts: []string{"bun.lvh.me"}}},
-			Processes:    []supervisor.ProcessSnapshot{{Name: "web"}},
+			Processes:    []supervisor.ProcessSnapshot{{Name: "web", Type: "web"}},
 		},
 	}
 	lines := banner(snapshots, "http://127.0.0.1:3100/login?token=x", "signed in for an hour", "http", "", devHTTPS{}, echo)

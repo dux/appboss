@@ -44,6 +44,7 @@ type Manager struct {
 	activities      map[string]time.Time
 	inflightMu      sync.Mutex
 	inflight        map[string]*atomic.Int64
+	routes          *routeTable
 	ctx             context.Context
 	cancel          context.CancelFunc
 	bootOnce        sync.Once
@@ -90,7 +91,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(), echo: echo, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, created: created, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(), echo: echo, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, created: created, activities: activities, inflight: map[string]*atomic.Int64{}, routes: newRouteTable(), ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -142,12 +143,16 @@ func (m *Manager) Close() {
 	})
 }
 
-// assignPorts fixes one port per process for the daemon lifetime; apps are handled in config order,
-// processes in name order, so the first configured app always lands on the first port of the range.
+// assignPorts fixes one port per slot for the daemon lifetime: one per instance, plus the spare a
+// web process rolls into. Apps are handled in config order, processes in name order, so the first
+// configured app always lands on the first port of the range.
 func (m *Manager) assignPorts(spec *apps.App) error {
 	for _, name := range slices.Sorted(maps.Keys(spec.Commands)) {
-		if _, err := m.ports.Allocate(spec.Name, name); err != nil {
-			return fmt.Errorf("%s/%s: %w", spec.Name, name, err)
+		slots := slotCount(spec.Config.Procfile[name].Instances(), spec.Config.IsWeb(name))
+		for k := range slots {
+			if _, err := m.ports.Allocate(spec.Name, slotName(name, k)); err != nil {
+				return fmt.Errorf("%s/%s: %w", spec.Name, name, err)
+			}
 		}
 	}
 	return nil
@@ -164,7 +169,7 @@ func selectCgroup() res.Backend {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, host: m.HostConfig, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, held: map[string]bool{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, routes: m.routes, host: m.HostConfig, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, held: map[string]bool{}, retiring: map[*process]bool{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	m.desiredMu.Lock()
@@ -216,10 +221,19 @@ func (m *Manager) Stop(name string) error {
 	return m.setDesired(name, false)
 }
 
+// Restart restarts an app. A running app with a web process rolls: every copy is replaced by a
+// healthy new one before the old one drains, and the call returns once the roll is done or has
+// been aborted with the old copies still serving. Anything else drains, stops and starts.
 func (m *Manager) Restart(name string) error {
 	runtime, err := m.runtime(name)
 	if err != nil {
 		return err
+	}
+	if rolled, err := m.roll(runtime, ""); rolled || err != nil {
+		if err != nil {
+			return err
+		}
+		return m.setDesired(name, true)
 	}
 	m.drain(runtime, name)
 	if err := runtime.call(request{kind: requestRestart}); err != nil {
@@ -239,8 +253,33 @@ func (m *Manager) StopProcess(name, process string) error {
 	return m.processCall(name, process, requestProcessStop)
 }
 
+// RestartProcess rolls a web process of a running app like Restart does; a worker is stopped
+// and started again.
 func (m *Manager) RestartProcess(name, process string) error {
-	return m.processCall(name, process, requestProcessRestart)
+	runtime, err := m.runtime(name)
+	if err != nil {
+		return err
+	}
+	if rolled, err := m.roll(runtime, process); rolled || err != nil {
+		return err
+	}
+	return runtime.call(request{kind: requestProcessRestart, processName: process})
+}
+
+// roll asks the runtime for a rolling restart and waits for its outcome. It reports false when a
+// roll does not apply and the caller restarts the plain way.
+func (m *Manager) roll(runtime *appRuntime, process string) (bool, error) {
+	done := make(chan error, 1)
+	response := runtime.query(request{kind: requestRoll, processName: process, done: done})
+	if response.err != nil || !response.rolled {
+		return false, response.err
+	}
+	select {
+	case err := <-done:
+		return true, err
+	case <-runtime.ctx.Done():
+		return true, errors.New("supervisor closed")
+	}
 }
 
 func (m *Manager) processCall(name, process string, kind requestKind) error {

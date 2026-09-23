@@ -38,11 +38,20 @@ type ProcessSpec struct {
 	// CanonicalHost is the web process hostname every other host redirects to; it must be one
 	// of Hosts.
 	CanonicalHost string `yaml:"canonical_host,omitempty" json:"canonical_host,omitempty"`
+	// Count is how many copies of the process run; 0 means one. Copies of a web process share
+	// its hosts and the proxy balances between them.
+	Count int `yaml:"count,omitempty" json:"count,omitempty"`
 }
+
+// MaxCount bounds procfile count, so one typo cannot claim the whole port range.
+const MaxCount = 64
+
+// Instances is how many copies of the process run.
+func (p ProcessSpec) Instances() int { return max(p.Count, 1) }
 
 // processSpecKeys are the keys of the mapping form, in the order the hints name them. They are
 // checked here because a custom decoder is a leaf as far as the schema walk is concerned.
-var processSpecKeys = []string{"command", "hosts", "pubsub", "static", "health", "canonical_host"}
+var processSpecKeys = []string{"command", "hosts", "pubsub", "static", "health", "canonical_host", "count"}
 
 // processSpecFields is ProcessSpec without its methods, so the mapping form decodes and encodes
 // through the struct tags instead of recursing into the custom marshalers.
@@ -67,7 +76,7 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 
 // commandOnly reports whether the process only runs a command, which marshals as a scalar.
 func (p ProcessSpec) commandOnly() bool {
-	return len(p.Hosts) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == ""
+	return len(p.Hosts) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" && p.Count <= 1
 }
 
 // MarshalYAML writes a scalar command when the process only runs a command, else the full mapping,
@@ -254,6 +263,9 @@ func (a *App) deriveWeb() error {
 		}
 		if strings.TrimSpace(spec.Command) == "" {
 			return keyErr("procfile."+name, "command is empty")
+		}
+		if spec.Count < 0 || spec.Count > MaxCount {
+			return keyErr("procfile."+name+".count", "must be between 1 and %d", MaxCount)
 		}
 		if len(spec.Hosts) == 0 {
 			continue

@@ -132,6 +132,7 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 	ingester := ingest.New(manager, manager, logs, logIngestInterval)
 	sysInfo := sysinfo.New([]sysinfo.DirSpec{
 		{Name: "config", Path: cfg.Dir},
+		{Name: "apps", Path: cfg.Apps},
 		{Name: "dir/state", Path: cfg.StateDir},
 		{Name: "dir/log", Path: cfg.LogDir},
 		{Name: "dir", Path: cfg.RuntimeDir},
@@ -145,7 +146,7 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 	}
 	sizes := diskusage.New(manager, cfg.LogDir)
 	postgres := pg.New(cfg, notifier)
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort, registry: registry}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, sysInfo.Inspector(), notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort, registry: registry}
 	service := ops.New(manager, logs, postgres, channels, sizes, notifier)
 	// One AuthCog flow for the console and every app gate: one signing key, one challenge map.
 	flow, err := authcog.New(cfg.StateDir)

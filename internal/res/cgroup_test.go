@@ -76,3 +76,22 @@ func TestCgroupAvailableAndUsageParse(t *testing.T) {
 		t.Fatalf("missing usage = %d, want 0", got)
 	}
 }
+
+func TestCgroupOOMKills(t *testing.T) {
+	root := t.TempDir()
+	cgroup := NewCgroup(root)
+	if got := cgroup.OOMKills("demo", "web"); got != 0 {
+		t.Fatalf("missing memory.events = %d", got)
+	}
+	dir := filepath.Join(root, "demo", "web")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	events := "low 0\nhigh 0\nmax 4\noom 2\noom_kill 2\noom_group_kill 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "memory.events"), []byte(events), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := cgroup.OOMKills("demo", "web"); got != 2 {
+		t.Fatalf("OOMKills = %d, want 2", got)
+	}
+}

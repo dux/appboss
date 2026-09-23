@@ -20,11 +20,11 @@ const healthDialTimeout = 2 * time.Second
 // the process answers (readiness, bounded by health_timeout), then slows to liveness_interval
 // and reports a health failure after unhealthy_threshold consecutive failures. The runtime handles that exactly like a crash, so
 // restart policy, backoff and max_restarts apply. unhealthy_threshold: 0 stops after readiness.
-// It is given the process defaults and host instead of reading the app spec, which a rescan may
-// replace on the runtime goroutine.
-func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
+// It is given the process defaults, host and poll interval instead of reading the app spec or the
+// package var, which a rescan or a test may replace while it runs.
+func (a *appRuntime) monitor(p *process, defaults config.Process, host string, interval time.Duration) {
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
-	ticker := time.NewTicker(healthInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	ready := false
 	failures := 0

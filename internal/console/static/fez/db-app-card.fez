@@ -195,6 +195,9 @@
       {#if props.app.draining}
         <span class="badge badge-warning">draining</span>
       {/if}
+      {#if props.app.rolling}
+        <span class="badge badge-warning" title="New copies start next to the old ones and take over once healthy; the app keeps serving">rolling restart</span>
+      {/if}
     </div>
     <div class="btn-list app-actions">
       <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="#/logs?app={props.app.name}" />

@@ -60,6 +60,9 @@ func (c Config) validate(hasApp bool) error {
 	if _, err := time.Parse("15:04", c.MaintenanceAt); err != nil {
 		return &Error{Key: "maintenance_at", Message: fmt.Sprintf("invalid time %q", c.MaintenanceAt), Hint: "use 24h clock HH:MM, e.g. \"04:10\""}
 	}
+	if c.DiskAlert < 0 || c.DiskAlert > 100 {
+		return keyErr("disk_alert", "must be a percent between 0 and 100")
+	}
 	if c.AuditRetention < 0 {
 		return keyErr("audit_retention", "cannot be negative")
 	}

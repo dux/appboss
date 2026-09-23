@@ -44,7 +44,7 @@ func TestMonitorSlowsDownOnceReady(t *testing.T) {
 		UnhealthyThreshold: 3,
 	}
 
-	go runtime.monitor(proc, defaults, "")
+	go runtime.monitor(proc, defaults, "", healthInterval)
 	select {
 	case event := <-runtime.events:
 		if event.kind != "ready" {
@@ -107,7 +107,7 @@ func TestMonitorStopsAtReadinessWithoutAThreshold(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		runtime.monitor(proc, defaults, "")
+		runtime.monitor(proc, defaults, "", healthInterval)
 		close(done)
 	}()
 	select {

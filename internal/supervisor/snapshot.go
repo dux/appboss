@@ -17,8 +17,11 @@ const (
 	Crashed  State = "crashed"
 )
 
+// ProcessSnapshot is one instance: Name is "web", or "web.2" when the procfile entry Type runs
+// several copies.
 type ProcessSnapshot struct {
 	Name        string    `json:"name"`
+	Type        string    `json:"type"`
 	Command     string    `json:"command"`
 	State       State     `json:"state"`
 	PID         int       `json:"pid,omitempty"`
@@ -65,7 +68,9 @@ type Snapshot struct {
 	State       State  `json:"state"`
 	Maintenance bool   `json:"maintenance"`
 	Draining    bool   `json:"draining,omitempty"`
-	Dir         string `json:"dir"`
+	// Rolling is set while a rolling restart replaces the app's copies; the app keeps serving.
+	Rolling bool   `json:"rolling,omitempty"`
+	Dir     string `json:"dir"`
 	// Branch is the git branch the app runs and BranchURL its page on the git host, when known.
 	Branch    string `json:"branch,omitempty"`
 	BranchURL string `json:"branch_url,omitempty"`

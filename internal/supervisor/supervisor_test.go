@@ -242,7 +242,8 @@ func TestRestartDoesNotOrphanProcess(t *testing.T) {
 		}
 		waitForSupervisorState(t, manager, Running)
 		snapshot, _ := manager.Snapshot("demo")
-		if len(snapshot.Processes) != 1 || snapshot.Processes[0].Port != 32400 {
+		// A rolling restart moves the web process between its slot and the spare one.
+		if len(snapshot.Processes) != 1 || snapshot.Processes[0].Port != 32400 && snapshot.Processes[0].Port != 32401 {
 			t.Fatalf("restart %d: %+v", i, snapshot)
 		}
 		seen[snapshot.Processes[0].PID] = true
@@ -541,6 +542,14 @@ func TestSupervisorHelperProcess(t *testing.T) {
 	if os.Getenv("dboss_TEST_HELPER") != "1" {
 		return
 	}
+	// Only the first incarnation of an app started with FAIL_AGAIN serves; every later one exits
+	// before it is ready.
+	if marker := os.Getenv("dboss_TEST_HELPER_FAIL_AGAIN"); marker != "" {
+		if _, statErr := os.Stat(marker); statErr == nil {
+			os.Exit(3)
+		}
+		_ = os.WriteFile(marker, []byte("1"), 0o640)
+	}
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
@@ -685,13 +694,14 @@ func TestIdleStopKeepsAppWithInFlightRequest(t *testing.T) {
 	}
 
 	// An open request, a websocket being the long-lived case, must outlast idle_stop.
-	counter := manager.Enter("demo")
+	counter := manager.traffic("demo")
+	counter.Add(1)
 	time.Sleep(500 * time.Millisecond)
 	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != Running {
 		t.Fatalf("idle_stop stopped an app with an in-flight request: %+v", snapshot)
 	}
 
-	manager.Leave(counter)
+	counter.Add(-1)
 	waitForSupervisorState(t, manager, Stopped)
 }
 

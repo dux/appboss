@@ -22,6 +22,7 @@ var keySpecs = map[string]KeySpec{
 	"ports":           {Block: "host", Name: "Port range", Description: "inclusive port range dboss owns; the first port is the console"},
 	"log_level":       {Block: "host", Name: "Log level", Description: "dboss's own log level", Enum: []string{"debug", "info", "warn", "error"}},
 	"audit_retention": {Block: "host", Name: "Audit retention", Description: "how long operator audit rows are kept; 0 keeps them forever", Example: "30d"},
+	"disk_alert":      {Block: "host", Name: "Disk alert", Description: "percent of a filesystem in use that posts disk-low; 0 disables", Example: "85"},
 	"maintenance_at":  {Block: "host", Name: "Maintenance time", Description: "local time of the daily log prune, followed by the SQLite VACUUM", Example: "03:30"},
 	"authcog_realm":   {Block: "host", Name: "AuthCog realm", Description: "AuthCog host the console and every app sign-in use", Example: "dboss.authcog.com"},
 
@@ -42,7 +43,7 @@ var keySpecs = map[string]KeySpec{
 
 	// --- Notifications ---
 	"notify.url":     {Block: "notify", Name: "Webhook URL", Description: "webhook that receives crash and failure events; Slack, Discord and ntfy URLs get their own payload shape; empty disables notifications", Example: "$ALERT_WEBHOOK_URL"},
-	"notify.events":  {Block: "notify", Name: "Events", Description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow"},
+	"notify.events":  {Block: "notify", Name: "Events", Description: "events to post: crash, restart-loop, health-timeout, wake-failed, hook-failed, cron-failed, deploy, config-changed, backup-failed, error-rate, slow, oom, disk-low"},
 	"notify.headers": {Block: "notify", Name: "Extra headers", Description: "extra headers sent with every webhook request", Example: "{Authorization: \"Bearer $TOKEN\"}"},
 
 	// --- PostgreSQL ---
@@ -50,7 +51,7 @@ var keySpecs = map[string]KeySpec{
 	"postgres.backups": {Block: "postgres", Name: "Backups", Description: "databases dumped by the daily run, each with its rotation: week or month", Example: "{myapp_production: week, reports: month}"},
 
 	// --- App ---
-	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds hosts is a web process (an app may have several, each with its own hosts, static, pubsub, health and canonical_host)", Example: "{web: {command: bundle exec puma -C config/puma.rb, hosts: [\".myapp.com\"], static: ./public, health: /up, canonical_host: myapp.com}, worker: bundle exec lux jobs:work}", Required: true},
+	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds hosts is a web process (an app may have several, each with its own hosts, static, pubsub, health and canonical_host); count runs that many copies, balanced by the proxy for a web process", Example: "{web: {command: bundle exec puma -C config/puma.rb, hosts: [\".myapp.com\"], static: ./public, health: /up, canonical_host: myapp.com, count: 2}, worker: bundle exec lux jobs:work}", Required: true},
 	"autostart": {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
 	"deletable": {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
 	"pages":     {Block: "app", Name: "Pages", Description: "folder of the dboss pages served for the app (<name>.html, else template.html, else the host's, else built in); in the host file the fallback for every app", Example: "./public/errors"},

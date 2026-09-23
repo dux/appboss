@@ -328,22 +328,15 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 		h.errorPage(w, r, snapshot, http.StatusBadGateway)
 		return
 	}
-	port := 0
-	for _, process := range snapshot.Processes {
-		if process.Name == web.Name && process.State == supervisor.Running {
-			port = process.Port
-			break
-		}
-	}
-	if port == 0 {
+	port, done, ok := h.manager.Pick(snapshot.Name, web.Name)
+	if !ok {
 		h.errorPage(w, r, snapshot, http.StatusBadGateway)
 		return
 	}
+	defer done()
 	h.manager.Touch(snapshot.Name)
 	h.applyForwardedHeaders(r)
 	target := &url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(port)}
-	counter := h.manager.Enter(snapshot.Name)
-	defer h.manager.Leave(counter)
 	reverse := httputil.NewSingleHostReverseProxy(target)
 	reverse.Transport = h.transport
 	reverse.ModifyResponse = func(response *http.Response) error {

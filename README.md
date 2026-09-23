@@ -25,13 +25,13 @@ All of it is in the one binary: no sidecars, no agents, no extra database, no YA
 * **Logging built in.** Every process log line and every request lands in a per-app SQLite database with full-text search, read from the console or from `dboss logs`, so there is no log pipeline to run.
 * **Traffic built in.** Requests over time, error rate, latency quantiles and the top paths, status codes, countries and client IPs, per app.
 * **Effortless deploys.** Push to GitHub or GitLab and a signed webhook runs your deploy hook and restarts the app, with no runner and no pipeline credentials on the box.
-* **Process supervision.** A procfile per app, workers alongside web processes, restart policies with backoff, readiness and liveness checks, and graceful draining so a restart does not drop live requests.
+* **Process supervision.** A procfile per app, workers alongside web processes, several copies of one process behind one host, restart policies with backoff, readiness and liveness checks, and rolling restarts that start the new release next to the old one, so a deploy never drops a request and a broken release never replaces a working one.
 * **Apps that sleep.** An idle app stops on its own and the next request wakes it, so a dozen side projects share one box without holding RAM they are not using.
 * **HTTPS without the chore.** Set one key and dboss gets Let's Encrypt certificates on demand for the hostnames it already serves and renews them, or put Cloudflare in front and let it terminate.
 * **A real web console.** Live state, start and stop, log search, traffic, the config files edited on disk with revision history and restore, and an audit row for every action.
 * **Scheduled jobs.** Cron per app, running even while the app itself is stopped, with output in the same log store.
 * **Access control.** Basic auth, IP allowlists, or a full SSO sign-in in front of any app, without touching the app's code.
-* **Batteries for the rest.** PostgreSQL inspection, a SQL prompt, scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
+* **Batteries for the rest.** PostgreSQL inspection, a SQL prompt, scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, failed cron jobs, OOM kills, full disks, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
 
 Install is one command and the service runs as an ordinary user, not root.
 `dboss start` on your laptop gives you the same thing locally, with no sudo and no setup.
@@ -255,7 +255,7 @@ Config
   pages         list the pages dboss serves and which file renders each, or write them out to edit
   doctor        preflight a box: tools, writable dirs, valid config and a clear port range
   rescan        re-read the apps directory, every dboss.yaml and the host defaults
-  ports         show the live port table, one fixed port per app process
+  ports         show the live port table, one fixed port per process slot
   password      print a bcrypt hash for basic_auth
   sshkey        list the local SSH public keys, or create a new key
 
@@ -596,11 +596,11 @@ A host can post runtime events to one operator webhook:
 ```yaml
 notify:
   url: $ALERT_WEBHOOK_URL   # Slack, Discord and ntfy URLs get their own payload, anything else JSON
-  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow]
+  events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, cron-failed, deploy, config-changed, backup-failed, error-rate, slow, oom, disk-low]
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over the last 5 minutes once there are 20 requests, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor, and one event for one app is posted at most once every 5 minutes. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `cron-failed` a cron job that exited non-zero, timed out or could not start, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump that failed, `error-rate` an app answering with too many 5xx, `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over the last 5 minutes once there are 20 requests, default `error_rate: 10` percent and `slow_p95` off), `oom` a process the kernel OOM killer stopped at its `memory_max` (cgroup backend only), and `disk-low` a filesystem holding the config or the runtime folder filled past `disk_alert` percent (default 90, `0` off, checked once a minute). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor, and one event for one app is posted at most once every 5 minutes. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
 
 ## PostgreSQL inspection and backups
 
@@ -739,9 +739,22 @@ The app's own `5xx` answers are replaced with it, status kept, only when the app
 An app's own `404`s are never touched.
 `./demo/apps/sinatra` ships a `template.html` and links to each case from its front page.
 
-## Restarts and forwarded headers
+## Restarts, scaling and forwarded headers
 
-`dboss stop` and `dboss restart` (and the console buttons) first mark the app **draining**: the proxy answers new requests with `503` and `Retry-After`, while requests already in flight finish, bounded by `stop_timeout`. Only then does the supervisor send `stop_signal` to the process group. The app card shows a `draining` badge and `dboss ls` prints it in the state.
+`dboss restart` (and the console button, and a `restart: true` deploy hook) **rolls** a running app with a web process.
+Each web copy in turn gets a replacement started in a free port slot next to it; once the replacement passes its health check the proxy's route moves to it, the old copy leaves the route, gets `stop_timeout` for its in-flight requests, then `stop_signal`, then a kill.
+A replacement that exits or never passes `health_timeout` is killed, the old copy keeps serving, `health-timeout` is posted and the restart returns the error, so a broken release never takes the app down.
+Workers are stopped and started again, never run twice at once, and the `start` lifecycle step runs first.
+The app stays `running` throughout; the app card shows a `rolling restart` badge.
+Restarting one web process from its app card row rolls just that process or copy.
+A stopped or crashed app, or one with no web process, restarts the plain way.
+
+`count: N` on a procfile entry runs N copies (`web.1` .. `web.N` in the console, logs and metrics; one copy keeps the bare name), each with its own `PORT` and `PROC_INSTANCE`.
+The proxy sends each request to the ready copy of the matched web process with the fewest requests in flight, and one copy that crashes is restarted on its own while the others keep the app serving.
+A web process holds one spare port on top of its copies for the roll, so the port a copy listens on alternates between restarts.
+A changed `count` applies on the next restart.
+
+`dboss stop` (and the console button) first marks the app **draining**: the proxy answers new requests with `503` and `Retry-After`, while requests already in flight finish, bounded by `stop_timeout`. Only then does the supervisor send `stop_signal` to the process group. The app card shows a `draining` badge and `dboss ls` prints it in the state.
 
 `deletable: true` opts an app into permanent removal through `dboss destroy <app>` or the console's **Destroy** button; the default is false.
 Destroy drains and stops the app, clears its running and maintenance state, removes its entry from the apps directory and drops it from the live host.

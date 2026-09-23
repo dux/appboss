@@ -14,6 +14,7 @@
       title: 'Features',
       topics: [
         { id: 'supervision', title: 'Supervision', summary: 'Runs every procfile process, checks it, restarts it and drains it on stop.' },
+        { id: 'scaling', title: 'Rolling restart & scaling', summary: 'Restarts a running app without dropping a request, and runs several copies of a process.' },
         { id: 'idle', title: 'Idle stop & wake', summary: 'Stops apps nobody uses and starts them again on the next request.' },
         { id: 'routing', title: 'Routing', summary: 'Sends each hostname to the right app, with redirects, headers and maintenance mode.' },
         { id: 'access', title: 'Access control', summary: 'AuthCog sign-in, basic auth, IP allow lists and a Cloudflare-only origin.' },
@@ -76,6 +77,17 @@
     processes:
       worker:
         stop_timeout: 120s
+    `,
+    scaling: `
+    procfile:
+      web:
+        command: bundle exec puma -p $PORT
+        hosts: [shop.example.com]
+        health: /up
+        count: 3
+      worker:
+        command: bundle exec sidekiq
+        count: 2
     `,
     idle: `
     # host file: every app sleeps after 30 minutes
@@ -359,7 +371,7 @@
           <li>Running a web process next to its workers without a separate process manager or a systemd unit per app.</li>
           <li>Bringing back exactly the apps that were up after a host restart (<code>autostart</code> and <code>running.json</code>).</li>
           <li>Recovering from a crashed or hung web process on its own, with backoff, and marking the app <code>crashed</code> with an alert when it keeps failing.</li>
-          <li>Restarting and stopping without dropped requests: new requests get <code>503</code> while those in flight finish within <code>stop_timeout</code>.</li>
+          <li>Restarting without downtime: a running app rolls onto new copies (see <a href="#/help?topic=scaling">Rolling restart &amp; scaling</a>), and a stop answers new requests with <code>503</code> while those in flight finish within <code>stop_timeout</code>.</li>
           <li>Capping one app's memory and CPU on a shared box (cgroup v2; process groups elsewhere ignore the limits).</li>
         </ul>
         <h3>Config keys</h3>
@@ -367,12 +379,40 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
-        <p>All process types run at once; every process that declares <code>hosts</code> is a web process and gets proxied traffic on those hosts. An app may run several web processes, each with its own hosts, health check, canonical host and realtime hub. They start first, then the rest by name. A process with no <code>hosts</code> is background-only. Dboss injects <code>PORT</code> (fixed per app and process type), <code>APP_NAME</code>, <code>PROC_TYPE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
+        <p>All process types run at once; every process that declares <code>hosts</code> is a web process and gets proxied traffic on those hosts. An app may run several web processes, each with its own hosts, health check, canonical host and realtime hub. They start first, then the rest by name. A process with no <code>hosts</code> is background-only. Dboss injects <code>PORT</code> (fixed per app, process and copy), <code>APP_NAME</code>, <code>PROC_TYPE</code>, <code>PROC_INSTANCE</code> and <code>DBOSS_SOCKET</code> into every process.</p>
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
           <li><code>health</code> on a web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
           <li>While a web process starts it is polled every 500ms; once ready the check keeps running every <code>liveness_interval</code>, and <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
           <li>Restarts follow <code>restart</code> and <code>max_restarts</code>, backing off from 1s and doubling up to 60s; after that many consecutive failures the app is <code>crashed</code>. A minute of uptime clears the counter.</li>
+        </ul>
+      </section>
+    {/if}
+
+    {#if state.topic === 'scaling'}
+      <section>
+        <h2>Rolling restart &amp; scaling</h2>
+        <p>Restarting a running app never takes it down: dboss starts a new copy of each web process next to the old one, moves traffic over once the new copy passes its health check, and only then drains and stops the old one. <code>count</code> on a procfile entry runs several copies of it, and the proxy balances requests across the ready ones.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Deploying without a gap: <code>dboss restart</code>, the console and a <code>restart: true</code> deploy hook all roll a running app.</li>
+          <li>Surviving a bad release: a new copy that crashes or never gets healthy is killed, the old one keeps serving, and <code>health-timeout</code> reports it.</li>
+          <li>Using more than one core with a single-threaded server, and keeping an app up when one copy dies.</li>
+          <li>Running several queue workers from one procfile line.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-scaling"><db-config-keys paths="procfile,health_timeout,stop_timeout" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.scaling" />
+        <h3>Details</h3>
+        <ul>
+          <li>Copies are named <code>web.1</code> .. <code>web.3</code> in the console, logs and metrics; a single copy keeps the bare name. Each has its own <code>PORT</code> and <code>PROC_INSTANCE</code> (1..count).</li>
+          <li>A web process gets one spare port on top of its copies. A restart replaces the copies one at a time through it, so the port a copy listens on changes between restarts.</li>
+          <li>The proxy sends each request to the ready copy with the fewest requests in flight. A retired copy leaves the route before it drains, so no new request reaches it; it gets <code>stop_timeout</code> to finish, then its <code>stop_signal</code>, then a kill.</li>
+          <li>The <code>start</code> lifecycle step runs before the copies roll; if it fails nothing is replaced.</li>
+          <li>Background processes are stopped and started again, never run twice at once, so a scheduler cannot double up.</li>
+          <li>The restart returns once every copy is replaced, or with the error when it aborted. A changed <code>count</code> applies on the next restart. A stopped or crashed app restarts the plain way.</li>
+          <li>One copy that exits is restarted on its own; the app only reads <code>starting</code> or <code>crashed</code> when no copy of a web process is left serving.</li>
         </ul>
       </section>
     {/if}
@@ -729,7 +769,7 @@
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.notify" />
         <h3>Details</h3>
-        <p>Events: <code>crash</code>, <code>restart-loop</code>, <code>health-timeout</code>, <code>wake-failed</code>, <code>hook-failed</code>, <code>deploy</code>, <code>config-changed</code>, <code>backup-failed</code>, <code>error-rate</code> and <code>slow</code>. The last two come from the app's <code>alerts:</code> block: once a minute dboss checks the 5xx share and the p95 latency of the last 5 minutes of requests. An empty <code>url</code> disables it, and the payload follows the address: Slack, Discord and ntfy webhooks get their own shape, anything else the event as JSON. <code>wake-failed</code> comes only from a request-triggered start; explicit starts from the CLI or console do not notify.</p>
+        <p>Events: <code>crash</code>, <code>restart-loop</code>, <code>health-timeout</code>, <code>wake-failed</code>, <code>hook-failed</code>, <code>cron-failed</code>, <code>deploy</code>, <code>config-changed</code>, <code>backup-failed</code>, <code>error-rate</code>, <code>slow</code>, <code>oom</code> and <code>disk-low</code>. <code>error-rate</code> and <code>slow</code> come from the app's <code>alerts:</code> block: once a minute dboss checks the 5xx share and the p95 latency of the last 5 minutes of requests. An empty <code>url</code> disables it, and the payload follows the address: Slack, Discord and ntfy webhooks get their own shape, anything else the event as JSON. <code>wake-failed</code> comes only from a request-triggered start; explicit starts from the CLI or console do not notify. <code>oom</code> needs the cgroup backend, and <code>disk-low</code> fires when a filesystem dboss writes to passes <code>disk_alert</code> percent.</p>
       </section>
     {/if}
 
@@ -745,7 +785,7 @@
           <li>No false alarms on quiet apps: a check needs at least 20 requests in its 5 minute window.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-alerts"><db-config-keys paths="alerts.error_rate,alerts.slow_p95" /></div>
+        <div fez:keep="keys-alerts"><db-config-keys paths="alerts.error_rate,alerts.slow_p95,disk_alert" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.alerts" />
         <h3>Details</h3>
@@ -754,6 +794,7 @@
           <li><code>slow</code> fires when the p95 latency reaches <code>slow_p95</code>. It is off by default, since a sane limit depends on the app.</li>
           <li>Both need <code>notify.url</code> and their name in <code>notify.events</code> (on by default). The 5 minute quiet period bounds the repeats; there is no recovery event, a quiet webhook means it stopped.</li>
           <li>An app with <code>log_retention: 0</code> has no request log and is never checked.</li>
+          <li><code>disk-low</code> is the host-level check: once a minute every filesystem holding the config, the apps or the runtime folder is compared with <code>disk_alert</code> (default <code>90</code> percent, <code>0</code> off), and one event names each full one.</li>
           <li>The Traffic tab shows the same numbers for any range.</li>
         </ul>
       </section>

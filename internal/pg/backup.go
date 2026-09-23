@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"dboss/internal/fsutil"
 	"dboss/internal/logx"
 	"dboss/internal/notify"
 
@@ -99,7 +100,7 @@ func (s *Service) ImportBackup(database string, source io.Reader) (Backup, error
 	if err := s.catalog.record(entry); err != nil {
 		return entry, err
 	}
-	logx.Infof("postgres backup uploaded: %s %s %s", database, humanBytes(size), entry.Time)
+	logx.Infof("postgres backup uploaded: %s %s %s", database, fsutil.HumanBytes(size), entry.Time)
 	return entry, nil
 }
 
@@ -208,7 +209,7 @@ func (s *Service) runDump(ctx context.Context, connConfig *pgx.ConnConfig, opts 
 	if err := s.catalog.record(entry); err != nil {
 		return entry, err
 	}
-	logx.Infof("postgres backup: %s %s %s", database, humanBytes(size), started.UTC().Format(time.RFC3339))
+	logx.Infof("postgres backup: %s %s %s", database, fsutil.HumanBytes(size), started.UTC().Format(time.RFC3339))
 	return entry, nil
 }
 
@@ -378,18 +379,4 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-// humanBytes renders a size for the daemon log.
-func humanBytes(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%dB", size)
-	}
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%c", float64(size)/float64(div), "KMGT"[exp])
 }

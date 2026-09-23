@@ -105,12 +105,25 @@ func (c *Cgroup) Release(app, proc string) error {
 	return nil
 }
 
+// OOMKills reads the oom_kill counter of memory.events. It must be read before Release, which
+// removes the directory.
+func (c *Cgroup) OOMKills(app, proc string) int64 {
+	data, err := os.ReadFile(filepath.Join(c.dir(app, proc), "memory.events"))
+	if err != nil {
+		return 0
+	}
+	return fieldValue(string(data), "oom_kill ")
+}
+
 // cpuUsageUsec reads the usage_usec line of a cgroup v2 cpu.stat file.
-func cpuUsageUsec(contents string) int64 {
+func cpuUsageUsec(contents string) int64 { return fieldValue(contents, "usage_usec ") }
+
+// fieldValue reads one "<key> <value>" line of a cgroup flat-keyed file.
+func fieldValue(contents, prefix string) int64 {
 	for _, line := range strings.Split(contents, "\n") {
-		if value, ok := strings.CutPrefix(line, "usage_usec "); ok {
-			usage, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			return usage
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			number, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			return number
 		}
 	}
 	return 0

@@ -41,6 +41,7 @@ const (
 	requestProcessStart
 	requestProcessStop
 	requestProcessRestart
+	requestRoll
 )
 
 type request struct {
@@ -53,6 +54,8 @@ type request struct {
 	now         time.Time
 	spec        *apps.App
 	on          bool
+	// done receives the outcome of a rolling restart once it finishes.
+	done chan error
 }
 type response struct {
 	snapshot    Snapshot
@@ -62,6 +65,7 @@ type response struct {
 	app         *apps.App
 	err         error
 	idleStopped bool
+	rolled      bool
 }
 
 // processEvent is bound to the process that produced it; the runtime drops events from a
@@ -74,12 +78,17 @@ type processEvent struct {
 	exitCode int
 }
 type process struct {
-	name      string
+	name      string // the instance: "web", or "web.2" when the entry runs several
+	proc      string // the procfile entry
+	index     int    // 1-based instance number, PROC_INSTANCE
+	slot      string // owns the port, cgroup and pid file
 	cmd       *exec.Cmd
 	pid       int
 	port      int
 	startedAt time.Time
 	restarts  int
+	oomBase   int64 // the domain's OOM kill count at spawn, so a reused cgroup's history is ignored
+	released  bool
 	log       io.WriteCloser
 	done      chan struct{} // closed when the runtime stops tracking the process
 	waited    chan struct{} // closed once cmd.Wait has reaped the process
@@ -94,6 +103,7 @@ type appRuntime struct {
 	backend     res.Backend
 	cgroup      res.Backend
 	echo        *Echo
+	routes      *routeTable
 	requests    chan request
 	events      chan processEvent
 	state       State
@@ -111,7 +121,11 @@ type appRuntime struct {
 	ready    map[string]bool
 	// held are the processes the operator stopped on their own; the restart policy leaves them
 	// down until a process start or the next app start.
-	held             map[string]bool
+	held map[string]bool
+	// retiring are processes on their way out after a rolling restart replaced them; they are
+	// no longer routed and are released once they exit.
+	retiring         map[*process]bool
+	roll             *rollState
 	lastActivity     time.Time
 	lastError        string
 	lastErrorProcess string
@@ -155,11 +169,13 @@ func (a *appRuntime) loop() {
 			return
 		case req := <-a.requests:
 			result := a.handle(req)
+			a.publishRoutes()
 			if req.reply != nil {
 				req.reply <- result
 			}
 		case event := <-a.events:
 			a.handleEvent(event)
+			a.publishRoutes()
 		}
 	}
 }
@@ -188,6 +204,9 @@ func (a *appRuntime) handle(req request) response {
 			return response{err: err}
 		}
 		return response{err: a.startProcess(req.processName)}
+	case requestRoll:
+		rolled, err := a.beginRoll(req.processName, req.done)
+		return response{rolled: rolled, err: err}
 	case requestSnapshot:
 		return response{snapshot: a.snapshot()}
 	case requestLogs:
@@ -250,6 +269,7 @@ func (a *appRuntime) start() error {
 	a.failures = map[string]int{}
 	a.ready = map[string]bool{}
 	a.held = map[string]bool{}
+	a.retiring = map[*process]bool{}
 	a.state, a.lastError, a.lastErrorProcess = Starting, "", ""
 	return a.continueStart("")
 }
@@ -279,6 +299,10 @@ func (a *appRuntime) continueStart(after string) error {
 // stepExited moves a start along once its create or start step exits. A step whose start was
 // cancelled meanwhile is ignored: stop kills the run before the app leaves Starting.
 func (a *appRuntime) stepExited(state *jobState, exitCode int) {
+	if a.roll != nil && a.roll.step == state {
+		a.rollStepDone(state, exitCode)
+		return
+	}
 	if a.state != Starting {
 		return
 	}
@@ -309,41 +333,41 @@ func (a *appRuntime) spawnAll() error {
 		return nil
 	}
 	for _, web := range a.spec.Config.WebProcesses {
-		if process := a.processes[web.Name]; process != nil {
-			go a.monitor(process, a.spec.Config.Process(web.Name), a.webHost(web.Name))
+		for _, name := range a.liveInstances(web.Name) {
+			a.watch(a.processes[name])
 		}
 	}
 	return nil
 }
 
-// startOrder lists the processes in the order start spawns them: every web process first, then the
+// watch hands a web process to its readiness and liveness monitor; a worker needs none.
+func (a *appRuntime) watch(p *process) {
+	if p != nil && a.spec.Config.IsWeb(p.proc) {
+		go a.monitor(p, a.spec.Config.Process(p.proc), a.webHost(p.proc), healthInterval)
+	}
+}
+
+// startOrder lists the instances in the order start spawns them: every web process first, then the
 // rest by name, so a web process that expects earlier setup still gets it. Port assignment is
 // unaffected because assignPorts keeps its own name order.
 func (a *appRuntime) startOrder() []string {
 	names := slices.Sorted(maps.Keys(a.spec.Commands))
-	isWeb := make(map[string]bool, len(a.spec.Config.WebProcesses))
-	for _, web := range a.spec.Config.WebProcesses {
-		isWeb[web.Name] = true
-	}
 	ordered := make([]string, 0, len(names))
-	for _, name := range names {
-		if isWeb[name] {
-			ordered = append(ordered, name)
-		}
-	}
-	for _, name := range names {
-		if !isWeb[name] {
-			ordered = append(ordered, name)
+	for _, web := range []bool{true, false} {
+		for _, name := range names {
+			if a.spec.Config.IsWeb(name) == web {
+				ordered = append(ordered, a.instancesOf(name)...)
+			}
 		}
 	}
 	return ordered
 }
 
-// allWebReady reports whether every web process has passed its readiness check, so the app flips
-// to running only once all of them can serve.
+// allWebReady reports whether every web process has at least one instance past its readiness
+// check, so the app flips to running once each of its hosts can be served.
 func (a *appRuntime) allWebReady() bool {
 	for _, web := range a.spec.Config.WebProcesses {
-		if !a.ready[web.Name] {
+		if !a.webServing(web.Name) {
 			return false
 		}
 	}
@@ -360,17 +384,15 @@ func (a *appRuntime) webHost(name string) string {
 	return ""
 }
 
-// spawnOne starts one process on its fixed port. A failure crashes the app through failStart, so
-// a first start and a restart after an exit report it the same way.
+// spawnOne starts one instance in the first free slot of its process. A failure crashes the app
+// through failStart, so a first start and a restart after an exit report it the same way.
 func (a *appRuntime) spawnOne(name string) error {
-	port, err := a.allocator.Allocate(a.spec.Name, name)
-	if err == nil {
-		err = a.spawn(name, a.spec.Commands[name], port)
-	}
+	p, err := a.spawn(name, nil)
 	if err != nil {
 		a.lastErrorProcess = name
 		return a.failStart(err)
 	}
+	a.processes[name] = p
 	return nil
 }
 
@@ -396,81 +418,95 @@ func (a *appRuntime) stop() error {
 	}
 	a.state = Stopping
 	a.stopSteps()
+	a.abortRoll(errors.New("the app was stopped"))
 	err := a.stopProcesses()
 	a.state = Stopped
 	return err
 }
 
+// stopProcesses stops every live process and waits for the retiring ones a roll is draining, so
+// nothing of the app outlives a stop.
 func (a *appRuntime) stopProcesses() error {
 	names := make([]string, 0, len(a.processes))
 	for name := range a.processes {
 		names = append(names, name)
 	}
-	return a.killProcesses(names)
+	err := a.killProcesses(names)
+	for p := range a.retiring {
+		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+		<-p.waited
+		a.release(p)
+	}
+	return err
 }
 
-// killProcesses signals every named live process, waits up to the longest stop_timeout and
+// killProcesses signals every named live instance, waits up to the longest stop_timeout and
 // kills what is left, so one process and the whole app stop the same way.
 func (a *appRuntime) killProcesses(names []string) error {
 	var first error
+	var victims []*process
 	for _, name := range names {
-		p := a.processes[name]
-		defaults := a.spec.Config.Process(name)
-		signal, _ := res.Signal(defaults.StopSignal)
+		if p := a.processes[name]; p != nil {
+			victims = append(victims, p)
+		}
+	}
+	for _, p := range victims {
+		signal, _ := res.Signal(a.spec.Config.Process(p.proc).StopSignal)
 		if err := syscall.Kill(-p.pid, signal); err != nil && err != syscall.ESRCH && first == nil {
 			first = err
 		}
 	}
-	deadline := time.Now().Add(a.maxStopTimeout(names))
-	for _, name := range names {
-		p := a.processes[name]
+	deadline := time.Now().Add(a.maxStopTimeout(victims))
+	for _, p := range victims {
 		if !p.waitUntil(deadline) {
 			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 			<-p.waited
 		}
-		a.cleanupProcess(name)
+		a.release(p)
 	}
 	return first
 }
 
-// startProcess spawns one procfile process of a live app. A process that is already running is
-// left alone; a stopped app is started as a whole, never one process at a time.
+// startProcess spawns the missing instances of one procfile process, or one named instance, of a
+// live app. A running instance is left alone; a stopped app is started as a whole, never one
+// process at a time.
 func (a *appRuntime) startProcess(name string) error {
-	if _, ok := a.spec.Commands[name]; !ok {
-		return fmt.Errorf("unknown process %q", name)
+	names, err := a.resolve(name)
+	if err != nil {
+		return err
 	}
 	if a.state != Running && a.state != Starting {
 		return fmt.Errorf("%s is %s; start the app first", a.spec.Name, a.state)
 	}
-	delete(a.held, name)
-	if a.processes[name] != nil {
-		return nil
-	}
-	a.failures[name] = 0
-	if err := a.spawnOne(name); err != nil {
-		return err
-	}
-	if a.spec.Config.IsWeb(name) {
-		go a.monitor(a.processes[name], a.spec.Config.Process(name), a.webHost(name))
+	for _, instance := range names {
+		delete(a.held, instance)
+		if a.processes[instance] != nil {
+			continue
+		}
+		a.failures[instance] = 0
+		if err := a.spawnOne(instance); err != nil {
+			return err
+		}
+		a.watch(a.processes[instance])
 	}
 	return nil
 }
 
-// stopProcess stops one process. hold keeps it down against the restart policy; a restart passes
-// false because it spawns the process again right away. The app reads as stopped once nothing
-// of it is left running.
+// stopProcess stops every instance of one process, or one named instance. hold keeps them down
+// against the restart policy; a restart passes false because it spawns them again right away.
+// The app reads as stopped once nothing of it is left running.
 func (a *appRuntime) stopProcess(name string, hold bool) error {
-	if _, ok := a.spec.Commands[name]; !ok {
-		return fmt.Errorf("unknown process %q", name)
+	names, err := a.resolve(name)
+	if err != nil {
+		return err
 	}
-	if hold {
-		a.held[name] = true
+	for _, instance := range names {
+		if hold {
+			a.held[instance] = true
+		}
+		delete(a.ready, instance)
 	}
-	delete(a.ready, name)
-	if a.processes[name] == nil {
-		return nil
-	}
-	err := a.killProcesses([]string{name})
+	err = a.killProcesses(names)
 	if hold && len(a.processes) == 0 && (a.state == Running || a.state == Starting) {
 		a.state = Stopped
 	}
