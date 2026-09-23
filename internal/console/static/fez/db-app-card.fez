@@ -177,7 +177,7 @@
   <div class="card-header">
     <span class="app-icon" aria-hidden="true"><svg class="icon"><use href="#i-server"></use></svg></span>
     <div class="app-identity">
-      <h3 class="app-name">{props.app.name}</h3>
+      <h3 class="app-name"><a href="#/logs?app={props.app.name}" title="Open the logs of {props.app.name}">{props.app.name}</a></h3>
       {#if state.serviceUrl}
         <a class="service-link" href={state.serviceUrl} target="_blank" rel="noreferrer"><span class="service-url">{state.serviceUrl}</span><svg class="icon"><use href="#i-external"></use></svg></a>
       {:else}
@@ -243,7 +243,7 @@
     </div>
     {#each state.processes as process}
       <div class="service-row" data-state={process.state}>
-        <span class="service-name">{process.name}</span>
+        <a class="service-name service-log-link" href="#/logs?app={props.app.name}&channel=stdout:{process.name}" title="Open {process.name} logs">{process.name}</a>
         <span class="badge">{process.state}</span>
         <span class="service-value">{process.port || '-'}</span>
         <span class="service-value">{process.pid || '-'}</span>

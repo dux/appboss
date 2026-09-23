@@ -570,6 +570,15 @@ input[type="radio"] {
   font-weight: 600;
 }
 
+.app-name a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-name a:hover {
+  text-decoration: underline;
+}
+
 .service-link,
 .service-host {
   font-family: var(--mono);
@@ -703,7 +712,8 @@ input[type="radio"] {
 
 .service-row {
   display: grid;
-  grid-template-columns: var(--row-label) repeat(5, minmax(0, 1fr)) auto;
+  /* every row is its own grid, so the actions track is fixed: three 34px icon buttons + two gaps */
+  grid-template-columns: var(--row-label) repeat(5, minmax(0, 1fr)) 114px;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -730,6 +740,16 @@ input[type="radio"] {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.service-log-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.service-log-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
 }
 
 .service-value {
