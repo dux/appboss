@@ -610,6 +610,14 @@ input[type="radio"] {
   text-decoration: underline;
 }
 
+.app-branch {
+  margin-left: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  font-weight: 400;
+}
+
 .service-link,
 .service-host {
   font-family: var(--mono);

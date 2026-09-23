@@ -81,6 +81,40 @@ func TestDiscoverSingleModeRereadsRootFile(t *testing.T) {
 	}
 }
 
+func TestGitBranch(t *testing.T) {
+	checkout := t.TempDir()
+	writeTestFile(t, filepath.Join(checkout, ".env"), "GIT_BRANCH=ignored\n")
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(checkout, ".git", "HEAD"), "ref: refs/heads/feature/x\n")
+
+	worktree := t.TempDir()
+	writeTestFile(t, filepath.Join(worktree, ".git"), "gitdir: "+filepath.Join(checkout, ".git")+"\n")
+
+	detached := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(detached, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(detached, ".git", "HEAD"), "4f2a9c0d\n")
+
+	for _, tc := range []struct {
+		name, dir string
+		env       map[string]string
+		want      string
+	}{
+		{"checkout wins over env", checkout, map[string]string{"GIT_BRANCH": "ignored"}, "feature/x"},
+		{"worktree .git file", worktree, nil, "feature/x"},
+		{"detached head", detached, nil, ""},
+		{"packed release reads env", t.TempDir(), map[string]string{"GIT_BRANCH": " main "}, "main"},
+		{"nothing known", t.TempDir(), nil, ""},
+	} {
+		if got := gitBranch(tc.dir, tc.env); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func writeTestFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {

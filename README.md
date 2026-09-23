@@ -781,6 +781,7 @@ management console: https://dboss.example.com (AuthCog sign-in)
 ```
 `dboss start --login` also prints a one-time loopback sign-in link on stdout (never in the daemon log); `make demo` uses it.
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, and adds a typed-confirmation destroy action when the app sets `deletable: true`.
+Next to an app's name a gray `git:<branch>` label names the branch it runs: the one checked out in its folder, or `GIT_BRANCH` from its `.env` for a packed release without `.git` (lux-deploy writes it).
 It links to the process logs and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.
 The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
