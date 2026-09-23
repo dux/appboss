@@ -126,9 +126,9 @@ func (h *Handler) writeDashboard(w http.ResponseWriter, _ *http.Request, session
 	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), Version: version.String(), AppScheme: h.appScheme, AppPort: h.appPort, UpdatedAt: time.Now().UTC()})
 }
 
-// capabilities tells the shell which optional tabs to show.
+// capabilities tells the shell which optional tabs to show; held raises the ENTER bar.
 func (h *Handler) capabilities() map[string]bool {
-	return map[string]bool{"postgres": h.service.PGAvailable(), "pubsub": len(h.service.PubsubApps()) > 0, "dev": h.dev}
+	return map[string]bool{"postgres": h.service.PGAvailable(), "pubsub": len(h.service.PubsubApps()) > 0, "dev": h.dev, "held": !h.service.Booted()}
 }
 
 // healthz is a liveness probe: 200 while the HTTP server answers.

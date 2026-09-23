@@ -714,6 +714,7 @@ Every page dboss answers with itself is built in and can be replaced:
 | Page | Status | Served when |
 |---|---|---|
 | `starting` | 503 | the app is waking up; it reloads every 5 seconds |
+| `waiting` | 503 | a hand-run `dboss start` still waits for ENTER; it reloads every 5 seconds |
 | `stopped` | 503 | an `autostart: button` app is stopped; it carries the start button |
 | `crashed` | 503 | the app hit its restart limit |
 | `maintenance` | 503 | `dboss maintenance <app> on` |

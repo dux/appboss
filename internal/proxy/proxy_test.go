@@ -104,7 +104,6 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.Boot()
 	defer manager.Close()
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
@@ -115,6 +114,15 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Before Boot a hand-run session is held at ENTER: the request names that, not a wake.
+	heldRequest := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	heldRequest.Header.Set("Accept", "text/html")
+	heldResponse := httptest.NewRecorder()
+	handler.ServeHTTP(heldResponse, heldRequest)
+	if heldResponse.Code != http.StatusServiceUnavailable || !strings.Contains(heldResponse.Body.String(), "demo is waiting to start") || heldResponse.Header().Get("Refresh") == "" {
+		t.Fatalf("unexpected held response: %d %v %s", heldResponse.Code, heldResponse.Header(), heldResponse.Body.String())
+	}
+	manager.Boot()
 	wakeRequest := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 	wakeRequest.Host = "demo.test"
 	wakeRequest.Header.Set("Accept", "text/html")
@@ -159,7 +167,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rates.LastMinute != 4 {
+	if rates.LastMinute != 5 {
 		t.Fatalf("requests were not logged: %+v", rates)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(cfg.LogDir, "demo", "dboss.sqlite"))

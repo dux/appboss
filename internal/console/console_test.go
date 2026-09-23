@@ -50,6 +50,8 @@ type fakeManager struct {
 	hookSecrets map[string]string
 	// token is tokens.dboss of the fake host config.
 	token string
+	// held is a hand-run session still waiting for ENTER.
+	held bool
 }
 
 func (m *fakeManager) Snapshots() []supervisor.Snapshot {
@@ -151,6 +153,7 @@ func (m *fakeManager) Rescan() ([]error, error) {
 }
 
 func (m *fakeManager) RestartRequired() []string { return nil }
+func (m *fakeManager) Booted() bool              { return !m.held }
 func (m *fakeManager) HostConfig() config.Config {
 	cfg := config.Default()
 	cfg.Tokens.Dboss = m.token
@@ -548,8 +551,11 @@ func handlerFor(t *testing.T, cfg config.Config, manager *fakeManager, rates fak
 
 func TestDevConsoleOpensOnLoopbackWithoutASession(t *testing.T) {
 	handler := newDevTestHandler(t, &fakeManager{})
-	if !handler.capabilities()["dev"] {
-		t.Fatal("a dev console should report the dev capability")
+	if !handler.capabilities()["dev"] || handler.capabilities()["held"] {
+		t.Fatal("a booted dev console should report dev and not held")
+	}
+	if !newDevTestHandler(t, &fakeManager{held: true}).capabilities()["held"] {
+		t.Fatal("a session waiting for ENTER should report held")
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
 	request.RemoteAddr = "127.0.0.1:54321"

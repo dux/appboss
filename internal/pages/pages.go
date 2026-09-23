@@ -18,6 +18,7 @@ type Name string
 
 const (
 	Starting    Name = "starting"
+	Waiting     Name = "waiting"
 	Stopped     Name = "stopped"
 	Crashed     Name = "crashed"
 	Maintenance Name = "maintenance"
@@ -48,6 +49,7 @@ type Spec struct {
 // Specs lists every page in the order `dboss pages` prints them.
 var Specs = []Spec{
 	{Name: Starting, Status: http.StatusServiceUnavailable, Title: "%s is starting", Message: "It will be ready in a few seconds. This page reloads on its own.", When: "the app is waking up"},
+	{Name: Waiting, Status: http.StatusServiceUnavailable, Title: "%s is waiting to start", Message: "dboss starts the apps once ENTER is pressed in the terminal that ran dboss start. This page reloads on its own.", When: "a hand-run session waits for ENTER"},
 	{Name: Stopped, Status: http.StatusServiceUnavailable, Title: "%s is stopped", Message: "Start it to continue.", When: "a start-by-button app is stopped"},
 	{Name: Crashed, Status: http.StatusServiceUnavailable, Title: "%s is not running", Message: "It failed to start several times in a row. Try again in a little while.", When: "the app hit its restart limit"},
 	{Name: Maintenance, Status: http.StatusServiceUnavailable, Title: "%s is under maintenance", Message: "We will be back shortly.", When: "maintenance mode is on"},

@@ -110,6 +110,7 @@ func (f *fakeRuntime) Rescan() ([]error, error) {
 }
 
 func (f *fakeRuntime) RestartRequired() []string { return f.restart }
+func (f *fakeRuntime) Booted() bool              { return true }
 func (f *fakeRuntime) HostConfig() config.Config { return config.Default() }
 
 func (f *fakeRuntime) Logs(name, process string, lines int) (map[string][]string, error) {

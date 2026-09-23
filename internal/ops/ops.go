@@ -87,6 +87,7 @@ type Runtime interface {
 	Exec(name string, argv []string, timeout time.Duration) (supervisor.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
+	Booted() bool
 	HostConfig() config.Config
 	Logs(name, process string, lines int) (map[string][]string, error)
 	Ports() map[string]int

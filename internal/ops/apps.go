@@ -123,6 +123,9 @@ func (s *Service) exec(name string, argv []string, timeout time.Duration) (super
 // RestartRequired lists the host keys whose value on disk differs from the running session.
 func (s *Service) RestartRequired() []string { return s.runtime.RestartRequired() }
 
+// Booted reports whether the apps were started; a hand-run session holds them until ENTER.
+func (s *Service) Booted() bool { return s.runtime.Booted() }
+
 // rescan reloads the apps and reports the invalid ones and the host keys waiting for a restart,
 // so every transport answers with the same shape.
 func (s *Service) rescan() (RescanResult, error) {

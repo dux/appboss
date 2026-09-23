@@ -422,8 +422,9 @@ procfile:
 autostart: true
 
 # Folder of the pages dboss serves for this app instead of forwarding: starting (waking up),
-# stopped (a button app, with the start button), crashed, maintenance, error (the proxy's own 502s
-# and the app's 5xx) and forbidden (allow_ips), plus signed_out. For each one dboss reads
+# waiting (a hand-run start still waits for ENTER), stopped (a button app, with the start
+# button), crashed, maintenance, error (the proxy's own 502s and the app's 5xx) and forbidden
+# (allow_ips), plus signed_out. For each one dboss reads
 # <name>.html here, else template.html here, else the same two in the host's pages folder, else
 # the built-in page, on every request. Every page fills {{status}}, {{title}}, {{message}},
 # {{action}} (the start button or sign-in link dboss builds), {{app}} and {{dboss_logo}} (the

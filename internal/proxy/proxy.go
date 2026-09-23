@@ -294,6 +294,11 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 		return
 	}
 	if snapshot.State != supervisor.Running {
+		if snapshot.State == supervisor.Stopped && h.manager != nil && !h.manager.Booted() {
+			// Wake is a no-op until the session boots, so say what it waits for.
+			h.unavailablePage(w, r, snapshot, pages.Waiting, wakeRetryAfter)
+			return
+		}
 		if snapshot.State == supervisor.Stopped {
 			// A button app only wakes on the deliberate POST of its start page, so a GET for
 			// a favicon or a crawler never starts it.
@@ -461,15 +466,15 @@ func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, app supervis
 	w.WriteHeader(http.StatusForbidden)
 }
 
-// unavailablePage answers 503 with Retry-After; an HTML GET gets the page, and the starting page
-// also reloads itself after the same delay.
+// unavailablePage answers 503 with Retry-After; an HTML GET gets the page, and the starting and
+// waiting pages also reload themselves after the same delay.
 func (h *Handler) unavailablePage(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, name pages.Name, retryAfter int) {
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 	if !wantsHTML(r) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	if name == pages.Starting {
+	if name == pages.Starting || name == pages.Waiting {
 		w.Header().Set("Refresh", strconv.Itoa(retryAfter))
 	}
 	pages.Page{Name: name, App: app.Name}.Write(w, h.pageDirs(app)...)

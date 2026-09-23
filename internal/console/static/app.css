@@ -122,6 +122,37 @@ code {
 
 /* --- Navbar ---------------------------------------------------------------- */
 
+/* Fixed so it stays in view while scrolling; the body is padded by its height so the navbar is not
+   covered, and page-level sticky elements move down by the same amount. */
+.held-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  background: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
+.held-bar span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+body:has(.held-bar) {
+  padding-top: 40px;
+}
+
+body:has(.held-bar) .help-nav {
+  top: 40px;
+}
+
 .navbar {
   background: var(--card);
   border-bottom: 1px solid var(--border);

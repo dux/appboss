@@ -102,7 +102,7 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 }
 
 // Boot starts the apps that were running before, skipping autostart: false, and the idle and
-// cron loops. Until then the session only serves: a request gets the starting page instead of
+// cron loops. Until then the session only serves: a request gets the waiting page instead of
 // waking its app, so a hand-run start can print every address before anything loads.
 func (m *Manager) Boot() {
 	m.bootOnce.Do(func() {
@@ -295,6 +295,9 @@ func (m *Manager) Destroy(name string) error {
 // Wake starts an app on behalf of the proxy and reports a failed start, which an explicit run or
 // console start does not. Before Boot it does nothing, so a tab opened early waits on the
 // starting page instead of loading the app ahead of the rest.
+// Booted reports whether Boot ran; before it a hand-run session is held at its ENTER prompt.
+func (m *Manager) Booted() bool { return m.booted.Load() }
+
 func (m *Manager) Wake(name string) {
 	if !m.booted.Load() {
 		return

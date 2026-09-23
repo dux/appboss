@@ -27,6 +27,7 @@
       this.globalState.pgAvailable = false
       this.globalState.pubsubAvailable = false
       this.globalState.devSession = false
+      this.globalState.held = false
     }
 
     onMount() {
@@ -129,6 +130,7 @@
         this.globalState.pgAvailable = Boolean(capabilities.postgres)
         this.globalState.pubsubAvailable = Boolean(capabilities.pubsub)
         this.globalState.devSession = Boolean(capabilities.dev)
+        this.globalState.held = Boolean(capabilities.held)
       }
     }
 
@@ -217,6 +219,13 @@
     }
   }
 </script>
+
+{#if globalState.held}
+  <div class="held-bar" role="alert">
+    <svg class="icon"><use href="#i-alert"></use></svg>
+    <span>Apps are on hold: press ENTER in the terminal running dboss start.</span>
+  </div>
+{/if}
 
 <header class="navbar">
   <div class="container navbar-inner">
