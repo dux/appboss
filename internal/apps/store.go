@@ -21,6 +21,13 @@ import (
 // caller edited. The returned ConfigFile then carries the current contents.
 var ErrConflict = errors.New("file changed on disk")
 
+// HostFileError is a host config failure met while handling an app file. Its line belongs to the
+// host file, so an editor showing the app file must not mark it.
+type HostFileError struct{ Err error }
+
+func (e *HostFileError) Error() string { return "host file: " + e.Err.Error() }
+func (e *HostFileError) Unwrap() error { return e.Err }
+
 // historyKeep is how many past revisions of one file are kept under state_dir/config-history.
 const historyKeep = 50
 
@@ -155,7 +162,7 @@ func (s *Store) Validate(id, contents string) error {
 	}
 	root, err := s.HostConfig()
 	if err != nil {
-		return fmt.Errorf("host file: %w", err)
+		return &HostFileError{err}
 	}
 	_, err = config.ParseApp([]byte(contents), file.Path, root.Defaults)
 	return err
@@ -331,7 +338,7 @@ func (s *Store) HostConfig() (config.Config, error) {
 func (s *Store) Effective(name string) (string, error) {
 	root, err := s.HostConfig()
 	if err != nil {
-		return "", fmt.Errorf("host file: %w", err)
+		return "", &HostFileError{err}
 	}
 	app, err := Lookup(root, name)
 	if err != nil {

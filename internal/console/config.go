@@ -329,8 +329,13 @@ func setMapping(parent *yaml.Node, key string, value *yaml.Node) {
 
 var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
 
-// yamlLine finds the line an error points at so the editor can highlight it.
+// yamlLine finds the line an error points at so the editor can highlight it. A host file error
+// met while checking an app file points into another file, so it has no line here.
 func yamlLine(err error) int {
+	var hostErr *apps.HostFileError
+	if errors.As(err, &hostErr) {
+		return 0
+	}
 	var cfgErr *config.Error
 	if errors.As(err, &cfgErr) && cfgErr.Line > 0 {
 		return cfgErr.Line
