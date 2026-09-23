@@ -360,7 +360,7 @@
           <li>Capping one app's memory and CPU on a shared box (cgroup v2; process groups elsewhere ignore the limits).</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,shell,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
+        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
@@ -390,7 +390,7 @@
         <db-preview-yaml :text="state.examples.idle" />
         <h3>Details</h3>
         <ul>
-          <li>Idle apps are checked every <code>daemon.idle_tick</code>; <code>idle_stop: 0s</code> disables it for the app.</li>
+          <li>Idle apps are checked every <code>daemon.idle_tick</code>; <code>idle_stop</code> is off (<code>0s</code>) unless an app or <code>defaults</code> sets it.</li>
           <li>A stopped app gets the starting page, then the real response once it is healthy. A crashed app gets the crashed page.</li>
           <li>Static files, the health endpoint and PubSub are served by dboss itself and never wake the app.</li>
           <li>A wake that fails posts <code>wake-failed</code> to the operator webhook; explicit starts from the CLI or console do not.</li>

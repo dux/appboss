@@ -20,7 +20,7 @@ import (
 type Command struct {
 	Name string   `json:"name"`
 	Line string   `json:"line"`
-	Argv []string `json:"argv"`
+	Argv []string `json:"argv,omitempty"` // dboss exec only
 }
 
 type App struct {
@@ -225,10 +225,10 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: buildHooks(appCfg.Hooks), Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg}, nil
 }
 
-// newCommand is one command line split for exec; config has already refused an empty one.
+// newCommand is one config command line, run through /bin/sh -c; config has already refused an
+// empty one.
 func newCommand(name, line string) Command {
-	line = strings.TrimSpace(line)
-	return Command{Name: name, Line: line, Argv: strings.Fields(line)}
+	return Command{Name: name, Line: strings.TrimSpace(line)}
 }
 
 // buildCron parses every schedule once so the supervisor only has to work with next run times.

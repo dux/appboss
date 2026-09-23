@@ -222,7 +222,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 	if state.pull && a.spec.Config.GithubToken != "" {
 		git.AuthEnv(env, a.spec.Config.GithubToken)
 	}
-	cmd, err := newCommand(a.spec.Dir, state.command, a.spec.Config.Shell, env)
+	cmd, err := newCommand(a.spec.Dir, state.command, env)
 	if err != nil {
 		state.lastError = err.Error()
 		return err

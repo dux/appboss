@@ -15,7 +15,7 @@ import (
 func lifecycleManager(t *testing.T, portRange [2]int, extra string) (*Manager, string, string) {
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "trace")
-	cfg := supervisorTestConfigApp(t, portRange, "shell: true\n"+strings.ReplaceAll(extra, "TRACE", trace))
+	cfg := supervisorTestConfigApp(t, portRange, strings.ReplaceAll(extra, "TRACE", trace))
 	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)

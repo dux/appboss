@@ -45,7 +45,6 @@ type ProcessOverrides struct {
 	LogRetention       *Duration         `yaml:"log_retention,omitempty" json:"log_retention,omitempty"`
 	StdoutRetention    *Duration         `yaml:"stdout_retention,omitempty" json:"stdout_retention,omitempty"`
 	TmpClean           *Duration         `yaml:"tmp_clean,omitempty" json:"tmp_clean,omitempty"`
-	Shell              *bool             `yaml:"shell,omitempty" json:"shell,omitempty"`
 	Env                map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	Resources          *string           `yaml:"resources,omitempty" json:"resources,omitempty"`
 	MemoryMax          *Size             `yaml:"memory_max,omitempty" json:"memory_max,omitempty"`

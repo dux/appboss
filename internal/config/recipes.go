@@ -124,7 +124,6 @@ var recipeSpecs = []recipeSpec{
 			{path: "resources", section: "Resources"},
 			{path: "memory_max", section: "Resources"},
 			{path: "cpu_max", section: "Resources"},
-			{path: "shell", section: "Resources"},
 			{path: "env", section: "Resources"},
 			{path: "log_max_size", section: "Logs"},
 			{path: "log_keep", section: "Logs"},

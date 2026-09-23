@@ -8,12 +8,12 @@ import (
 	"dboss/internal/apps"
 )
 
-// newCommand builds one child of an app: through /bin/sh -c when shell is set, else argv[0]
-// resolved against the app's PATH. It runs in dir, in its own session, so a stop can signal the
-// whole group.
-func newCommand(dir string, command apps.Command, shell bool, env map[string]string) (*exec.Cmd, error) {
+// newCommand builds one child of an app: a config line through /bin/sh -c, or the argv of
+// `dboss exec` (already split by the caller's shell) with argv[0] resolved against the app's
+// PATH. It runs in dir, in its own session, so a stop signals the shell and its children alike.
+func newCommand(dir string, command apps.Command, env map[string]string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
-	if shell {
+	if command.Line != "" {
 		cmd = exec.Command("/bin/sh", "-c", command.Line)
 	} else {
 		resolved, err := resolveExecutable(command.Argv[0], dir, env["PATH"])

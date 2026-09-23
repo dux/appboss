@@ -1,6 +1,8 @@
 package supervisor
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -100,12 +102,16 @@ func TestDeployHookEmitsNotification(t *testing.T) {
 
 func TestWakeFailureEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
-	cfg := hookConfig(t, [2]int{32960, 32980}, "procfile:\n  web: ./missing-binary\nautostart: false\n")
+	cfg := hookConfig(t, [2]int{32960, 32980}, "procfile:\n  web: /bin/sleep 30\nautostart: false\n")
 	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
+	// A missing command only fails inside sh; a missing app folder fails the spawn itself.
+	if err := os.RemoveAll(filepath.Join(cfg.Apps, "demo")); err != nil {
+		t.Fatal(err)
+	}
 	manager.Wake("demo")
 	if event := sink.waitFor(t, "wake-failed"); event.App != "demo" || event.Error == "" {
 		t.Fatalf("event = %+v", event)

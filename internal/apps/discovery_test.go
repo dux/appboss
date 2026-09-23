@@ -9,9 +9,9 @@ import (
 	"dboss/internal/config"
 )
 
-func TestNewCommandSplitsTheLine(t *testing.T) {
+func TestNewCommandKeepsTheWholeLine(t *testing.T) {
 	command := newCommand("web", "  ./server --port x ")
-	if command.Line != "./server --port x" || len(command.Argv) != 3 || command.Argv[0] != "./server" {
+	if command.Line != "./server --port x" || command.Argv != nil {
 		t.Fatalf("unexpected command: %#v", command)
 	}
 }

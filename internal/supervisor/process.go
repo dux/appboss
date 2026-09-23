@@ -44,7 +44,7 @@ func (a *appRuntime) maxStopTimeout(names []string) time.Duration {
 func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	defaults := a.spec.Config.Process(name)
 	env := processEnv(a.spec, name, port, a.cfg.Socket, defaults.Env)
-	cmd, err := newCommand(a.spec.Dir, command, defaults.Shell, env)
+	cmd, err := newCommand(a.spec.Dir, command, env)
 	if err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}

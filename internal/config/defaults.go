@@ -33,7 +33,6 @@ type Process struct {
 	LogRetention       Duration          `yaml:"log_retention" json:"log_retention"`
 	StdoutRetention    Duration          `yaml:"stdout_retention" json:"stdout_retention"`
 	TmpClean           Duration          `yaml:"tmp_clean" json:"tmp_clean"`
-	Shell              bool              `yaml:"shell" json:"shell"`
 	Env                map[string]string `yaml:"env" json:"env"`
 	Resources          string            `yaml:"resources" json:"resources"`
 	MemoryMax          Size              `yaml:"memory_max" json:"memory_max"`

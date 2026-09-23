@@ -8,9 +8,6 @@ management:
 ports:
   range: [3100, 3199]
 
-defaults:
-  idle_stop: 0s
-
 # Events land in the bun app's stdout through its /notify route.
 notify:
   url: http://bun.lvh.me/notify

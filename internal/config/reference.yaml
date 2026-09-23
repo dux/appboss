@@ -226,9 +226,10 @@ defaults:
   # of the file. Empty leaves the pull anonymous. Needs git 2.31+ for the env-injected helper.
   github_token: $GITHUB_TOKEN
 
-  # Stop the whole app after this long without a proxied HTTP request.
-  # 0 means never. Websocket connections count as activity while open.
-  idle_stop: 6h
+  # Stop the whole app after this long without a proxied HTTP request; the next request
+  # wakes it. 0 (the default) never stops it; set it for review or preview apps.
+  # Websocket connections count as activity while open.
+  idle_stop: 0
 
   # Readiness check after spawn, flips starting -> running.
   # The check itself is `health` on a web process in the procfile: a path such as /up that must
@@ -286,12 +287,6 @@ defaults:
   # running process wrote once and still uses (a pid file, a socket) ages like any other
   # file, so set tmp_clean to false when the app keeps something there for longer.
   tmp_clean: 7d             # false or 0 never touches ./tmp
-
-  # Run procfile commands through `sh -c` instead of exec'ing the first word.
-  # Needed for lines with &&, pipes, or $VAR. Off by default so signals reach
-  # the real process, not a shell. Command strings are never env-expanded, so
-  # $VAR here reaches the shell at run time.
-  shell: false
 
   # Extra environment injected into every process of every app, lowest priority
   # (app .env files and dboss-injected PORT/APP_NAME/PROC_TYPE win).
@@ -534,13 +529,12 @@ autostart: true
 deletable: false
 
 # Per-app overrides of defaults.* (all optional, same semantics as above).
-idle_stop: 0                # this app never sleeps
+idle_stop: 30m              # this preview app sleeps when unused
 health_timeout: 90s
 stop_timeout: 30s
 stop_signal: TERM
 restart: on-failure
 max_restarts: 5
-shell: false
 log_retention: 168h
 stdout_retention: 3h
 tmp_clean: false            # this app keeps its own ./tmp
@@ -559,7 +553,7 @@ headers:
 # An app that ignores PORT and binds its own port will not be reachable
 # through the proxy. Read the allocation with `dboss ports`.
 
-# Per-proctype overrides. Process keys only (stop, restart, logs, shell, env,
+# Per-proctype overrides. Process keys only (stop, restart, logs, env,
 # resources); a web key here is an error, and `health`/`canonical_host`/`static`/`pubsub` live on
 # the web procfile entry.
 # Useful for a worker that needs a longer stop_timeout than the web process it runs next to.
@@ -579,7 +573,7 @@ cron:
     # Either "every <n><s|m|h|d>" or a 5-field cron expression (min hour day month weekday).
     # Cron fields accept *, */n, a-b, a-b/n, a,b,c and JAN..DEC / SUN..SAT; 0 and 7 are Sunday.
     schedule: every 6h
-    # Command run once per fire. Split on whitespace and exec'd directly unless shell: true.
+    # Command run once per fire, through /bin/sh -c like a procfile line.
     command: bundle exec rake cleanup
     # Kill a run that is still going after this long. 0 = no limit.
     timeout: 30m
@@ -703,7 +697,8 @@ alerts:
   #   2s
 
 # Procfile behavior:
-#   - Each command is split on whitespace and exec'd directly unless shell: true.
+#   - Each command runs through /bin/sh -c, so &&, pipes, quotes and $VAR work. Start the
+#     line with `exec` to replace the shell with the real process.
 #   - Each entry becomes unit dboss-<app>-<name> and gets its own PORT.
 #   - PORT is always injected by dboss for every line, including workers and
 #     cron-style processes that never listen. Not configurable. A PORT set in

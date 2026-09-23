@@ -174,9 +174,6 @@ management:
 
 ports:
   range: [3100, 3199]
-
-defaults:
-  idle_stop: 0s
 ```
 
 App file (`./demo/apps/bun/dboss.yaml`):
@@ -645,7 +642,7 @@ Two rules keep the two systems from colliding:
 * Keep container ports outside `ports.range`. On start dboss clears every listener in the range and before each spawn frees the app's fixed port, so a container listening there would be killed.
 * A hostname is routed by one proxy only. dboss routes just the hosts of the apps in its own `apps` directory, so a container host must be served by Cloudflare or another reverse proxy.
 
-The one bridge without code is a procfile wrapper (`shell: true` with `docker run -p 127.0.0.1:$PORT:$PORT ...`), which makes a container answer as a dboss app but leaves its lifecycle on the docker CLI, with the usual caveats around stopping it.
+The one bridge without code is a procfile wrapper (`docker run -p 127.0.0.1:$PORT:$PORT ...`), which makes a container answer as a dboss app but leaves its lifecycle on the docker CLI, with the usual caveats around stopping it.
 
 ## Access control
 

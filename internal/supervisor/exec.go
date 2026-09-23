@@ -21,7 +21,7 @@ func (m *Manager) runDestroyStep(spec *apps.App) {
 	if !ok {
 		return
 	}
-	result, err := m.run(spec, stepName("destroy"), step.Command, spec.Config.Shell, step.Timeout)
+	result, err := m.run(spec, stepName("destroy"), step.Command, step.Timeout)
 	if err == nil && result.ExitCode != 0 {
 		err = fmt.Errorf("exited with code %d", result.ExitCode)
 	}
@@ -57,14 +57,14 @@ func (m *Manager) Exec(name string, argv []string, timeout time.Duration) (ExecR
 	if response.err != nil {
 		return ExecResult{}, response.err
 	}
-	return m.run(response.app, "exec", apps.Command{Argv: argv}, false, timeout)
+	return m.run(response.app, "exec", apps.Command{Argv: argv}, timeout)
 }
 
 // run is Exec for a spec already in hand: one command in the app folder with the app
 // environment, combined output, and the process group killed on timeout.
-func (m *Manager) run(spec *apps.App, procType string, line apps.Command, shell bool, timeout time.Duration) (ExecResult, error) {
+func (m *Manager) run(spec *apps.App, procType string, line apps.Command, timeout time.Duration) (ExecResult, error) {
 	env := processEnv(spec, procType, 0, m.cfg.Socket, spec.Config.Env)
-	command, err := newCommand(spec.Dir, line, shell, env)
+	command, err := newCommand(spec.Dir, line, env)
 	if err != nil {
 		return ExecResult{}, err
 	}
