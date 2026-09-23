@@ -57,7 +57,7 @@ func signIn(t *testing.T, flow *Flow, gate Gate) *httptest.ResponseRecorder {
 	if err != nil || start.Code != http.StatusFound {
 		t.Fatalf("start: %d %v", start.Code, err)
 	}
-	if login.Host != "auth.authcog.com" || login.Path != "/d:shop.lvh.me/p:8080" || login.Query().Get("redirect_to") != "/cart?step=2" {
+	if login.Host != "auth.authcog.com" || login.Path != "/d:shop.lvh.me/p:8080/s:http" || login.Query().Get("redirect_to") != "/cart?step=2" {
 		t.Fatalf("unexpected login URL: %s", login)
 	}
 	callback := httptest.NewRequest(http.MethodGet, "http://shop.lvh.me:8080"+gate.CallbackPath+"?callback=verified&state="+url.QueryEscape(login.Query().Get("state")), nil)
@@ -167,15 +167,23 @@ func TestCallbackIsBoundToStateAndGate(t *testing.T) {
 	}
 }
 
-func TestDestinationAcceptsOnlyTheGateHosts(t *testing.T) {
+func TestDestinationCarriesSchemeAndNonDefaultPort(t *testing.T) {
 	hosts := func(host string) bool { return strings.HasSuffix(host, "lvh.me") }
-	for host, want := range map[string]string{"shop.lvh.me": "/d:shop.lvh.me", "Shop.LVH.me.:8080": "/d:shop.lvh.me/p:8080"} {
-		if got, err := Destination(host, hosts); err != nil || got != want {
-			t.Fatalf("Destination(%q) = %q %v, want %q", host, got, err, want)
+	for _, test := range []struct{ host, scheme, want string }{
+		{"shop.lvh.me", "https", "/d:shop.lvh.me"},
+		{"shop.lvh.me:443", "https", "/d:shop.lvh.me"},
+		{"shop.lvh.me:8443", "https", "/d:shop.lvh.me/p:8443"},
+		{"shop.lvh.me", "http", "/d:shop.lvh.me/s:http"},
+		{"shop.lvh.me:80", "http", "/d:shop.lvh.me/s:http"},
+		{"Shop.LVH.me.:8080", "http", "/d:shop.lvh.me/p:8080/s:http"},
+		{"shop.lvh.me:443", "http", "/d:shop.lvh.me/p:443/s:http"},
+	} {
+		if got, err := Destination(test.host, test.scheme, hosts); err != nil || got != test.want {
+			t.Fatalf("Destination(%q, %s) = %q %v, want %q", test.host, test.scheme, got, err, test.want)
 		}
 	}
 	for _, host := range []string{"other.test", "a/../b.lvh.me", "shop.lvh.me:0", "shop.lvh.me:x", "", "sh op.lvh.me"} {
-		if got, err := Destination(host, hosts); err == nil {
+		if got, err := Destination(host, "https", hosts); err == nil {
 			t.Fatalf("Destination(%q) = %q, want an error", host, got)
 		}
 	}
@@ -192,18 +200,19 @@ func TestSafeRedirectRejectsAuthorityAndCallbackPaths(t *testing.T) {
 	}
 }
 
-func TestSecureFollowsAuthCogLocalRules(t *testing.T) {
-	for _, target := range []string{"http://dboss.lvh.me/", "http://dboss.lvh.me:8081/", "http://127.0.0.1:3100/"} {
-		if secure(httptest.NewRequest(http.MethodGet, target, nil)) {
-			t.Fatalf("%s should use an HTTP callback", target)
+func TestSchemeIsWhatTheRequestUsed(t *testing.T) {
+	for _, target := range []string{"http://dboss.lvh.me/", "http://dboss.example.com/", "http://127.0.0.1:3100/"} {
+		if got := Scheme(httptest.NewRequest(http.MethodGet, target, nil)); got != "http" {
+			t.Fatalf("%s: scheme = %s, want http", target, got)
 		}
 	}
-	forwarded := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me/", nil)
-	forwarded.Header.Set("X-Forwarded-Proto", "https")
-	if !secure(forwarded) {
-		t.Fatal("forwarded HTTPS should use an HTTPS callback")
+	forwarded := httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil)
+	forwarded.Header.Set("X-Forwarded-Proto", "HTTPS, http")
+	if Scheme(forwarded) != "https" || !secure(forwarded) {
+		t.Fatal("the edge's X-Forwarded-Proto should win")
 	}
-	if !secure(httptest.NewRequest(http.MethodGet, "http://dboss.example.com/", nil)) {
-		t.Fatal("non-local AuthCog destination should use an HTTPS callback")
+	tls := httptest.NewRequest(http.MethodGet, "https://dboss.lvh.me:8443/", nil)
+	if Scheme(tls) != "https" {
+		t.Fatal("a TLS request is https")
 	}
 }

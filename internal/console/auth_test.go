@@ -216,7 +216,7 @@ func TestAuthCogRejectsCLIEmail(t *testing.T) {
 func TestAuthCogLoginAndSession(t *testing.T) {
 	auth := testAuthenticator("dboss.lvh.me")
 	auth.flow.Exchange = func(_ context.Context, _, destination, callback string) (authcog.Profile, error) {
-		if destination != "/d:dboss.lvh.me/p:8081" || callback != "verified-callback" {
+		if destination != "/d:dboss.lvh.me/p:8081/s:http" || callback != "verified-callback" {
 			t.Fatalf("unexpected exchange: %s %s", destination, callback)
 		}
 		return authcog.Profile{Email: "admin@example.com"}, nil
@@ -234,7 +234,7 @@ func TestAuthCogLoginAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if login.Host != "auth.authcog.com" || login.Path != "/d:dboss.lvh.me/p:8081" || login.Query().Get("redirect_to") != "/?view=fleet" {
+	if login.Host != "auth.authcog.com" || login.Path != "/d:dboss.lvh.me/p:8081/s:http" || login.Query().Get("redirect_to") != "/?view=fleet" {
 		t.Fatalf("unexpected login URL: %s", login)
 	}
 	state := login.Query().Get("state")

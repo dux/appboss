@@ -683,7 +683,7 @@ authcog:
   realm: auth      # auth.authcog.com
 ```
 
-The app links to `path`. dboss mints the challenge, sends the browser to `https://<realm>.authcog.com/d:<host>`, and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own `path` route with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
+The app links to `path`. dboss mints the challenge, sends the browser to `https://<realm>.authcog.com/d:<host>[/p:<port>][/s:http]` (the port only when it is not the scheme's default, the scheme only when the request was not https; it is read from TLS or the edge's `X-Forwarded-Proto`), and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own `path` route with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
 
 Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `authcog` login, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
 

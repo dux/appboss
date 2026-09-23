@@ -108,9 +108,10 @@ func NewWithKey(key []byte) *Flow {
 	return flow
 }
 
-// Start redirects the browser to AuthCog, which sends it back to the request host.
+// Start redirects the browser to AuthCog, which sends it back to the scheme, host and port the
+// request arrived on.
 func (f *Flow) Start(w http.ResponseWriter, r *http.Request, gate Gate) {
-	destination, err := Destination(r.Host, gate.Hosts)
+	destination, err := Destination(r.Host, Scheme(r), gate.Hosts)
 	if err != nil {
 		http.Error(w, "invalid authentication destination", http.StatusBadRequest)
 		return
@@ -184,7 +185,7 @@ func (f *Flow) verify(w http.ResponseWriter, r *http.Request, gate Gate) (challe
 		http.Error(w, "expired authentication callback", http.StatusBadRequest)
 		return challenge{}, Profile{}, false
 	}
-	destination, err := Destination(r.Host, gate.Hosts)
+	destination, err := Destination(r.Host, Scheme(r), gate.Hosts)
 	if err != nil || destination != pending.destination || pending.audience != gate.Audience {
 		http.Error(w, "authentication destination changed", http.StatusBadRequest)
 		return challenge{}, Profile{}, false
@@ -295,9 +296,10 @@ func (f *Flow) sign(value string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// Destination turns a request host into the AuthCog destination path, or fails when the gate
-// does not answer for that host.
-func Destination(rawHost string, hosts func(string) bool) (string, error) {
+// Destination is the AuthCog path that brings the browser back to where it started:
+// /d:<host>, then /p:<port> when the port is not the scheme's default, then /s:http when the
+// request was not https. It fails when the gate does not answer for the host.
+func Destination(rawHost, scheme string, hosts func(string) bool) (string, error) {
 	host, port := rawHost, ""
 	if parsedHost, parsedPort, err := net.SplitHostPort(rawHost); err == nil {
 		host, port = parsedHost, parsedPort
@@ -314,10 +316,17 @@ func Destination(rawHost string, hosts func(string) bool) (string, error) {
 		if value, err := strconv.Atoi(port); err != nil || value < 1 || value > 65535 {
 			return "", errors.New("invalid port")
 		}
-		destination += "/p:" + port
+		if port != defaultPorts[scheme] {
+			destination += "/p:" + port
+		}
+	}
+	if scheme != "https" {
+		destination += "/s:" + scheme
 	}
 	return destination, nil
 }
+
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
 
 func safeRedirect(target, callbackPath string) string {
 	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.Contains(target, "\\") || strings.HasPrefix(target, callbackPath) {
@@ -326,27 +335,20 @@ func safeRedirect(target, callbackPath string) string {
 	return target
 }
 
-// Scheme is the scheme the browser used, which is what an Origin header must match.
+// Scheme is the scheme the browser used: https over TLS, else the first X-Forwarded-Proto an
+// edge such as Cloudflare set, else http. The AuthCog return address, the Secure cookie flag and
+// the console's Origin check all follow it.
 func Scheme(r *http.Request) string {
-	if secure(r) {
+	if r.TLS != nil {
 		return "https"
+	}
+	if proto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])); proto == "https" || proto == "http" {
+		return proto
 	}
 	return "http"
 }
 
-// secure follows AuthCog's rule for local development: localhost, *.lvh.me and bare IPs are
-// plain http, every other host is served over https by the edge.
-func secure(r *http.Request) bool {
-	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
-		return true
-	}
-	host := r.Host
-	if parsedHost, _, err := net.SplitHostPort(r.Host); err == nil {
-		host = parsedHost
-	}
-	local := strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".lvh.me") || net.ParseIP(strings.Trim(host, "[]")) != nil
-	return !local
-}
+func secure(r *http.Request) bool { return Scheme(r) == "https" }
 
 func RandomToken() (string, error) {
 	data := make([]byte, 32)

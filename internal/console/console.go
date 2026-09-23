@@ -144,7 +144,7 @@ func (h *Handler) loginURL(issue func() (string, error)) (local, public string, 
 // consoleHost accepts the configured management hostname, which AuthCog can sign in, and the
 // loopback names that only the CLI login can sign in.
 func (h *Handler) consoleHost(rawHost string) bool {
-	if _, err := authcog.Destination(rawHost, h.auth.gate.Hosts); err == nil {
+	if _, err := authcog.Destination(rawHost, "https", h.auth.gate.Hosts); err == nil {
 		return true
 	}
 	return loopbackHost(rawHost)

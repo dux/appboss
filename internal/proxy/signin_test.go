@@ -37,7 +37,7 @@ func signInCookieFor(t *testing.T, handler *Handler, snapshot supervisor.Snapsho
 	t.Helper()
 	start := serveFeature(t, handler, snapshot, browser("http://demo.test:8080/reports?page=2"))
 	login, err := url.Parse(start.Header().Get("Location"))
-	if err != nil || start.Code != http.StatusFound || login.Host != "auth.authcog.com" || login.Path != "/d:demo.test/p:8080" {
+	if err != nil || start.Code != http.StatusFound || login.Host != "auth.authcog.com" || login.Path != "/d:demo.test/p:8080/s:http" {
 		t.Fatalf("unexpected sign-in redirect: %d %s", start.Code, start.Header().Get("Location"))
 	}
 	callback := browser("http://demo.test:8080" + signInCallbackPath + "?callback=verified&state=" + url.QueryEscape(login.Query().Get("state")))

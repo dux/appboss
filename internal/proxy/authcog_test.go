@@ -47,7 +47,7 @@ func TestAuthCogHandsTheProfileToTheApp(t *testing.T) {
 
 	start := serveFeature(t, handler, snapshot, browser("http://demo.test:8080/authcog"))
 	login, err := url.Parse(start.Header().Get("Location"))
-	if err != nil || start.Code != http.StatusFound || login.Host != "auth.authcog.com" || login.Path != "/d:demo.test/p:8080" {
+	if err != nil || start.Code != http.StatusFound || login.Host != "auth.authcog.com" || login.Path != "/d:demo.test/p:8080/s:http" {
 		t.Fatalf("unexpected login redirect: %d %s", start.Code, start.Header().Get("Location"))
 	}
 	if state := login.Query().Get("state"); state == "" {
