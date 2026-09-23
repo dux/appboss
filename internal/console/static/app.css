@@ -610,7 +610,7 @@ input[type="radio"] {
   text-decoration: underline;
 }
 
-.app-branch {
+.app-name .app-branch {
   margin-left: 6px;
   color: var(--muted);
   font-family: var(--mono);

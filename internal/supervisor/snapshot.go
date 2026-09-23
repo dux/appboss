@@ -66,8 +66,9 @@ type Snapshot struct {
 	Maintenance bool   `json:"maintenance"`
 	Draining    bool   `json:"draining,omitempty"`
 	Dir         string `json:"dir"`
-	// Branch is the git branch the app runs, when known.
-	Branch string `json:"branch,omitempty"`
+	// Branch is the git branch the app runs and BranchURL its page on the git host, when known.
+	Branch    string `json:"branch,omitempty"`
+	BranchURL string `json:"branch_url,omitempty"`
 	// Pages is the app's own pages folder, resolved against Dir.
 	Pages           string               `json:"pages"`
 	Hosts           []string             `json:"hosts"`

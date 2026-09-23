@@ -36,8 +36,10 @@ type App struct {
 	Env     map[string]string `json:"-"`
 	FileEnv map[string]string `json:"-"`
 	Config  config.App        `json:"config"`
-	// Branch is the git branch the app runs, empty when unknown (see gitBranch).
-	Branch string `json:"branch,omitempty"`
+	// Branch is the git branch the app runs and BranchURL its page on the git host, each empty
+	// when unknown (see gitSource).
+	Branch    string `json:"branch,omitempty"`
+	BranchURL string `json:"branch_url,omitempty"`
 }
 
 // CronJob is one scheduled command with its schedule parsed once at load time.
@@ -224,30 +226,8 @@ func buildApp(name, dir string, appCfg config.App) (*App, error) {
 		}
 		merge(fileEnv, values)
 	}
-	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: buildHooks(appCfg.Hooks), Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg, Branch: gitBranch(dir, fileEnv)}, nil
-}
-
-// gitBranch is the branch checked out in dir, else GIT_BRANCH from the app's .env files: a
-// packed release (lux-deploy) has no .git, so the deploy writes the branch there instead. A
-// detached HEAD or neither source gives "".
-func gitBranch(dir string, fileEnv map[string]string) string {
-	gitDir := filepath.Join(dir, ".git")
-	// a worktree or submodule has a .git file pointing at the real git dir
-	if data, err := os.ReadFile(gitDir); err == nil {
-		if target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: "); ok {
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(dir, target)
-			}
-			gitDir = target
-		}
-	}
-	if head, err := os.ReadFile(filepath.Join(gitDir, "HEAD")); err == nil {
-		if branch, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: refs/heads/"); ok {
-			return branch
-		}
-		return ""
-	}
-	return strings.TrimSpace(fileEnv["GIT_BRANCH"])
+	branch, branchURL := gitSource(dir, fileEnv)
+	return &App{Name: name, Dir: dir, Commands: commands, Cron: cron, Hooks: buildHooks(appCfg.Hooks), Lifecycle: buildLifecycle(appCfg.Lifecycle), Env: env, FileEnv: fileEnv, Config: appCfg, Branch: branch, BranchURL: branchURL}, nil
 }
 
 // newCommand is one config command line, run through /bin/sh -c; config has already refused an
