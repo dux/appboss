@@ -103,6 +103,7 @@
     session_ttl: 24h
     basic_auth:
       alice: "$2a$10$..."   # dboss password
+      bob: secret           # plain password
     allow_ips:
       - 10.0.0.0/8
 
@@ -449,7 +450,7 @@
           <li>A session is issued for one app: it opens neither another app nor the console.</li>
           <li><code>basic_auth</code> is independent: when both are set, both must pass.</li>
         </ul>
-        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs (address ranges such as <code>10.0.0.0/8</code>), matched against the client address.</p>
+        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a plain password or a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs (address ranges such as <code>10.0.0.0/8</code>), matched against the client address.</p>
         <p><code>proxy.cloudflare: true</code> accepts connections only from Cloudflare's published ranges, built into dboss, and from the box itself; anything else gets <code>403</code>. The client address then comes from <code>CF-Connecting-IP</code>, which only Cloudflare can set. Without it the client address is the connection's own.</p>
         <ul>
           <li>A request with no or wrong credentials, or without a sign-in session, stops at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.</li>

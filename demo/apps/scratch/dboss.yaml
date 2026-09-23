@@ -13,6 +13,7 @@ deletable: true
 # carries the header below.
 basic_auth:
   demo: "$2a$10$sQ6B5qGkRCSRyLNRdW8mSeyIwkun.qYi/Hvp9umtxGcBJztuIB/P2"
+  demo2: demo2
 headers:
   X-Frame-Options: DENY
 

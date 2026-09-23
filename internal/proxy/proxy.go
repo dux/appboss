@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -121,7 +123,8 @@ func allowed(ip string, prefixes []netip.Prefix) bool {
 }
 
 // authorized checks basic_auth. The user lookup is a plain map hit because the user list is not
-// secret; the password comparison is bcrypt's own constant-time compare.
+// secret. A value bcrypt can parse is a hash and goes through bcrypt's compare; anything else is a
+// plain password, compared in constant time over sha256 digests so its length does not leak.
 func authorized(r *http.Request, snapshot supervisor.Snapshot) bool {
 	if len(snapshot.Web.BasicAuth) == 0 {
 		return true
@@ -130,8 +133,15 @@ func authorized(r *http.Request, snapshot supervisor.Snapshot) bool {
 	if !ok {
 		return false
 	}
-	hash, found := snapshot.Web.BasicAuth[user]
-	return found && bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	want, found := snapshot.Web.BasicAuth[user]
+	if !found {
+		return false
+	}
+	if _, err := bcrypt.Cost([]byte(want)); err == nil {
+		return bcrypt.CompareHashAndPassword([]byte(want), []byte(password)) == nil
+	}
+	got, expected := sha256.Sum256([]byte(password)), sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(got[:], expected[:]) == 1
 }
 
 // serveStatic answers GET and HEAD for files under the static directory. Missing files and

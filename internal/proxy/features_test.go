@@ -187,6 +187,19 @@ func TestBasicAuthProtectsStaticToo(t *testing.T) {
 	}
 }
 
+func TestBasicAuthAcceptsPlainPassword(t *testing.T) {
+	snapshot := featureSnapshot(t, "basic_auth:\n  alice: secret\n")
+	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	request.SetBasicAuth("alice", "secre")
+	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password accepted: %d", response.Code)
+	}
+	request.SetBasicAuth("alice", "secret")
+	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code == http.StatusUnauthorized {
+		t.Fatalf("plain password rejected: %d", response.Code)
+	}
+}
+
 // A request that fails basic auth must stop at the auth stage. The feature handler has no manager,
 // so reaching the wake stage for this stopped app would panic instead of answering 401.
 func TestUnauthorizedRequestNeverWakesAStoppedApp(t *testing.T) {

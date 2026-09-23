@@ -451,7 +451,7 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"web key under process", "procfile:\n  web: ./server\nprocesses:\n  web:\n    static: ./public\n", "processes.web.static: unknown key"},
 		{"canonical host", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    canonical_host: www.demo.test\n", "not one of the hosts"},
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
-		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
+		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: \"\"\n", "password is empty"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
 		{"auth email", "procfile:\n  web: ./server\nauth: [not-an-email]\n", "auth: invalid entry"},
 		{"auth domain pattern", "procfile:\n  web: ./server\nauth: [\"*@bad domain\"]\n", "auth: invalid domain"},

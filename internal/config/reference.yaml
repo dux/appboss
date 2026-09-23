@@ -275,10 +275,12 @@ defaults:
   # partial upload. A declared or chunked body over the limit answers 413 without forwarding.
   max_body: 0
 
-  # HTTP basic auth: user -> bcrypt hash, generated with `dboss password`. Empty = open.
+  # HTTP basic auth: user -> plain password or bcrypt hash (generated with `dboss password`).
+  # A value bcrypt can parse is a hash, anything else is the password itself. Empty = open.
   # Set globally on a staging box to protect every app with one line. Applies to static files too.
   basic_auth: {}
   #   alice: "$2a$10$..."
+  #   bob: secret
 
   # CIDRs allowed to reach the app; empty = everyone. Behind proxy.cloudflare the client address
   # is CF-Connecting-IP, not the Cloudflare edge address.

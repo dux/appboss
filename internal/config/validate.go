@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"dboss/internal/notify"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 func (c Config) Validate() error { return c.validate(c.Dev()) }
@@ -216,12 +214,12 @@ func validateWeb(w Web) error {
 	if _, err := parsePrefixes(w.AllowIPs); err != nil {
 		return err
 	}
-	for user, hash := range w.BasicAuth {
+	for user, password := range w.BasicAuth {
 		if user == "" || strings.ContainsAny(user, ": ") {
 			return keyErr("basic_auth", "invalid user %q", user)
 		}
-		if _, err := bcrypt.Cost([]byte(hash)); err != nil {
-			return &Error{Key: "basic_auth." + user, Message: "must be a bcrypt hash", Hint: "run `dboss password` to print one"}
+		if password == "" {
+			return &Error{Key: "basic_auth." + user, Message: "password is empty"}
 		}
 	}
 	for name := range w.Headers {

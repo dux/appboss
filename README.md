@@ -659,13 +659,14 @@ The one bridge without code is a procfile wrapper (`docker run -p 127.0.0.1:$POR
 ## Access control
 
 `basic_auth` puts HTTP basic auth in front of the whole app, static files included.
-It maps a user to a bcrypt hash printed by `dboss password`; set it under `defaults:` in the host file to protect every app on a staging box with one block.
+It maps a user to a plain password or a bcrypt hash printed by `dboss password`; set it under `defaults:` in the host file to protect every app on a staging box with one block.
 `allow_ips` limits the app to a list of CIDRs (address ranges such as `10.0.0.0/8`), matched against the client address.
 Behind Cloudflare set `proxy.cloudflare: true` in the host file: only Cloudflare's published ranges (built in) and the box itself may connect, and the client address comes from `CF-Connecting-IP`, which then cannot be spoofed.
 
 ```yaml
 basic_auth:
   alice: "$2a$10$..."   # dboss password
+  bob: secret           # plain password
 allow_ips:
   - 10.0.0.0/8
 ```

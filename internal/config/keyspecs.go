@@ -84,7 +84,7 @@ var keySpecs = map[string]KeySpec{
 	"static_immutable":  {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under the static directory cached as immutable for a year", Example: "[/assets/, /packs/]"},
 	"static_extensions": {Block: "web", Name: "Static extensions", Description: "file extensions served from the static directory, without the dot; empty serves any file", Example: "[css, js, png]"},
 	"max_body":          {Block: "web", Name: "Max body size", Description: "request body limit; 0 none"},
-	"basic_auth":        {Block: "web", Name: "Basic auth users", Description: "HTTP basic auth users to bcrypt hashes from dboss password", Example: "{alice: \"$2a$10$...\"}", Secret: true},
+	"basic_auth":        {Block: "web", Name: "Basic auth users", Description: "HTTP basic auth users to a plain password or a bcrypt hash from dboss password", Example: "{alice: \"$2a$10$...\"}", Secret: true},
 	"allow_ips":         {Block: "web", Name: "Allowed IPs", Description: "CIDRs allowed to reach the app; empty allows everyone", Example: "[10.0.0.0/8]"},
 	"headers":           {Block: "web", Name: "Response headers", Description: "response headers added to every response; an empty value removes one", Example: "{X-Frame-Options: DENY}"},
 
