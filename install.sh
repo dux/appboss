@@ -211,6 +211,12 @@ case "$mode" in
 		;;
 	dev)
 		scaffold
+		# `dboss start` inside an app folder also serves HTTPS from a local certificate authority;
+		# trusting it now saves the browser warning later. A release without the command, or a
+		# refused prompt, only warns: the install itself is done.
+		if "$bin" help trust >/dev/null 2>&1; then
+			"$bin" trust || printf 'dboss: warning: the local certificate authority is not trusted; run `dboss trust` later\n' >&2
+		fi
 		cat <<-EOF
 
 			next: cd $host_dir && dboss start
