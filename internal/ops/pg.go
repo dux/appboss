@@ -114,9 +114,9 @@ func (s *Service) deleteBackup(id string) error {
 }
 
 // PGBackupConfig returns the effective PostgreSQL backup policy.
-func (s *Service) PGBackupConfig() config.PostgresBackup {
+func (s *Service) PGBackupConfig() config.PostgresBackups {
 	if s.pg == nil {
-		return config.PostgresBackup{}
+		return config.PostgresBackups{}
 	}
 	return s.pg.BackupConfig()
 }

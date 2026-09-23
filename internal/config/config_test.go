@@ -60,7 +60,7 @@ func TestLoadHostMergesDefaultsAndRejectsUnknownKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Apps != filepath.Join(dir, "apps") || cfg.Defaults.IdleStop.Value() != 2*time.Hour || cfg.Ports.Range[0] != 3100 {
+	if cfg.Apps != filepath.Join(dir, "apps") || cfg.Defaults.IdleStop.Value() != 2*time.Hour || cfg.Ports[0] != 3100 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if cfg.Dir != dir || cfg.App != nil || cfg.Socket != filepath.Join(dir, ".dboss", "dboss.sock") {
@@ -118,22 +118,18 @@ func TestManagementPublicURLDerivesFromHost(t *testing.T) {
 	if url := cfg.Management.PublicURL(); url != "https://dboss.example.com" {
 		t.Fatalf("derived management url = %q", url)
 	}
-	cfg.Management.URL = "http://dboss.example.com/"
-	if url := cfg.Management.PublicURL(); url != "http://dboss.example.com" {
-		t.Fatalf("url override = %q", url)
-	}
 }
 
-func TestCloudflareOnlyLoads(t *testing.T) {
+func TestCloudflareLoads(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	writeConfigFile(t, path, "proxy:\n  cloudflare_only: true\n")
+	writeConfigFile(t, path, "proxy:\n  cloudflare: true\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Proxy.CloudflareOnly {
-		t.Fatal("cloudflare_only did not load")
+	if !cfg.Proxy.Cloudflare {
+		t.Fatal("cloudflare did not load")
 	}
 }
 
@@ -248,15 +244,15 @@ func TestListKeysAcceptScalarOrSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, FileName)
-	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", 127.0.0.1:8081]\n  trusted_cidrs: 10.0.0.0/8\nmanagement:\n  host: [dboss.example.com, dboss.internal]\n  auth:\n    admin_emails: admin@example.com\n")
+	writeConfigFile(t, path, "apps: ./apps\nproxy:\n  listen: [\":8080\", 127.0.0.1:8081]\nmanagement:\n  host: [dboss.example.com, dboss.internal]\n  admins: admin@example.com\n")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(cfg.Proxy.Listen, ",") != ":8080,127.0.0.1:8081" || strings.Join(cfg.Management.Host, ",") != "dboss.example.com,dboss.internal" || strings.Join(cfg.Proxy.TrustedCIDRs, ",") != "10.0.0.0/8" || strings.Join(cfg.Management.Auth.AdminEmails, ",") != "admin@example.com" {
-		t.Fatalf("unexpected lists: listen=%v host=%v cidrs=%v emails=%v", cfg.Proxy.Listen, cfg.Management.Host, cfg.Proxy.TrustedCIDRs, cfg.Management.Auth.AdminEmails)
+	if strings.Join(cfg.Proxy.Listen, ",") != ":8080,127.0.0.1:8081" || strings.Join(cfg.Management.Host, ",") != "dboss.example.com,dboss.internal" || strings.Join(cfg.Management.Admins, ",") != "admin@example.com" {
+		t.Fatalf("unexpected lists: listen=%v host=%v admins=%v", cfg.Proxy.Listen, cfg.Management.Host, cfg.Management.Admins)
 	}
-	writeConfigFile(t, path, "apps: ./apps\nmanagement:\n  host: [dboss.example.com, dboss.Example.com]\n  auth:\n    admin_emails: admin@example.com\n")
+	writeConfigFile(t, path, "apps: ./apps\nmanagement:\n  host: [dboss.example.com, dboss.Example.com]\n  admins: admin@example.com\n")
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("duplicate management host = %v", err)
 	}
@@ -273,49 +269,13 @@ func TestManagementRequiresAuthAndProxyListener(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing admin email error")
 	}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	cfg.Management.Admins = []string{"admin@example.com"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Proxy.Listen = nil
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected missing proxy listener error")
-	}
-}
-
-func TestManagementURLMustMatchAHost(t *testing.T) {
-	cfg := Default()
-	cfg.Apps = "/apps"
-	cfg.Management.Host = List{"dboss.example.com"}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
-	for value, wantErr := range map[string]string{
-		"https://dboss.example.com":      "",
-		"http://dboss.Example.com:8080/": "",
-		"dboss.example.com":              "invalid URL",
-		"ftp://dboss.example.com":        "invalid URL",
-		"https://other.example.com":      "not one of management.host",
-	} {
-		cfg.Management.URL = value
-		err := cfg.Validate()
-		if wantErr == "" && err != nil {
-			t.Errorf("%q: unexpected error %v", value, err)
-		}
-		if wantErr != "" && (err == nil || !strings.Contains(err.Error(), wantErr)) {
-			t.Errorf("%q: error = %v, want %q", value, err, wantErr)
-		}
-	}
-}
-
-func TestTrustedCIDRsMustParse(t *testing.T) {
-	cfg := Default()
-	cfg.Apps = "/apps"
-	cfg.Proxy.TrustedCIDRs = []string{"173.245.48.0/20", "2400:cb00::/32"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	cfg.Proxy.TrustedCIDRs = []string{"173.245.48.0"}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected invalid cidr error")
 	}
 }
 
@@ -493,15 +453,13 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: secret\n", "bcrypt"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
-		{"auth email", "procfile:\n  web: ./server\nauth:\n  allow_emails: [not-an-email]\n", "auth.allow_emails"},
-		{"auth domain pattern", "procfile:\n  web: ./server\nauth:\n  allow_emails: [\"*@bad domain\"]\n", "auth.allow_emails"},
-		{"auth duplicate", "procfile:\n  web: ./server\nauth:\n  allow_emails: [a@b.com, A@B.com]\n", "duplicate"},
-		{"auth session ttl", "procfile:\n  web: ./server\nauth:\n  session_ttl: 0s\n", "auth.session_ttl"},
-		{"authcog empty path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: \"\"\n", "authcog.path"},
-		{"authcog bad path", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  path: bad\n", "authcog.path"},
-		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: /authcog\nauthcog:\n  login: true\n", "authcog.path"},
-		{"authcog bad realm", "procfile:\n  web: ./server\nauthcog:\n  login: true\n  realm: a.b\n", "authcog.realm"},
-		{"alerts window", "procfile:\n  web: ./server\nalerts:\n  window: 0s\n", "alerts.window"},
+		{"auth email", "procfile:\n  web: ./server\nauth: [not-an-email]\n", "auth: invalid entry"},
+		{"auth domain pattern", "procfile:\n  web: ./server\nauth: [\"*@bad domain\"]\n", "auth: invalid domain"},
+		{"auth duplicate", "procfile:\n  web: ./server\nauth: [a@b.com, A@B.com]\n", "duplicate"},
+		{"session ttl", "procfile:\n  web: ./server\nsession_ttl: 0s\n", "session_ttl"},
+		{"authcog bad path", "procfile:\n  web: ./server\nauthcog: bad\n", "authcog"},
+		{"authcog mapping", "procfile:\n  web: ./server\nauthcog: [a]\n", "authcog"},
+		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: /authcog\nauthcog: true\n", "collides with authcog"},
 		{"alerts error rate", "procfile:\n  web: ./server\nalerts:\n  error_rate: 101\n", "alerts.error_rate"},
 		{"alerts slow p95", "procfile:\n  web: ./server\nalerts:\n  slow_p95: -1s\n", "alerts.slow_p95"},
 	} {
@@ -514,42 +472,49 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 
 func TestAuthAllowsEmailsAndDomains(t *testing.T) {
 	defaults := Default().Defaults
-	defaults.Auth.AllowEmails = List{"ops@host.test"}
-	open, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: []\n"), "dboss.yaml", defaults)
-	if err != nil || open.Auth.Enabled() {
+	defaults.Auth = List{"ops@host.test"}
+	open, err := ParseApp([]byte("procfile:\n  web: ./server\nauth: []\n"), "dboss.yaml", defaults)
+	if err != nil || len(open.Auth) != 0 {
 		t.Fatalf("an empty app list must replace the host list: %v %+v", err, open.Auth)
 	}
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: [Ana@Example.com, \"*@team.test\"]\n"), "dboss.yaml", defaults)
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauth: [Ana@Example.com, \"*@team.test\"]\nsession_ttl: 8h\n"), "dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !app.Auth.Enabled() || app.Auth.SessionTTL.Value() != 24*time.Hour {
-		t.Fatalf("unexpected auth: %+v", app.Auth)
+	if len(app.Auth) != 2 || app.SessionTTL.Value() != 8*time.Hour {
+		t.Fatalf("unexpected auth: %+v %v", app.Auth, app.SessionTTL)
 	}
-	anyone, err := ParseApp([]byte("procfile:\n  web: ./server\nauth:\n  allow_emails: [\"*\"]\n"), "dboss.yaml", defaults)
-	if err != nil || !anyone.Auth.Allows("eve@example.com") || anyone.Auth.Allows("not-an-email") {
+	anyone, err := ParseApp([]byte("procfile:\n  web: ./server\nauth: \"*\"\n"), "dboss.yaml", defaults)
+	if err != nil || !anyone.AuthAllows("eve@example.com") || anyone.AuthAllows("not-an-email") {
 		t.Fatalf("* must admit any signed-in address: %v %+v", err, anyone.Auth)
 	}
 	for email, want := range map[string]bool{"ana@example.com": true, "ANA@example.com": true, "bo@team.test": true, "bo@sub.team.test": false, "ops@host.test": false, "eve@example.com": false, "team.test": false} {
-		if got := app.Auth.Allows(email); got != want {
-			t.Errorf("Allows(%q) = %v, want %v", email, got, want)
+		if got := app.AuthAllows(email); got != want {
+			t.Errorf("AuthAllows(%q) = %v, want %v", email, got, want)
 		}
 	}
 }
 
-func TestAuthCogOverrideKeyByKey(t *testing.T) {
+func TestAuthCogIsTrueFalseOrAPath(t *testing.T) {
+	for data, want := range map[string]AuthCogPath{
+		"authcog: true\n":   "/authcog",
+		"authcog: /login\n": "/login",
+		"authcog: false\n":  "",
+		"":                  "",
+	} {
+		app, err := ParseApp([]byte("procfile:\n  web: ./server\n"+data), "dboss.yaml", Default().Defaults)
+		if err != nil {
+			t.Fatalf("%q: %v", data, err)
+		}
+		if app.AuthCog != want || app.AuthCog.Enabled() != (want != "") {
+			t.Errorf("%q: authcog = %q, want %q", data, app.AuthCog, want)
+		}
+	}
 	defaults := Default().Defaults
-	defaults.AuthCog.Login = true
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauthcog:\n  realm: shop\n"), "dboss.yaml", defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := AuthCog{Login: true, Path: "/authcog", Realm: "shop"}
-	if app.AuthCog != want || !app.AuthCog.Enabled() || app.AuthCog.RealmHost() != "shop.authcog.com" {
-		t.Fatalf("authcog = %+v, want %+v", app.AuthCog, want)
-	}
-	if got := Default().Defaults.AuthCog; got != (AuthCog{Path: "/authcog", Realm: "auth"}) {
-		t.Fatalf("unexpected authcog defaults: %+v", got)
+	defaults.AuthCog = "/authcog"
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nauthcog: false\n"), "dboss.yaml", defaults)
+	if err != nil || app.AuthCog.Enabled() {
+		t.Fatalf("an app must be able to turn the host default off: %v %q", err, app.AuthCog)
 	}
 }
 
@@ -560,7 +525,7 @@ func TestAlertsOverrideKeyByKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Alerts{Window: Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 25, SlowP95: Duration(2 * time.Second)}
+	want := Alerts{ErrorRate: 25, SlowP95: Duration(2 * time.Second)}
 	if app.Alerts != want || !app.Alerts.Enabled() {
 		t.Fatalf("alerts = %+v, want %+v", app.Alerts, want)
 	}
@@ -587,15 +552,13 @@ func TestEnvExpansion(t *testing.T) {
 
 	const hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 	cfg, err := Parse([]byte(`apps: ./apps
-state_dir: /var/lib/$DBOSS_TEST_HOST
+dir: /var/lib/$DBOSS_TEST_HOST
+ports: [$DBOSS_TEST_COUNT, 3000]
 proxy:
   listen: [":8080"]
-  wake:
-    retry_after: $DBOSS_TEST_COUNT
 management:
   host: [$DBOSS_TEST_HOST]
-  auth:
-    admin_emails: [admin@example.com]
+  admins: [admin@example.com]
 defaults:
   idle_stop: $DBOSS_TEST_IDLE
   memory_max: $DBOSS_TEST_MAX
@@ -609,11 +572,11 @@ defaults:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.StateDir != "/var/lib/myapp.com" {
-		t.Errorf("state_dir = %q", cfg.StateDir)
+	if cfg.RuntimeDir != "/var/lib/myapp.com" || cfg.StateDir != "/var/lib/myapp.com/state" {
+		t.Errorf("dir = %q, state = %q", cfg.RuntimeDir, cfg.StateDir)
 	}
-	if cfg.Proxy.Wake.RetryAfter != 2 {
-		t.Errorf("retry_after = %d, want 2", cfg.Proxy.Wake.RetryAfter)
+	if cfg.Ports[0] != 2 {
+		t.Errorf("ports = %v, want [2, 3000]", cfg.Ports)
 	}
 	if cfg.Management.Host[0] != "myapp.com" {
 		t.Errorf("management.host = %v", cfg.Management.Host)
@@ -708,9 +671,9 @@ func TestRestartRequiredListsHostKeys(t *testing.T) {
 		t.Fatalf("defaults change must apply live, got %v", keys)
 	}
 	current.Proxy.Listen = List{":81"}
-	current.Ports.Range = [2]int{4000, 4100}
+	current.Ports = [2]int{4000, 4100}
 	current.Notify.URL = "https://hooks.example"
-	if keys := RestartRequired(old, current); strings.Join(keys, ",") != "proxy,ports,notify" {
+	if keys := RestartRequired(old, current); strings.Join(keys, ",") != "ports,proxy,notify" {
 		t.Fatalf("got %v", keys)
 	}
 }
@@ -929,22 +892,6 @@ func TestConfigFolderLookupAndBaseDir(t *testing.T) {
 	}
 }
 
-// A nested block set in the app keeps every key it leaves out from defaults:.
-func TestNestedOverrideMergesKeyByKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dboss.yaml")
-	defaults := Default().Defaults
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\nalerts:\n  min_requests: 7\nauthcog:\n  realm: shop\n"), path, defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if app.Alerts.MinRequests != 7 || app.Alerts.Window != defaults.Alerts.Window || app.Alerts.ErrorRate != defaults.Alerts.ErrorRate {
-		t.Fatalf("alerts = %+v", app.Alerts)
-	}
-	if app.AuthCog.Realm != "shop" || app.AuthCog.Path != defaults.AuthCog.Path {
-		t.Fatalf("authcog = %+v", app.AuthCog)
-	}
-}
-
 func TestParseAppChecksTheProcfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	defaults := Default().Defaults
@@ -984,5 +931,77 @@ func TestLiveFollowsTheLocalOverride(t *testing.T) {
 	custom := filepath.Join(dir, "host.yaml")
 	if got := Live(custom); got != custom {
 		t.Fatalf("Live(custom) = %q", got)
+	}
+}
+
+func TestRemovedKeysNameTheirReplacement(t *testing.T) {
+	for _, test := range []struct{ name, data, want string }{
+		{"state_dir", "apps: ./apps\nstate_dir: ./state\n", "replaced by dir"},
+		{"ports.range", "apps: ./apps\nports:\n  range: [3100, 3990]\n", "ports: [3100, 3990]"},
+		{"daemon", "apps: ./apps\ndaemon:\n  log_level: debug\n", "log_level and audit_retention moved"},
+		{"trusted cidrs", "apps: ./apps\nproxy:\n  trusted_cidrs: [10.0.0.0/8]\n", "proxy.cloudflare"},
+		{"metrics token", "apps: ./apps\nmanagement:\n  metrics:\n    token: x\n", "tokens.dboss"},
+		{"admin emails", "apps: ./apps\nmanagement:\n  auth:\n    admin_emails: [a@b.com]\n", "management.admins"},
+		{"github token", "apps: ./apps\ndefaults:\n  github_token: x\n", "tokens.github"},
+		{"process key", "apps: ./apps\ndefaults:\n  restart_backoff: [1s, 2, 60s]\n", "built in"},
+		{"postgres backup", "apps: ./apps\npostgres:\n  backup:\n    databases: {}\n", "postgres.backups"},
+	} {
+		_, err := Parse([]byte(test.data), "/srv/dboss.yaml")
+		if err == nil || !strings.Contains(err.Error(), "was removed") || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: got %v, want a removal naming %q", test.name, err, test.want)
+		}
+	}
+	for _, test := range []struct{ name, data, want string }{
+		{"auth block", "procfile:\n  web: ./server\nauth:\n  allow_emails: [a@b.com]\n", "auth: [ana@example.com]"},
+		{"authcog block", "procfile:\n  web: ./server\nauthcog:\n  login: true\n", "authcog: true"},
+		{"error page", "procfile:\n  web: ./server\nerror_page_path: ./x.html\n", "error.html"},
+		{"hook secret", "procfile:\n  web: ./server\nhooks:\n  deploy:\n    command: ./d\n    secret: x\n", "tokens.dboss"},
+		{"process override", "procfile:\n  web: ./server\nprocesses:\n  web:\n    log_keep: 3\n", "built in"},
+	} {
+		_, err := ParseApp([]byte(test.data), "/srv/apps/demo/dboss.yaml", Default().Defaults)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: got %v, want an error naming %q", test.name, err, test.want)
+		}
+	}
+}
+
+func TestRuntimeDirHoldsStateLogsAndSocket(t *testing.T) {
+	cfg, err := Parse([]byte("apps: ./apps\ndir: /var/lib/dboss\n"), "/srv/dboss.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StateDir != "/var/lib/dboss/state" || cfg.LogDir != "/var/lib/dboss/log" || cfg.Socket != "/var/lib/dboss/dboss.sock" {
+		t.Fatalf("derived paths = %q %q %q", cfg.StateDir, cfg.LogDir, cfg.Socket)
+	}
+}
+
+func TestPagesResolvePerFile(t *testing.T) {
+	cfg, err := Parse([]byte("apps: ./apps\npages: ./errors\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Pages != "/srv/errors" {
+		t.Fatalf("host pages = %q, %v", cfg.Pages, err)
+	}
+	if cfg, err := Parse([]byte("apps: ./apps\n"), "/srv/dboss.yaml"); err != nil || cfg.Pages != "/srv/public/error_pages" {
+		t.Fatalf("default host pages = %q, %v", cfg.Pages, err)
+	}
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\n"), "/srv/apps/demo/dboss.yaml", Default().Defaults)
+	if err != nil || app.Pages != DefaultPages {
+		t.Fatalf("default app pages = %q, %v", app.Pages, err)
+	}
+	if _, err := Parse([]byte("apps: ./apps\ndefaults:\n  pages: ./x\n"), "/srv/dboss.yaml"); err == nil {
+		t.Fatal("pages under defaults: must be rejected, it is resolved per file")
+	}
+}
+
+func TestPostgresTakesFalseOrAMapping(t *testing.T) {
+	cfg, err := Parse([]byte("apps: ./apps\npostgres: false\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Postgres.Enabled {
+		t.Fatalf("postgres: false = %+v, %v", cfg.Postgres, err)
+	}
+	cfg, err = Parse([]byte("apps: ./apps\npostgres:\n  backups: {app: month, reports: \"\"}\n"), "/srv/dboss.yaml")
+	if err != nil || !cfg.Postgres.Enabled || cfg.Postgres.Backups.Rotation("app") != "month" || cfg.Postgres.Backups.Rotation("reports") != "week" {
+		t.Fatalf("postgres mapping = %+v, %v", cfg.Postgres, err)
+	}
+	if _, err := Parse([]byte("apps: ./apps\npostgres:\n  dns: x\n"), "/srv/dboss.yaml"); err == nil || !strings.Contains(err.Error(), "postgres.dns") {
+		t.Fatalf("unknown postgres key = %v", err)
 	}
 }

@@ -3,6 +3,9 @@ package config
 import (
 	"net/netip"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Defaults holds every app-level key. Process keys can be overridden again per process, Web
@@ -10,14 +13,12 @@ import (
 type Defaults struct {
 	Process `yaml:",inline"`
 	Web     `yaml:",inline"`
-	Deploy  `yaml:",inline"`
 }
 
 type Process struct {
 	IdleStop Duration `yaml:"idle_stop" json:"idle_stop"`
 	// Health is resolved from the web process's procfile health path; it is not a settable key.
 	Health             string            `yaml:"-" json:"-"`
-	HealthInterval     Duration          `yaml:"health_interval" json:"health_interval"`
 	LivenessInterval   Duration          `yaml:"liveness_interval" json:"liveness_interval"`
 	HealthTimeout      Duration          `yaml:"health_timeout" json:"health_timeout"`
 	UnhealthyThreshold int               `yaml:"unhealthy_threshold" json:"unhealthy_threshold"`
@@ -25,16 +26,10 @@ type Process struct {
 	StopSignal         string            `yaml:"stop_signal" json:"stop_signal"`
 	Restart            string            `yaml:"restart" json:"restart"`
 	MaxRestarts        int               `yaml:"max_restarts" json:"max_restarts"`
-	RestartReset       Duration          `yaml:"restart_reset" json:"restart_reset"`
-	RestartBackoff     []any             `yaml:"restart_backoff" json:"restart_backoff"`
-	LogMaxSize         Size              `yaml:"log_max_size" json:"log_max_size"`
-	LogKeep            int               `yaml:"log_keep" json:"log_keep"`
-	LogTailLines       int               `yaml:"log_tail_lines" json:"log_tail_lines"`
 	LogRetention       Duration          `yaml:"log_retention" json:"log_retention"`
 	StdoutRetention    Duration          `yaml:"stdout_retention" json:"stdout_retention"`
 	TmpClean           Duration          `yaml:"tmp_clean" json:"tmp_clean"`
 	Env                map[string]string `yaml:"env" json:"env"`
-	Resources          string            `yaml:"resources" json:"resources"`
 	MemoryMax          Size              `yaml:"memory_max" json:"memory_max"`
 	CPUMax             int               `yaml:"cpu_max" json:"cpu_max"`
 }
@@ -49,54 +44,56 @@ type Web struct {
 	BasicAuth        map[string]string `yaml:"basic_auth" json:"-"`
 	AllowIPs         List              `yaml:"allow_ips" json:"allow_ips"`
 	Headers          map[string]string `yaml:"headers" json:"headers"`
-	MaintenancePage  string            `yaml:"maintenance_page" json:"maintenance_page"`
-	ErrorPagePath    string            `yaml:"error_page_path" json:"error_page_path"`
 	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
-	Auth             Auth              `yaml:"auth" json:"auth"`
-	AuthCog          AuthCog           `yaml:"authcog" json:"authcog"`
-	allowPrefixes    []netip.Prefix
+	// Auth puts an AuthCog sign-in in front of the app: exact addresses, *@domain patterns and a
+	// bare * for any account; an empty list leaves the app open.
+	Auth List `yaml:"auth" json:"auth"`
+	// SessionTTL is how long a sign-in lasts, for the app gate and, on the host, the console.
+	SessionTTL    Duration    `yaml:"session_ttl" json:"session_ttl"`
+	AuthCog       AuthCogPath `yaml:"authcog" json:"authcog"`
+	allowPrefixes []netip.Prefix
 }
 
-// AuthCog is the app-only login service: dboss runs the AuthCog round trip on the app's behalf
-// and hands the profile to the app once, so the app needs no AuthCog code of its own. Login
-// turns it on; Path is the app URL dboss captures (default /authcog, matching AuthCog's own
-// default landing); Realm is the AuthCog subdomain (default auth, i.e. auth.authcog.com).
-type AuthCog struct {
-	Login bool   `yaml:"login" json:"login"`
-	Path  string `yaml:"path" json:"path"`
-	Realm string `yaml:"realm" json:"realm"`
-}
+// DefaultAuthCogPath is the app URL a bare `authcog: true` captures, matching AuthCog's own
+// default landing.
+const DefaultAuthCogPath = "/authcog"
+
+// AuthCogPath is the app-only login service: dboss runs the AuthCog round trip on the app's
+// behalf at this path and hands the profile to the app once, so the app needs no AuthCog code of
+// its own. `true` is DefaultAuthCogPath, a path sets it, `false` or empty turns it off.
+type AuthCogPath string
 
 // Enabled reports whether the app delegates login to dboss.
-func (a AuthCog) Enabled() bool { return a.Login }
+func (a AuthCogPath) Enabled() bool { return a != "" }
 
-// RealmHost is the AuthCog host the login is sent to, built from the realm label.
-func (a AuthCog) RealmHost() string {
-	realm := a.Realm
-	if realm == "" {
-		realm = "auth"
+// UnmarshalYAML accepts true, false or a path.
+func (a *AuthCogPath) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return &Error{Line: node.Line, Key: "authcog", Message: "must be true, false or a path"}
 	}
-	return realm + ".authcog.com"
+	switch node.Tag {
+	case "!!bool":
+		*a = ""
+		if node.Value == "true" {
+			*a = DefaultAuthCogPath
+		}
+		return nil
+	case "!!null":
+		*a = ""
+		return nil
+	}
+	*a = AuthCogPath(node.Value)
+	return nil
 }
 
-// Auth puts an AuthCog sign-in in front of the app. AllowEmails holds exact addresses,
-// *@domain patterns and a bare * for any account; an empty list leaves the app open.
-type Auth struct {
-	AllowEmails List     `yaml:"allow_emails" json:"allow_emails"`
-	SessionTTL  Duration `yaml:"session_ttl" json:"session_ttl"`
-}
-
-// Enabled reports whether visitors must sign in.
-func (a Auth) Enabled() bool { return len(a.AllowEmails) > 0 }
-
-// Allows reports whether a signed-in email may reach the app.
-func (a Auth) Allows(email string) bool {
+// AuthAllows reports whether a signed-in email may reach the app.
+func (w Web) AuthAllows(email string) bool {
 	email = strings.ToLower(email)
 	_, domain, found := strings.Cut(email, "@")
 	if !found {
 		return false
 	}
-	for _, entry := range a.AllowEmails {
+	for _, entry := range w.Auth {
 		entry = strings.ToLower(entry)
 		if entry == "*" || entry == email || entry == "*@"+domain {
 			return true
@@ -108,11 +105,16 @@ func (a Auth) Allows(email string) bool {
 // Alerts are the request log checks behind the error-rate and slow notify events. ErrorRate is
 // the percent of 5xx answers and SlowP95 the p95 latency that fires; 0 disables either check.
 type Alerts struct {
-	Window      Duration `yaml:"window" json:"window"`
-	MinRequests int      `yaml:"min_requests" json:"min_requests"`
-	ErrorRate   int      `yaml:"error_rate" json:"error_rate"`
-	SlowP95     Duration `yaml:"slow_p95" json:"slow_p95"`
+	ErrorRate int      `yaml:"error_rate" json:"error_rate"`
+	SlowP95   Duration `yaml:"slow_p95" json:"slow_p95"`
 }
+
+// The window the alert checks read and the requests it needs before a check runs, so a quiet
+// app never pages.
+const (
+	AlertWindow      = 5 * time.Minute
+	AlertMinRequests = 20
+)
 
 // Enabled reports whether any check is on.
 func (a Alerts) Enabled() bool { return a.ErrorRate > 0 || a.SlowP95 > 0 }

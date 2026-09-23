@@ -71,7 +71,7 @@ cd ./dboss && dboss start
 ```
 
 `--dev` creates `./dboss/apps` and writes a starter `./dboss/dboss.yaml` from `dboss init service`; `--dir` puts it somewhere else.
-Nothing is installed as a service and no `sudo` is needed: on a terminal a `proxy.listen` port this session may not bind moves to the first free port of `ports.range`, and the daemon logs the address it took.
+Nothing is installed as a service and no `sudo` is needed: on a terminal a `proxy.listen` port this session may not bind moves to the first free port of `ports`, and the daemon logs the address it took.
 Stop it with Ctrl-C, which stops every app with it.
 
 ### Production (Linux)
@@ -83,13 +83,13 @@ curl -fsSL https://raw.githubusercontent.com/dux/dboss/main/install.sh | sudo sh
 `--server` needs root once, to write `/etc/systemd/system/dboss.service`. Everything after that runs unprivileged. It:
 
 * creates `/srv/dboss/apps` and a starter `/srv/dboss/dboss.yaml` when they are not there yet (`--dir` moves the host),
-* gives the whole directory to `--user`, so `state_dir`, `log_dir`, the certificate cache and the generated hook and pubsub secrets belong to the service user from the first start,
+* gives the whole directory to `--user`, so the runtime `dir`, the certificate cache and the generated pubsub secrets belong to the service user from the first start,
 * runs `dboss check` as the gate, then `dboss systemd --install` to write, reload and enable the unit.
 
 The user must already exist - reuse the account lux-deploy rsyncs with, so releases, app-written files and logs all have one owner and the control socket needs no group setup.
 The unit runs the daemon as that user with `CAP_NET_BIND_SERVICE`, so it binds `:80` and `:443` without being root.
 
-Then set `management.host` and `management.auth.admin_emails` in `/srv/dboss/dboss.local.yaml` (server-only, gitignored, never touched by a deploy), restart, and sign in:
+Then set `management.host`, `management.admins` and `tokens.dboss` in `/srv/dboss/dboss.local.yaml` (server-only, gitignored, never touched by a deploy), restart, and sign in:
 
 ```sh
 sudo systemctl restart dboss
@@ -141,7 +141,7 @@ make demo             # builds, then runs the host session on ./demo/dboss.yaml
 ```
 
 The demo listens on `:80` and hosts three apps, and it needs no `sudo`.
-Binding port 80 normally takes root or `CAP_NET_BIND_SERVICE`, but on a terminal a `proxy.listen` port the process may not bind moves to the first free port of `ports.range` instead of failing.
+Binding port 80 normally takes root or `CAP_NET_BIND_SERVICE`, but on a terminal a `proxy.listen` port the process may not bind moves to the first free port of `ports` instead of failing.
 The startup banner names the address every app ended up on, so when the demo falls back the URLs below need that port, for example `http://bun.lvh.me:3101`.
 
 * http://dboss.lvh.me - management console
@@ -160,20 +160,21 @@ A file with `procfile` describes an app; any other file describes a host that ru
 A folder without either file is also searched in its `config/` subfolder, so an app (a Rails app, say) can keep `config/dboss.yaml`; relative paths still resolve against the app folder, and files in both places are an error.
 Every command looks for the config as `-c path`, then `$DBOSS_CONFIG`, then the current folder.
 
-Every host key has a sane default - `apps: ./apps`, `proxy.listen: ":80"`, `ports.range: [3100, 3990]`, the runtime paths under `./.dboss`, the AuthCog realm, session lifetime, metrics, upstream timeouts, wake pages and the log cadence - so a host file only names what deviates. With no config file at all, `dboss start` runs the default host: `:80`, `./apps`, console off.
+Every host key has a sane default - `apps: ./apps`, `dir: ./.dboss`, `proxy.listen: ":80"`, `ports: [3100, 3990]`, the AuthCog realm, session lifetime and the daily maintenance time - so a host file only names what deviates. The config has no tuning knobs: timeouts, rotation sizes and check cadences are built in, and a key dboss dropped fails `dboss check` with its replacement. With no config file at all, `dboss start` runs the default host: `:80`, `./apps`, console off.
 
 Host file (`./demo/dboss.yaml`):
 
 ```yaml
 management:
   host: dboss.lvh.me
-  url: http://dboss.lvh.me   # optional; defaults to https://<host>
-  auth:
-    admin_emails:
-      - you@example.com
+  admins:
+    - you@example.com
 
-ports:
-  range: [3100, 3199]
+ports: [3100, 3199]
+
+tokens:
+  github: $GITHUB_TOKEN   # outbound: dboss pulls private repos with it
+  dboss: $DBOSS_TOKEN     # inbound: hook pings and /metrics present it
 ```
 
 App file (`./demo/apps/bun/dboss.yaml`):
@@ -187,7 +188,7 @@ procfile:
 ```
 
 The proxy listens on `:80` by default and owns that port for every app; the demo uses the same address, so a hand-run session needs root or `CAP_NET_BIND_SERVICE`.
-When it does not have either and stdout is a terminal, the proxy falls back to the first free port of `ports.range` instead of exiting, so developing against an app needs no sudo; under systemd stdout is a pipe and the bind failure is still fatal.
+When it does not have either and stdout is a terminal, the proxy falls back to the first free port of `ports` instead of exiting, so developing against an app needs no sudo; under systemd stdout is a pipe and the bind failure is still fatal.
 Every process that declares `hosts` is a web process, and an app may have several, each serving its own hostnames; a process with only a command is a background worker. Running dboss inside an app folder with no hosts binds the first process to `.lvh.me`.
 Every key that takes a list also accepts a single value, so `allow_ips: 10.0.0.0/8` equals `allow_ips: [10.0.0.0/8]`.
 A leading `*.` in a host matches subdomains only; a leading `.` matches the bare domain and every subdomain, so `hosts: .myapp.com` covers `myapp.com` and `*.myapp.com`.
@@ -209,14 +210,14 @@ The suffix works at every depth and inside free-form maps such as `procfile`, `e
 Every app-level key can be set once under `defaults:` in the host file and repeated at the top level of an app file; the app value wins key by key.
 `dboss config --keys [filter]` lists every key grouped by block, with a one-line description, its default and, when useful, an example; the same list is behind the Help button in the console's Configuration view.
 `dboss config --reference` prints the long annotated reference, and `dboss config [app] -d` prints a resolved config with every default filled in.
-A dev session also serves HTTPS, so an app that needs a secure origin (secure cookies, service workers, OAuth callbacks) works locally: `:443`, or `proxy.tls.listen`, moving into `ports.range` when the port is refused, with certificates from a local certificate authority dboss keeps in your user config directory and shares across projects. Nothing is issued by Let's Encrypt and plain http keeps working. The first dev start on a terminal asks whether to trust that root (`[Y/n]`, it may ask for your password) and starts either way; `dboss trust` does the same at any time, adding it to the macOS login keychain or the Debian/Fedora store through `sudo`. Until it is trusted the banner says so and the browser warns.
+A dev session also serves HTTPS, so an app that needs a secure origin (secure cookies, service workers, OAuth callbacks) works locally: `:443`, or `proxy.tls.listen`, moving into `ports` when the port is refused, with certificates from a local certificate authority dboss keeps in your user config directory and shares across projects. Nothing is issued by Let's Encrypt and plain http keeps working. The first dev start on a terminal asks whether to trust that root (`[Y/n]`, it may ask for your password) and starts either way; `dboss trust` does the same at any time, adding it to the macOS login keychain or the Debian/Fedora store through `sudo`. Until it is trusted the banner says so and the browser warns.
 `dboss init` prints a fully commented starter config, service or app, with every key shown with its default or an example; save it with `dboss init > dboss.yaml`.
 
 ```
-$ dboss config --keys interval
-Runtime  (defaults: in the root file, top level in an app file; per-process ones also under processes.<name>)
-  health_interval    poll interval while a web process is starting, until it first answers  500ms  e.g. 1s  per process
-  liveness_interval  poll interval of the ongoing check once a web process is ready         10s  e.g. 30s   per process
+$ dboss config --keys tokens
+Tokens  (root dboss.yaml)
+  tokens.github  outbound: personal access token a pull hook and a github_pr preview use for a private repo; consumed from the process environment only  e.g. $GITHUB_TOKEN
+  tokens.dboss   inbound: every /hooks ping and /metrics must present it; unset refuses hooks and hides /metrics                                    e.g. $DBOSS_TOKEN
 ```
 
 ## Commands
@@ -228,7 +229,7 @@ dboss help <command>
 Host session
   start         run the host session in the foreground; Ctrl-C stops every app
   systemd       print the systemd unit for this config, or install and enable it
-  kill          stop every app and terminate every listener left in ports.range
+  kill          stop every app and terminate every listener left in ports
   login         print one-time console URLs that sign you in as cli@localhost
 
 Apps
@@ -241,7 +242,7 @@ Apps
   logs          print or follow the process logs of an app
   maintenance   answer every request with the maintenance page while the app keeps running
   cron          list an app's scheduled jobs, or run one now
-  hooks         list an app's deploy hooks, run one, or rotate its secret
+  hooks         list an app's deploy hooks with their ping URL, or run one
   exec          run a one-off command in the app's environment
   audit         list operator actions: start, stop, restart, destroy, hook runs and config writes
 
@@ -249,6 +250,7 @@ Config
   init          print a fully commented starter config for a service or an app
   config        print a config file, the resolved config, the key reference, or saved revisions
   check         validate the config and every app without starting anything
+  pages         list the pages dboss serves and which file renders each, or write them out to edit
   doctor        preflight a box: tools, writable dirs, valid config and a clear port range
   rescan        re-read the apps directory, every dboss.yaml and the host defaults
   ports         show the live port table, one fixed port per app process
@@ -302,22 +304,22 @@ dboss: .dboss holds this host's state, logs and secrets and is not gitignored
        add it: echo .dboss/ >> /Users/me/apps/myapp/.gitignore
 ```
 
-`state_dir`, `log_dir` and the socket all default under `.dboss` in the config directory, which holds the request and log databases, the generated hook and pubsub secrets and the certificate cache.
+`dir` defaults to `.dboss` in the config directory and holds `state/`, `log/` and the control socket: the request and log databases, the generated pubsub secrets and the certificate cache.
 The check only runs when that directory has a `.gitignore` of its own, and it asks `git check-ignore`, so a rule in a parent directory, in `.git/info/exclude` or in your global excludes counts.
-A host whose `state_dir` lives outside the checkout, which is every real server, never sees it.
+A host whose `dir` lives outside the checkout never sees it.
 
 ### Startup and the running list
 
-On start the host clears every listener in `ports.range`, then starts the apps listed in `state_dir/running.json` that have `autostart: true` (the default).
+On start the host clears every listener in `ports`, then starts the apps listed in `dir/state/running.json` that have `autostart: true` (the default).
 That file is written on every `run` and `stop`, so an app you stopped stays stopped across restarts.
 When the file does not exist yet, which is the case on a first start, every discovered app with `autostart: true` is started.
 An app with `autostart: false` stays down across host restarts until `dboss run`, the console, or the first proxied request starts it.
 An app with `autostart: button` also stays down, but a request answers a page with a start button and only its POST starts the app, so a crawler or a favicon request never does.
-A stopped app is also started by the first proxied request, which gets a "starting" page that refreshes after `proxy.wake.retry_after` seconds.
+A stopped app is also started by the first proxied request, which gets the `starting` page; it reloads every 5 seconds until the app answers.
 
 ## Logs
 
-Every app has one SQLite database at `log_dir/<app>/dboss.sqlite` with three tables:
+Every app has one SQLite database at `dir/log/<app>/dboss.sqlite` with three tables:
 `requests` (one row per proxied request, written by the proxy), `logs` (one row per log line,
 written by the ingestion module) and `tail_offsets` (how far the file tailer has read).
 `logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`,
@@ -328,7 +330,7 @@ Each row belongs to a channel and the console's **Logs** viewer selects one:
 
 * `REQUEST` - the proxy's request rows.
 * `STDOUT` - the stdout/stderr of each app process, sealed and parsed by the ingestion module.
-* `dboss` - dboss's own daemon log, mirrored into the reserved `log_dir/_dboss` database and
+* `dboss` - dboss's own daemon log, mirrored into the reserved `dir/log/_dboss` database and
   offered as **Host (dboss)** in the app picker.
 * one channel per `*.log` file the app writes under `<app dir>/log`, tailed by byte offset and
   never rotated or deleted.
@@ -336,8 +338,9 @@ Each row belongs to a channel and the console's **Logs** viewer selects one:
 `REQUEST` rows and app log files are kept for `log_retention` (default `336h`, two weeks);
 `STDOUT` and the dboss daemon log for `stdout_retention` (default `3h`). Both are deleted by the
 daily prune; `log_retention: 0` disables the store for the app.
-A second daily job at `daemon.vacuum_at` (default `04:30`) runs SQLite `VACUUM` on every app database and the host database to reclaim the freed space, including databases left behind by apps removed from the config; set it to `""` to disable.
-The supervisor owns the process log file: every `daemon.log_ingest_interval` (default `5s`) it
+The prune runs daily at `maintenance_at` (default `04:10`) and is followed by SQLite `VACUUM` on every app database and the host database to reclaim the freed space, including databases left behind by apps removed from the config.
+Process log files rotate at 10m and keep five rotated files.
+The supervisor owns the process log file: every 5 seconds it
 seals the current segment into `<process>.log.<unix>.sealed` and opens a fresh one, then the
 ingestion module parses the sealed segment, commits its rows to the database and only then deletes the file, so a transient database error cannot lose lines.
 A segment whose commit failed stays on disk and is picked up again by the next pass.
@@ -382,7 +385,7 @@ like the rest; set `tmp_clean: false` for an app that keeps something there for 
 ## Disk usage
 
 Every app is measured once when the daemon starts and once a day after that: its own directory
-plus `log_dir/<app>`, the process logs and the SQLite log store dboss writes for it.
+plus `dir/log/<app>`, the process logs and the SQLite log store dboss writes for it.
 The console card shows the total next to the memory stat, with the split and the measurement time
 in its tooltip; clicking the value measures that app again on the spot, which is what to do after
 a cleanup rather than waiting for the next pass.
@@ -395,7 +398,7 @@ It is apparent size, what `du --apparent-size` prints: two hard links to one fil
 An app entry that is a symlink to the current release measures that release, not its siblings, and
 a `tmp` or `uploads` symlink out of the app counts as the link, so a shared directory is never
 billed to two apps.
-In a single-app session `log_dir` sits inside the app folder; the log store is still counted once,
+In a single-app session `dir/log` sits inside the app folder; the log store is still counted once,
 and the rest of `.dboss` (state, config history, certificates) lands in the app half.
 
 ## Scheduled jobs
@@ -427,16 +430,15 @@ hooks:
     timeout: 10m
     restart: true      # restart the app when the command exits 0
     overlap: false      # skip a ping while the previous run is still going
-    # secret: $DEPLOY_HOOK_SECRET
 ```
 
 A hook can also be written as the bare boolean `deploy: true`, shorthand for `git pull --ff-only` in the app folder plus `restart: true`; `git` must be on the service user's `PATH`, and a non-fast-forward update or a dirty tree fails the hook without restarting. `dboss hooks [app]` shows the resolved command.
 
-For a private repo, set `github_token` (a PAT) under the host's `defaults:` or at the top level of an app's `dboss.yaml`; the app value wins. Write `$GITHUB_TOKEN` to keep it out of the file. dboss hands it to the pull through the environment only, via a credential helper (git 2.31+), so it never lands in argv, the repo's config or the app's processes; with no token the pull stays anonymous.
+For a private repo, set `tokens.github` (a PAT) in the host file; write `$GITHUB_TOKEN` to keep it out of the file. dboss hands it to the pull through the environment only, via a credential helper (git 2.31+), so it never lands in argv, the repo's config or the app's processes; with no token the pull stays anonymous.
 
-The ping URL is `https://<management.url>/hooks/<app>/<hook>`. Authentication is a token, accepted as `?token=<secret>` in the URL (paste the whole URL into GitHub), `Authorization: Bearer`, `X-Gitlab-Token`, or a GitHub `X-Hub-Signature-256` HMAC over the raw body. `X-GitHub-Event: ping` (sent when the webhook is created) is acknowledged without running anything.
+The ping URL is `https://<management.host>/hooks/<app>/<hook>`. Every ping presents `tokens.dboss` from the host file, a value you choose (for example `openssl rand -hex 32`) and paste into the sender: `?token=<token>` in the URL, `Authorization: Bearer`, `X-Gitlab-Token` (GitLab's Secret token field), or a GitHub `X-Hub-Signature-256` HMAC over the raw body (GitHub's Secret field). Without the token every ping answers `401`. `X-GitHub-Event: ping` (sent when the webhook is created) is acknowledged without running anything.
 
-With no `secret` in the config, dboss generates a 64-character secret under `state_dir/hook-secrets.json` on first use and never writes it to the config. `dboss hooks [app]` lists hooks with their last result and the ready-made ping URL; `dboss hooks run [app] <hook>` starts one now; `dboss hooks rotate [app] <hook>` mints a new secret, invalidating the old URL. Hooks run in the app folder with the app environment, log to a `hook-<name>` channel, and leave the app alone unless `restart: true`.
+`dboss hooks [app]` lists hooks with their last result and the ready-made ping URL; `dboss hooks run [app] <hook>` starts one now. To change the token, edit it and run `dboss rescan`; the old URLs stop working. Hooks run in the app folder with the app environment, log to a `hook-<name>` channel, and leave the app alone unless `restart: true`.
 
 `dboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes dboss's exit code.
 
@@ -455,7 +457,7 @@ lifecycle:
 
 Each step runs in the app folder with the cron and hook environment (no `PORT`) and logs to a `lifecycle-<step>` channel.
 
-* `create` runs inside the first start, before `start`. The app is recorded in `state_dir/created.json` only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.
+* `create` runs inside the first start, before `start`. The app is recorded in `dir/state/created.json` only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.
 * `start` runs on every start and restart, including a wake by the proxy. The app stays `starting` meanwhile and its processes spawn only after a clean exit. A process restarted after a crash does not rerun it.
 * A failed or timed-out `create` or `start` leaves the app `crashed` with the step's output in the error log and sends the `crash` event. Stopping the app kills a step still running.
 * `destroy` runs after `dboss destroy` has stopped and detached the app, before its folder is removed. It is cleanup: a failure is logged and sends `hook-failed`, and the destroy still completes.
@@ -463,12 +465,11 @@ Each step runs in the app folder with the cron and hook environment (no `PORT`) 
 ## GitHub PR previews
 
 A host can declare one built-in `github_pr` hook that turns a branch into a short-lived app, so a Git host webhook creates, updates and tears down PR previews with no runner and no SSH deploy script.
-The hook is host-level and answered at `https://<management.url>/hooks/github_pr`; one path segment is a host hook, two are an app hook.
+The hook is host-level and answered at `https://<management.host>/hooks/github_pr`, signed with `tokens.dboss` like every hook; one path segment is a host hook, two are an app hook.
 
 ```yaml
 hooks:
   github_pr:
-    # secret: $GITHUB_WEBHOOK_SECRET   # optional; generated under state_dir when omitted
     repo: https://github.com/owner/repo.git       # fallback when the ping omits repo
     template:
       name: $QS_BRANCH
@@ -486,12 +487,12 @@ The ping carries the branch and a few query params: `action`, `branch`, `repo`, 
 A GitHub Action step can send them straight from the event, so nothing has to parse the webhook body:
 
 ```sh
-curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=${{ github.event.action }}&branch=${{ github.head_ref }}&repo=${{ github.event.pull_request.head.repo.clone_url }}&num=${{ github.event.number }}"
+curl -fsS -X POST "https://dboss.example/hooks/github_pr?token=${{ secrets.DBOSS_TOKEN }}&action=${{ github.event.action }}&branch=${{ github.head_ref }}&repo=${{ github.event.pull_request.head.repo.clone_url }}&num=${{ github.event.number }}"
 ```
 
 Every query param becomes `QS_<NAME>` for the hook.
 `action=closed` destroys the app, which runs its `destroy` step and removes the checkout, so the template needs `deletable: true`; any other action checks out the branch tip, writes the app config from `template`, and restarts the app, which runs its `create` and `start` steps.
-A private `repo` over HTTPS is pulled with `github_token`; a fork PR works because the caller passes the head repo's clone URL.
+A private `repo` over HTTPS is pulled with `tokens.github`; a fork PR works because the caller passes the head repo's clone URL.
 Events for one branch are serialized, so two pushes cannot race the same checkout, while different branches deploy in parallel.
 
 `template` is an app file with `$VAR` and `${VAR}` interpolation.
@@ -514,7 +515,7 @@ procfile:
     pubsub: true            # or /socketio, or a mapping
     # pubsub:
     #   path: /socketio
-    #   secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per web process under state_dir
+    #   secret: $PUBSUB_SECRET   # bearer for HTTP publish; empty generates one per web process under dir/state
     #   replay: 10               # messages kept per channel and replayed to a late subscriber
     #   max_clients: 500         # subscriber cap per hub; 0 means unlimited
     #   max_message_size: 64k    # largest publish body; 0 means unlimited
@@ -548,7 +549,7 @@ curl -X POST https://myapp.example.com/socketio/chat \
   -d '{"event":"message","data":{"text":"hello"}}'
 ```
 
-The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`, and satisfies a publish even when the app sets `basic_auth`. With no `secret` in the config, dboss generates a 64-character one per web process under `state_dir/pubsub-secrets.json` on first use; `dboss pubsub` prints it, and `dboss pubsub rotate [app]` replaces it.
+The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`, and satisfies a publish even when the app sets `basic_auth`. With no `secret` in the config, dboss generates a 64-character one per web process under `dir/state/pubsub-secrets.json` on first use; `dboss pubsub` prints it, and `dboss pubsub rotate [app]` replaces it.
 
 **Self-test.** With `test: true`, `GET <path>/_test` serves a page that opens a WebSocket and an SSE connection and reports PASS or FAIL in the browser.
 
@@ -556,19 +557,19 @@ The secret is accepted as `?token=`, `Authorization: Bearer` or `X-Pubsub-Token`
 
 ## Health and metrics
 
-The management host also serves three endpoints, enabled by `management.metrics.enabled` (default `true`):
+The management host also serves three endpoints:
 
 * `GET /healthz` - `200 ok` while the daemon is up.
 * `GET /readyz` - `200` only while every `autostart` app serves (running, or asleep and woken by the next request), else `503` with the apps that are not ready.
 * `GET /metrics` - Prometheus text: build info, per-app up/state/uptime/memory/CPU, per-app disk usage by part with the time it was measured, per-process restarts and memory, request rates per window, request duration quantiles (p50/p95/p99 over the last hour), and the last exit of each cron job and hook.
 
-`healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` is open too unless `management.metrics.token` is set, then it requires `Authorization: Bearer <token>`. All three answer on the management host only.
+`healthz` and `readyz` are open so an uptime checker or load balancer can reach them. `metrics` requires `tokens.dboss` as `Authorization: Bearer <token>` and answers `404` when no token is set. All three answer on the management host only.
 
 Each app also answers on its own hosts at `health_endpoint` (default `/.well-known/dboss/health`): `200 {"app","state"}` while a visitor would be served, `503` otherwise. An app stopped by `idle_stop` (or `dboss stop`) still answers `200` with `"state":"stopped"`, because the next request wakes it, so a Cloudflare Health Check or Load Balancer never flags a sleeping app. Draining, maintenance, starting, crashed and a stopped `autostart: button` app answer `503`. It runs before basic auth and never wakes a stopped app, so a Cloudflare health check or uptime monitor can probe the app domain directly. Set `health_endpoint: ""` to disable it.
 
-The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, polled every `health_interval` (default `500ms`, because it decides how long a visitor who woke the app waits on the starting page). Once the process answers, the same check keeps running at the slower `liveness_interval` (default `10s`, and `5m` in a hand-run session, where a developer watching one app does not need it polled every ten seconds and every poll lands in their own request log), so a healthy app is not asked twice a second for its whole life; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
+The supervisor also watches each web process for its whole lifetime: the `health` path declared on the web procfile entry (e.g. `/up`, or omitted for a TCP connect) gates startup readiness within `health_timeout`, polled every 500ms, because that decides how long a visitor who woke the app waits on the starting page. Once the process answers, the same check keeps running at the slower `liveness_interval` (default `10s`, and `5m` in a hand-run session, where a developer watching one app does not need it polled every ten seconds and every poll lands in their own request log), so a healthy app is not asked twice a second for its whole life; after `unhealthy_threshold` consecutive failures (default `3`) the process is killed and the normal restart policy, backoff (1s doubling up to 60s) and `max_restarts` apply. Set `unhealthy_threshold: 0` for startup-only readiness. Background workers are not polled.
 
-`dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `state_dir`, `log_dir` and the socket directory are writable, that the config and every app load, and whether anything still listens in `ports.range` (a warning, since a start clears it).
+`dboss doctor` preflights a box before a first start or a deploy: it checks that `lsof` is on `PATH`, that `dir` and its `state` and `log` folders are writable, that the config and every app load, and whether anything still listens in `ports` (a warning, since a start clears it).
 It also names any listener in that range bound to a public address (`*:3101`, `0.0.0.0`, a LAN IP) rather than `127.0.0.1`.
 An app binds its own port - dboss injects `PORT` and never an interface - and the proxy always dials `127.0.0.1`, so a public bind is a second door into the app that answers without `basic_auth`, `allow_ips`, the `auth` sign-in gate or the `X-Dboss-User` strip.
 Bind loopback in the procfile (`puma -b tcp://127.0.0.1:$PORT`, `gunicorn -b 127.0.0.1:$PORT`, `next start -H 127.0.0.1`) or firewall the range.
@@ -579,14 +580,12 @@ A host can post runtime events to one operator webhook:
 
 ```yaml
 notify:
-  url: $ALERT_WEBHOOK_URL
-  format: generic       # generic | slack | discord | ntfy
+  url: $ALERT_WEBHOOK_URL   # Slack, Discord and ntfy URLs get their own payload, anything else JSON
   events: [crash, restart-loop, health-timeout, wake-failed, hook-failed, deploy, config-changed, backup-failed, error-rate, slow]
-  min_interval: 5m       # per app and event, so a crash loop does not spam
   headers: {}
 ```
 
-`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over `alerts.window`, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor; `min_interval` debounces repeats. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
+`crash` is an app entering the crashed state, `restart-loop` a process failing again after a restart, `health-timeout` the readiness check giving up or the web process failing its liveness checks, `wake-failed` a request that could not start a stopped app, `hook-failed` a deploy hook that exited non-zero, `deploy` a `restart: true` hook that succeeded and rolled the app, `config-changed` a config write that changed a host key and needs a restart, `backup-failed` a PostgreSQL dump that failed, `error-rate` an app answering with too many 5xx, and `slow` an app whose p95 latency crossed its limit (both from the app's `alerts:` block, checked once a minute over the last 5 minutes once there are 20 requests, default `error_rate: 10` percent and `slow_p95` off). Sends are queued and best-effort, so a slow or dead endpoint never blocks the supervisor, and one event for one app is posted at most once every 5 minutes. The delivered/failed/dropped counts are exported as `dboss_notifications_total`. `url: ""` (the default) disables notifications.
 
 ## PostgreSQL inspection and backups
 
@@ -596,19 +595,17 @@ Configuration is one host-level block. The only backup setting is the per-databa
 
 ```yaml
 postgres:
-  enabled: true
   dsn: $DATABASE_URL            # empty auto-detects the local socket, then 127.0.0.1:5432
-  backup:
-    databases:
-      myapp_production:
-        rotation: week          # keep 7 days; month keeps 30
-      reports:
-        rotation: month
+  backups:
+    myapp_production: week      # keep 7 days; month keeps 30
+    reports: month
 ```
+
+`postgres: false` turns the whole feature off.
 
 The connection resolves in order: `postgres.dsn` when set, then a unix socket (`/var/run/postgresql`, then `/tmp` for Postgres.app), then `127.0.0.1:5432`, with the libpq `PG*` environment merged in. A daemon started with `sudo` runs as `root`, whose matching Postgres role does not exist, so detection impersonates the invoking `SUDO_USER`; set `postgres.dsn` explicitly when the service user has no matching role. The tab shows the server version, uptime, connection count, cache hit ratio, WAL LSN, replication state, live activity including the longest query and lock waits, and every database with its size, owner and last backup.
 
-Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 local time; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `state_dir/pg-backups.json`.
+Backups are per-database logical dumps (`pg_dump --format=plain`) zipped as `pg_backup/<database>/BACKUP_<timestamp>.zip` next to the apps. One run happens each day at 04:00 local time; scheduled dumps older than the database's rotation window (7 days for `week`, 30 for `month`) are pruned from disk and the catalog, while a manual **Back up now** is kept. The catalog lives at `dir/state/pg-backups.json`.
 
 Every recorded dump has **Download**, which serves the stored zip as it is, and the per-database panel has **Upload backup**, which stores an archive you picked and records it as a manual entry.
 Together they move a database between hosts: download on one box, upload on the other, restore there.
@@ -639,7 +636,7 @@ Run a Docker-packaged app with Docker Compose as its own system and let Cloudfla
 
 Two rules keep the two systems from colliding:
 
-* Keep container ports outside `ports.range`. On start dboss clears every listener in the range and before each spawn frees the app's fixed port, so a container listening there would be killed.
+* Keep container ports outside `ports`. On start dboss clears every listener in the range and before each spawn frees the app's fixed port, so a container listening there would be killed.
 * A hostname is routed by one proxy only. dboss routes just the hosts of the apps in its own `apps` directory, so a container host must be served by Cloudflare or another reverse proxy.
 
 The one bridge without code is a procfile wrapper (`docker run -p 127.0.0.1:$PORT:$PORT ...`), which makes a container answer as a dboss app but leaves its lifecycle on the docker CLI, with the usual caveats around stopping it.
@@ -648,7 +645,8 @@ The one bridge without code is a procfile wrapper (`docker run -p 127.0.0.1:$POR
 
 `basic_auth` puts HTTP basic auth in front of the whole app, static files included.
 It maps a user to a bcrypt hash printed by `dboss password`; set it under `defaults:` in the host file to protect every app on a staging box with one block.
-`allow_ips` limits the app to a list of CIDRs, matched against the client IP from `proxy.client_ip_headers`.
+`allow_ips` limits the app to a list of CIDRs (address ranges such as `10.0.0.0/8`), matched against the client address.
+Behind Cloudflare set `proxy.cloudflare: true` in the host file: only Cloudflare's published ranges (built in) and the box itself may connect, and the client address comes from `CF-Connecting-IP`, which then cannot be spoofed.
 
 ```yaml
 basic_auth:
@@ -660,12 +658,11 @@ allow_ips:
 `auth` puts an AuthCog sign-in in front of the app, the way Cloudflare Access does, for people instead of shared passwords.
 
 ```yaml
-auth:
-  allow_emails: [ana@example.com, "*@example.com"]   # empty leaves the app open
-  session_ttl: 24h
+auth: [ana@example.com, "*@example.com"]   # empty leaves the app open
+session_ttl: 24h                            # also under defaults:, where it covers the console
 ```
 
-A visitor without a session is sent to AuthCog (`management.auth.realm`), returns to `/.well-known/dboss/auth` and gets a signed, host-only cookie; `/.well-known/dboss/logout` signs out.
+A visitor without a session is sent to AuthCog (`authcog_realm` in the host file), returns to `/.well-known/dboss/auth` and gets a signed, host-only cookie; `/.well-known/dboss/logout` signs out.
 Only the listed emails and `*@domain` patterns get in (`"*"` admits any AuthCog account), and the list is checked on every request, so removing an entry ends that session on the next `dboss rescan`.
 The app receives the signed-in email as `X-Dboss-User`; dboss strips that header from every inbound request, so the app can trust it.
 A request that does not accept `text/html` gets `401` instead of a redirect.
@@ -674,13 +671,10 @@ A request that does not accept `text/html` gets `401` instead of a redirect.
 `authcog` is the app-level login service: dboss runs the whole AuthCog round trip so the app needs no AuthCog code of its own.
 
 ```yaml
-authcog:
-  login: true      # dboss runs the sign-in for this app
-  path: /authcog   # app URL dboss captures; must match the AuthCog realm redirect_path
-  realm: auth      # auth.authcog.com
+authcog: true   # or a path; true captures /authcog, which must match the realm's redirect_path
 ```
 
-The app links to `path`. dboss mints the challenge, sends the browser to `https://<realm>.authcog.com/d:<host>[/p:<port>][/s:http]` (the port only when it is not the scheme's default, the scheme only when the request was not https; it is read from TLS or the edge's `X-Forwarded-Proto`), and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own `path` route with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
+The app links to the path. dboss mints the challenge, sends the browser to `https://<authcog_realm>/d:<host>[/p:<port>][/s:http]` (the port only when it is not the scheme's default, the scheme only when the request was not https; it is read from TLS or the edge's `X-Forwarded-Proto`), and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own route at that path with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
 
 Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `authcog` login, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
 
@@ -690,7 +684,7 @@ Each request walks the stages in this order: canonical redirect, `allow_ips`, he
 * A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials or a sign-in session.
 * The same holds for `auth`: no session means no wake, the health endpoint stays open, and static files are protected.
 
-## Static files and error pages
+## Static files and pages
 
 Each web process serves `./public` straight from disk (`static` on the web procfile entry, relative to the app folder) for GET and HEAD, without waking the app.
 Set `static: /path` for another directory or `static: false` to disable it for that process.
@@ -699,11 +693,34 @@ A missing file, a directory, or a file with any other extension (an `.html` page
 A missing `public` folder simply turns static serving off; `static_extensions: []` serves any regular file.
 Paths under `static_immutable` (default `/assets/`) are cached as immutable for a year, everything else for an hour.
 
-`error_page_path` names one static HTML file, relative to the app folder (for example `public/error_500.html`).
-It is sent as it is on disk and read on every request, and only a GET that accepts `text/html` ever gets a page; API and non-GET requests are never rewritten.
+Every page dboss answers with itself is built in and can be replaced:
 
-* dboss's own errors (`502` when the app is unreachable, timed out or has no port) answer with this file, or with the built-in error page when the key is empty or the file is unreadable.
-* The app's own `5xx` answers are replaced with this file, status kept, only when the key is set and the file is readable. With the key empty an app keeps its own error page.
+| Page | Status | Served when |
+|---|---|---|
+| `starting` | 503 | the app is waking up; it reloads every 5 seconds |
+| `stopped` | 503 | an `autostart: button` app is stopped; it carries the start button |
+| `crashed` | 503 | the app hit its restart limit |
+| `maintenance` | 503 | `dboss maintenance <app> on` |
+| `error` | 502/5xx | the app is unreachable, or answers 5xx (see below) |
+| `forbidden` | 403 | `allow_ips` turns the visitor away |
+| `signed_out` | 200 | after `/.well-known/dboss/logout` |
+| `404` | 404 | a host no app owns (host only) |
+| `login` | 401 | the console without a session (host only) |
+
+For each page dboss reads, on every request, the first of `<name>.html` in the app's `pages` folder (default `./public/error_pages`), `template.html` there, the same two in the host's `pages` folder, and the built-in template. One `template.html` therefore covers every page. A page fills `{{status}}`, `{{title}}`, `{{message}}`, `{{action}}` (the start button or sign-in link dboss builds), `{{app}}` and `{{dboss_logo}}` (the dboss mark, served at `/.well-known/dboss/logo.svg` on every host) and leaves any other `{{...}}` alone.
+
+```sh
+dboss pages shop                  # which file serves each page
+dboss pages dump shop             # write template.html to edit
+dboss pages dump shop error       # write error.html with its wording
+dboss pages dump --all            # the host template and every page
+```
+
+Only a GET that accepts `text/html` gets a page; API and non-GET requests get the bare status.
+dboss's own errors (`502` when the app is unreachable, timed out or has no port) always render the `error` page.
+The app's own `5xx` answers are replaced with it, status kept, only when the app's pages folder has `error.html` or `template.html`, so an app that ships no pages keeps its own error bodies.
+An app's own `404`s are never touched.
+`./demo/apps/sinatra` ships a `template.html` and links to each case from its front page.
 
 ## Restarts and forwarded headers
 
@@ -720,13 +737,13 @@ An app's processes start with the web processes (the ones with `hosts`) first, t
 
 ## Audit log
 
-Every mutating action records who did what to which app and how it turned out: start, stop, restart, destroy, maintenance, rescan, cron runs, hook runs and rotations, `exec`, and config file writes and restores. Console actions carry the signed-in email, a hook ping carries `hook:<app>/<hook>`, and control-socket actions are attributed to `cli`.
+Every mutating action records who did what to which app and how it turned out: start, stop, restart, destroy, maintenance, rescan, cron runs, hook runs, `exec`, and config file writes and restores. Console actions carry the signed-in email, a hook ping carries `hook:<app>/<hook>`, and control-socket actions are attributed to `cli`.
 
-Rows live in an `audit` table in the reserved `_dboss` database, are kept for `daemon.audit_retention` (default `8760h`, `0` keeps them forever), and are pruned with the daily log prune. The console has an **Audit** tab with app, actor and action filters; `dboss audit [--app name] [--actor who] [--action name] [-n rows]` prints the same rows.
+Rows live in an `audit` table in the reserved `_dboss` database, are kept for `audit_retention` (default `8760h`, `0` keeps them forever), and are pruned with the daily log prune. The console has an **Audit** tab with app, actor and action filters; `dboss audit [--app name] [--actor who] [--action name] [-n rows]` prints the same rows.
 
 ## Config history
 
-Every config save first copies the current file to `state_dir/config-history`, keeping the last 50 revisions per file. In the console's Configuration view the **History** button lists them; **View** shows a revision and **Restore** writes it back (revision-checked, then rescanned, and recorded in the audit log). From the CLI:
+Every config save first copies the current file to `dir/state/config-history`, keeping the last 50 revisions per file. In the console's Configuration view the **History** button lists them; **View** shows a revision and **Restore** writes it back (revision-checked, then rescanned, and recorded in the audit log). From the CLI:
 
 ```
 dboss config history [app]
@@ -737,9 +754,9 @@ Both work on the host file (no app) or one app's file. A CLI restore writes the 
 
 ## Management console
 
-The console is served for `management.host` on the proxy listener and again on the first port of `ports.range` (`3100` in the demo), where `127.0.0.1` and `localhost` are also accepted.
+The console is served for `management.host` on the proxy listener and again on the first port of `ports` (`3100` in the demo), where `127.0.0.1` and `localhost` are also accepted.
 A dev session (one app run from its own folder) always gets that loopback console, with or without a `management:` block.
-`dboss start` prints the loopback address first, and the public address too (`management.url` when set, otherwise `https://` on the first `management.host`):
+`dboss start` prints the loopback address first, and the public address too (`https://` on the first `management.host`):
 
 ```
 management console: http://127.0.0.1:3100 (run `dboss login` for a one-time sign-in link)
@@ -759,10 +776,10 @@ Both facts leave the box, so each is looked up at most once an hour behind a sho
 
 ### Signing in
 
-A dev session does not sign in at all: a request whose peer is a loopback address is admitted as `cli@localhost`, so `management.auth.admin_emails` is not required and the startup line reads `(open from this machine, no sign-in)`.
+A dev session does not sign in at all: a request whose peer is a loopback address is admitted as `cli@localhost`, so `management.admins` is not required and the startup line reads `(open from this machine, no sign-in)`.
 The check is the connecting address and never a forwarded-for header, so a request from off-box cannot claim to be local; a reverse proxy on the same host can, which is why nginx, caddy or `cloudflared` does not belong in front of an app run this way.
 
-Production sign-in goes through AuthCog: the console redirects to `management.auth.realm`, and only the addresses in `admin_emails` are admitted.
+Production sign-in goes through AuthCog: the console redirects to `authcog_realm`, and only the addresses in `management.admins` are admitted. A console session lasts `defaults.session_ttl`.
 AuthCog sends the browser back to the address the sign-in started on, over http or https and on any port.
 
 For local work there is `dboss login`:
@@ -780,7 +797,7 @@ AuthCog can never vouch for that address, so the two paths do not overlap.
 The loopback link and the public link carry the same single-use token, so opening one invalidates the other; run `dboss login` again for a fresh pair.
 `dboss login --json` prints `{"url": ..., "public_url": ...}`.
 
-The loopback link uses the console's own listener, the first port of `ports.range`, so it needs no DNS.
+The loopback link uses the console's own listener, the first port of `ports`, so it needs no DNS.
 In a host session that listener accepts `127.0.0.1` and `localhost` only for sessions created this way; without one it shows a page telling you to run `dboss login`.
 The public link goes through `management.host`, so it signs in from any browser that can reach the edge.
 Without a public URL, tunnel the port first: `ssh -L 3100:127.0.0.1:3100 <host>`.
@@ -831,11 +848,11 @@ internal/daemon/      one host session: supervisor, modules, proxy, console, con
 internal/module/      module lifecycle (start in order, close in reverse)
 internal/config/      dboss.yaml model, validation, embedded reference.yaml
 internal/apps/        app discovery and the config file store the console edits
-internal/secret/      generated deploy-hook and pubsub secrets under state_dir
+internal/secret/      generated pubsub secrets under dir/state
 internal/supervisor/  process supervisor, health checks, idle stop, state files, log writer/seal
-internal/ports/       fixed port allocation inside ports.range, listener lookup and clearing (lsof)
-internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log,
-                      and the embedded built-in pages (pages/)
+internal/ports/       fixed port allocation inside ports, listener lookup and clearing (lsof)
+internal/proxy/       filter pipeline, host routing, static files, maintenance, wake, request log
+internal/pages/       the built-in page template and logo, the page lookup chain and dboss pages dump
 internal/authcog/     AuthCog sign-in flow shared by the console and the per-app proxy gate
 internal/pubsub/      realtime channel hubs served in front of a web process
 internal/schedule/    cron expression parsing and the daily HH:MM timer
@@ -848,7 +865,7 @@ internal/logstore/    per-app SQLite log store: requests, channels, FTS search, 
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
 internal/tmpclean/    daily sweep of each app's ./tmp (tmp_clean)
 internal/diskusage/   daily measurement of what each app occupies on disk
-internal/logx/        leveled logger for dboss's own output (daemon.log_level)
+internal/logx/        leveled logger for dboss's own output (log_level)
 internal/sysinfo/     read-only host inspection: OS, load, memory, disks and installed toolchains
 internal/pg/          PostgreSQL inspection, scheduled dumps, retention and restore
 internal/metrics/     Prometheus text rendered from the app snapshots

@@ -48,7 +48,7 @@ type CronJob struct {
 }
 
 // Hook is one named one-shot command with its command line parsed once at load time. Pull marks
-// the `deploy: true` shorthand, whose git command authenticates with the app's github_token.
+// the `deploy: true` shorthand, whose git command authenticates with tokens.github.
 type Hook struct {
 	Command  Command       `json:"command"`
 	Timeout  time.Duration `json:"timeout"`

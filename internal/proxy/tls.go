@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
@@ -23,31 +22,18 @@ type ACME struct {
 	manager *autocert.Manager
 }
 
-// NewACME builds the certificate manager. The cache defaults to <state_dir>/acme; directory
-// selects the authority (empty is Let's Encrypt production, staging its test endpoint, anything
-// else is used as a directory URL). AcceptTOS is granted because the operator enables TLS.
+// NewACME builds the certificate manager against Let's Encrypt production, caching under
+// <state_dir>/acme. AcceptTOS is granted because the operator enables TLS.
 func NewACME(cfg config.Config, manager *supervisor.Manager) (*ACME, error) {
-	cache := cfg.Proxy.TLS.CacheDir
-	if cache == "" {
-		cache = filepath.Join(cfg.StateDir, "acme")
-	}
+	cache := filepath.Join(cfg.StateDir, "acme")
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return nil, fmt.Errorf("acme cache: %w", err)
-	}
-	acmeClient := &acme.Client{}
-	switch strings.ToLower(strings.TrimSpace(cfg.Proxy.TLS.Directory)) {
-	case "", "production":
-		// Let's Encrypt production is acme.Client's default directory.
-	case "staging":
-		acmeClient.DirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
-	default:
-		acmeClient.DirectoryURL = cfg.Proxy.TLS.Directory
 	}
 	m := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
 		Cache:  autocert.DirCache(cache),
 		Email:  cfg.Proxy.TLS.Email,
-		Client: acmeClient,
+		Client: &acme.Client{},
 		HostPolicy: func(_ context.Context, host string) error {
 			if hostAllowed(cfg, manager, host) {
 				return nil

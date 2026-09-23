@@ -79,7 +79,7 @@ func (c CLI) doctor(args []string) error {
 	} else {
 		add("ok", "lsof found")
 	}
-	for _, dir := range []struct{ name, path string }{{"state_dir", cfg.StateDir}, {"log_dir", cfg.LogDir}, {"socket dir", filepath.Dir(cfg.Socket)}} {
+	for _, dir := range []struct{ name, path string }{{"dir/state", cfg.StateDir}, {"dir/log", cfg.LogDir}, {"dir", filepath.Dir(cfg.Socket)}} {
 		if err := writable(dir.path); err != nil {
 			add("fail", fmt.Sprintf("%s %s is not writable: %v", dir.name, dir.path, err))
 			continue
@@ -97,7 +97,7 @@ func (c CLI) doctor(args []string) error {
 	default:
 		add("ok", "config and every app are valid")
 	}
-	listeners, listenErr := ports.ListenersInRange(cfg.Ports.Range)
+	listeners, listenErr := ports.ListenersInRange(cfg.Ports)
 	switch {
 	case listenErr != nil:
 		add("warn", "port range check failed: "+listenErr.Error())
@@ -108,9 +108,9 @@ func (c CLI) doctor(args []string) error {
 				pids = append(pids, listener.PID)
 			}
 		}
-		add("warn", fmt.Sprintf("port range %d-%d has listeners (pids %v); a start clears them", cfg.Ports.Range[0], cfg.Ports.Range[1], pids))
+		add("warn", fmt.Sprintf("port range %d-%d has listeners (pids %v); a start clears them", cfg.Ports[0], cfg.Ports[1], pids))
 	default:
-		add("ok", fmt.Sprintf("port range %d-%d is clear", cfg.Ports.Range[0], cfg.Ports.Range[1]))
+		add("ok", fmt.Sprintf("port range %d-%d is clear", cfg.Ports[0], cfg.Ports[1]))
 	}
 	// An app binds its own port and dboss only ever dials 127.0.0.1, so a listener on a public
 	// address answers without the proxy in front of it. dboss's own listeners are skipped: the
@@ -120,7 +120,7 @@ func (c CLI) doctor(args []string) error {
 			continue
 		}
 		add("warn", fmt.Sprintf("%s (pid %d) listens on %s: that port answers without the proxy, so basic_auth, allow_ips, the sign-in gate and the X-Dboss-User strip do not apply; bind 127.0.0.1 or firewall %d-%d",
-			listener.Command, listener.PID, listener.Address, cfg.Ports.Range[0], cfg.Ports.Range[1]))
+			listener.Command, listener.PID, listener.Address, cfg.Ports[0], cfg.Ports[1]))
 	}
 	if jsonOutput {
 		encoded, _ := json.MarshalIndent(map[string]any{"ok": !failed, "findings": findings}, "", "  ")
@@ -169,7 +169,7 @@ func (c CLI) kill(args []string) error {
 		}
 		stopped = append(stopped, snapshot.Name)
 	}
-	pids, err := ports.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	pids, err := ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value())
 	if err != nil {
 		return err
 	}
@@ -178,6 +178,6 @@ func (c CLI) kill(args []string) error {
 		fmt.Fprintln(c.Out, string(encoded))
 		return nil
 	}
-	fmt.Fprintf(c.Out, "stopped %d app(s); killed %d remaining listener(s) in ports %d-%d\n", len(stopped), len(pids), cfg.Ports.Range[0], cfg.Ports.Range[1])
+	fmt.Fprintf(c.Out, "stopped %d app(s); killed %d remaining listener(s) in ports %d-%d\n", len(stopped), len(pids), cfg.Ports[0], cfg.Ports[1])
 	return nil
 }

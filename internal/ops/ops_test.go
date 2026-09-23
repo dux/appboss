@@ -71,21 +71,16 @@ func (f *fakeRuntime) RunHook(name, hook string) error {
 	return nil
 }
 
-func (f *fakeRuntime) RotateHook(name, hook string) (supervisor.HookInfo, error) {
-	f.actions = append(f.actions, "hook-rotate "+name+"/"+hook)
-	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}, URL: "https://dboss.example.com/hooks/" + name + "/" + hook}, nil
-}
-
 func (f *fakeRuntime) Hooks(name string) ([]supervisor.HookInfo, error) {
 	f.actions = append(f.actions, "hook "+name)
 	return []supervisor.HookInfo{{HookSnapshot: supervisor.HookSnapshot{Name: "deploy"}}}, nil
 }
 
-func (f *fakeRuntime) HookSecret(name, hook string) (string, error) {
+func (f *fakeRuntime) HookToken(name, hook string) (string, error) {
 	return "secret", nil
 }
 
-func (f *fakeRuntime) HostHookSecret(name string) (string, error) {
+func (f *fakeRuntime) HostHookToken(name string) (string, error) {
 	return "secret", nil
 }
 
@@ -296,8 +291,8 @@ func (f *fakePG) Query(_ context.Context, database, sql string) (pg.QueryResult,
 	f.queried = sql
 	return pg.QueryResult{Database: database, Columns: []string{"one"}, Rows: [][]any{{"1"}}, RowCount: 1, Command: "SELECT 1"}, nil
 }
-func (f *fakePG) BackupConfig() config.PostgresBackup { return config.PostgresBackup{} }
-func (f *fakePG) Apply(config.Config)                 { f.applied++ }
+func (f *fakePG) BackupConfig() config.PostgresBackups { return config.PostgresBackups{} }
+func (f *fakePG) Apply(config.Config)                  { f.applied++ }
 
 func TestPGActionsDispatch(t *testing.T) {
 	postgres := &fakePG{enabled: true, available: true, backups: []pg.Backup{{ID: "b1", Database: "app"}}}

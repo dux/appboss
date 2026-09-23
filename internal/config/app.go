@@ -17,6 +17,10 @@ const DefaultPubsubPath = "/socketio"
 // DefaultStatic is the directory a web process serves static files from unless it sets `static`.
 const DefaultStatic = "./public"
 
+// DefaultPages is the folder, relative to the app (or the host), holding the HTML pages dboss
+// serves for it: <name>.html per page, template.html for every page.
+const DefaultPages = "./public/error_pages"
+
 // DevHost is bound to a single-app config that declares no hosts, so `dboss start` inside an
 // app folder serves it on *.lvh.me with no config.
 const DevHost = ".lvh.me"
@@ -213,6 +217,8 @@ type App struct {
 	Hooks        map[string]Hook    `yaml:"hooks" json:"hooks"`
 	// Lifecycle maps a step (create, start, destroy) to the command dboss runs at that point.
 	Lifecycle map[string]LifecycleCommand `yaml:"lifecycle" json:"lifecycle,omitempty"`
+	// Pages is the folder of the app's own dboss pages, relative to the app.
+	Pages     string `yaml:"pages" json:"pages"`
 	Defaults  `yaml:",inline"`
 	Processes map[string]ProcessOverrides `yaml:"processes" json:"processes"`
 }
@@ -362,6 +368,7 @@ type appFile struct {
 	Cron      map[string]CronJob          `yaml:"cron"`
 	Hooks     map[string]Hook             `yaml:"hooks"`
 	Lifecycle map[string]LifecycleCommand `yaml:"lifecycle"`
+	Pages     string                      `yaml:"pages"`
 	Overrides `yaml:",inline"`
 	Processes map[string]ProcessOverrides `yaml:"processes"`
 }
@@ -399,7 +406,10 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 	if len(raw.Procfile) == 0 {
 		return App{}, &Error{Key: "procfile", Message: "must contain at least one process", Hint: "e.g. procfile:\n    web: bundle exec puma"}
 	}
-	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Lifecycle: raw.Lifecycle, Defaults: defaults, Processes: raw.Processes}
+	app := App{Procfile: raw.Procfile, Autostart: AutostartOn, Deletable: raw.Deletable, Cron: raw.Cron, Hooks: raw.Hooks, Lifecycle: raw.Lifecycle, Pages: DefaultPages, Defaults: defaults, Processes: raw.Processes}
+	if raw.Pages != "" {
+		app.Pages = raw.Pages
+	}
 	if err := app.deriveWeb(); err != nil {
 		return App{}, err
 	}
@@ -428,8 +438,8 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 		return App{}, err
 	}
 	for _, web := range app.WebProcesses {
-		if web.Pubsub.Enabled() && app.AuthCog.Enabled() && web.Pubsub.Path == app.AuthCog.Path {
-			return App{}, &Error{Key: "procfile." + web.Name + ".pubsub", Message: fmt.Sprintf("path %q collides with authcog.path", web.Pubsub.Path)}
+		if web.Pubsub.Enabled() && app.AuthCog.Enabled() && web.Pubsub.Path == string(app.AuthCog) {
+			return App{}, &Error{Key: "procfile." + web.Name + ".pubsub", Message: fmt.Sprintf("path %q collides with authcog", web.Pubsub.Path)}
 		}
 	}
 	if err := validateDefaults(app.Defaults); err != nil {

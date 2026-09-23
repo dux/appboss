@@ -23,12 +23,12 @@ type file struct {
 }
 
 // hostKeys are the keys valid only in the root file. ParseApp rejects them in an app file.
-var hostKeys = []string{"apps", "state_dir", "log_dir", "socket", "proxy", "management", "ports", "defaults", "daemon", "notify", "postgres"}
+var hostKeys = []string{"apps", "dir", "ports", "log_level", "audit_retention", "maintenance_at", "authcog_realm", "tokens", "proxy", "management", "defaults", "notify", "postgres"}
 
 // hostTopKeys are the keys a root file may carry at its top level: the host-only keys plus the
-// shared keys that are meaningful on the host itself. `hooks` is the one shared key that is a
-// host-level block (the github_pr built-in), not only an app key under defaults:.
-var hostTopKeys = append(append([]string{}, hostKeys...), "hooks")
+// app keys that also mean something on the host itself: `hooks` (the github_pr built-in) and
+// `pages` (the fallback for every app and the host's own pages).
+var hostTopKeys = append(append([]string{}, hostKeys...), "hooks", "pages")
 
 // decode parses one document into raw and reports every top-level key present in it. The node
 // tree is kept so every error can be pointed at a line and a key. allowDev lets the document be
@@ -106,6 +106,19 @@ func expandEnv(node *yaml.Node, path string) bool {
 	return changed
 }
 
+// SetRuntimeDir points the config at one runtime folder and derives the state, log and socket
+// paths inside it.
+func (c *Config) SetRuntimeDir(dir string) {
+	c.RuntimeDir = dir
+	if dir == "" {
+		c.StateDir, c.LogDir, c.Socket = "", "", ""
+		return
+	}
+	c.StateDir = filepath.Join(dir, "state")
+	c.LogDir = filepath.Join(dir, "log")
+	c.Socket = filepath.Join(dir, "dboss.sock")
+}
+
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -153,17 +166,16 @@ func Parse(data []byte, path string) (Config, error) {
 			return Config{}, located(err, path, root)
 		}
 	}
+	if raw.appFile.Pages != "" {
+		cfg.Pages = raw.appFile.Pages
+	}
+	cfg.Pages = resolvePath(cfg.Dir, cfg.Pages)
 	cfg.Apps = resolvePath(cfg.Dir, cfg.Apps)
 	if hasApp {
 		// Single mode: the root file is the app, so the host apps directory does not apply.
 		cfg.Apps = ""
 	}
-	cfg.StateDir = resolvePath(cfg.Dir, cfg.StateDir)
-	cfg.LogDir = resolvePath(cfg.Dir, cfg.LogDir)
-	cfg.Socket = resolvePath(cfg.Dir, cfg.Socket)
-	cfg.Proxy.Wake.StartingPage = resolvePath(cfg.Dir, cfg.Proxy.Wake.StartingPage)
-	cfg.Proxy.Wake.CrashedPage = resolvePath(cfg.Dir, cfg.Proxy.Wake.CrashedPage)
-	cfg.Proxy.Wake.UnknownPage = resolvePath(cfg.Dir, cfg.Proxy.Wake.UnknownPage)
+	cfg.SetRuntimeDir(resolvePath(cfg.Dir, cfg.RuntimeDir))
 	if err := cfg.validate(hasApp); err != nil {
 		return Config{}, located(err, path, root)
 	}

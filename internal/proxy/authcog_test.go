@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"dboss/internal/authcog"
+	"dboss/internal/config"
 	"dboss/internal/supervisor"
 )
 
-const authCogEnabled = "authcog:\n  login: true\n"
+const authCogEnabled = "authcog: true\n"
 
 // authCogHandler is the feature handler with a flow whose exchange answers a full profile.
 func authCogHandler(t *testing.T, profile authcog.Profile) *Handler {
@@ -79,7 +80,12 @@ func TestAuthCogHandsTheProfileToTheApp(t *testing.T) {
 
 func TestAuthCogRealmAndPathAreConfigurable(t *testing.T) {
 	handler := authCogHandler(t, authcog.Profile{Email: "ana@example.com"})
-	snapshot := featureSnapshot(t, "authcog:\n  login: true\n  realm: foo\n  path: /sign-in\n")
+	handler.hostConfig = func() config.Config {
+		cfg := config.Default()
+		cfg.AuthCogRealm = "foo.authcog.com"
+		return cfg
+	}
+	snapshot := featureSnapshot(t, "authcog: /sign-in\n")
 	captureAuthCog(handler)
 	start := serveFeature(t, handler, snapshot, browser("http://demo.test:8080/sign-in"))
 	login, _ := url.Parse(start.Header().Get("Location"))

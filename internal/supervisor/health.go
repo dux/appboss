@@ -10,7 +10,13 @@ import (
 	"dboss/internal/config"
 )
 
-// monitor walks the web process from spawn to exit. It first polls every health_interval until
+// healthInterval is the readiness poll period while a web process starts, and healthDialTimeout
+// bounds one check's connect. healthInterval is a var so tests can poll faster.
+var healthInterval = 500 * time.Millisecond
+
+const healthDialTimeout = 2 * time.Second
+
+// monitor walks the web process from spawn to exit. It first polls every healthInterval until
 // the process answers (readiness, bounded by health_timeout), then slows to liveness_interval
 // and reports a health failure after unhealthy_threshold consecutive failures. The runtime handles that exactly like a crash, so
 // restart policy, backoff and max_restarts apply. unhealthy_threshold: 0 stops after readiness.
@@ -18,7 +24,7 @@ import (
 // replace on the runtime goroutine.
 func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 	deadline := time.Now().Add(defaults.HealthTimeout.Value())
-	ticker := time.NewTicker(defaults.HealthInterval.Value())
+	ticker := time.NewTicker(healthInterval)
 	defer ticker.Stop()
 	ready := false
 	failures := 0
@@ -30,7 +36,7 @@ func (a *appRuntime) monitor(p *process, defaults config.Process, host string) {
 		case <-p.done:
 			return
 		case <-ticker.C:
-			ok, err := healthCheck(defaults.Health, p.port, host, a.cfg.Proxy.Upstream.DialTimeout.Value())
+			ok, err := healthCheck(defaults.Health, p.port, host, healthDialTimeout)
 			if ok {
 				if !ready {
 					ready = true

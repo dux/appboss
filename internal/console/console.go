@@ -57,9 +57,7 @@ type Handler struct {
 	static         fs.FS
 	managementPort string
 	publicHost     string
-	metricsEnabled bool
 	mux            *http.ServeMux
-	metricsToken   string
 	sys            SysReader
 	dev            bool
 }
@@ -93,7 +91,7 @@ type actionRequest struct {
 }
 
 func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store ConfigStore, sys SysReader) (*Handler, error) {
-	auth, err := consoleAuthenticator(flow, cfg.Management, cfg.Dev())
+	auth, err := consoleAuthenticator(flow, cfg, service.HostPages)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +100,7 @@ func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store Conf
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports.Range[0]), metricsEnabled: cfg.Management.Metrics.Enabled, metricsToken: cfg.Management.Metrics.Token, sys: sys, dev: cfg.Dev()}
+	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.Ports[0]), sys: sys, dev: cfg.Dev()}
 	handler.mux = handler.routes()
 	if len(cfg.Management.Host) > 0 {
 		handler.publicHost = cfg.Management.Host[0]

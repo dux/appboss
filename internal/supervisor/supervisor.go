@@ -20,7 +20,6 @@ import (
 	"dboss/internal/notify"
 	"dboss/internal/ports"
 	"dboss/internal/res"
-	"dboss/internal/secret"
 )
 
 const failureLogLines = 1000
@@ -32,7 +31,6 @@ type Manager struct {
 	backend         res.Backend
 	cgroup          res.Backend
 	echo            *Echo
-	secrets         *secret.Store
 	sink            notify.Sink
 	closeOnce       sync.Once
 	rescanMu        sync.Mutex
@@ -85,16 +83,12 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 	if err != nil {
 		return nil, invalid, err
 	}
-	secrets, err := secret.Open(filepath.Join(cfg.StateDir, "hook-secrets.json"))
-	if err != nil {
-		return nil, invalid, err
-	}
 	var sink notify.Sink
 	if len(sinks) > 0 {
 		sink = sinks[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(cfg), echo: echo, secrets: secrets, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, created: created, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
+	m := &Manager{cfg: cfg, hostConfig: cfg, ports: allocator, backend: res.Procgroup{}, cgroup: selectCgroup(), echo: echo, sink: sink, apps: map[string]*appRuntime{}, desired: desired, maintenance: maintenance, created: created, activities: activities, inflight: map[string]*atomic.Int64{}, ctx: ctx, cancel: cancel}
 	for _, spec := range discovered {
 		if err := m.assignPorts(spec); err != nil {
 			cancel()
@@ -102,12 +96,9 @@ func New(cfg config.Config, allocator *ports.Allocator, echo *Echo, sinks ...not
 		}
 		m.add(ctx, spec)
 	}
-	m.syncHookSecrets(discovered)
-	if cfg.Daemon.ResumeRunning {
-		for name := range desired {
-			if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart.Starts() {
-				_ = runtime.call(request{kind: requestStart})
-			}
+	for name := range desired {
+		if runtime := m.apps[name]; runtime != nil && runtime.spec.Config.Autostart.Starts() {
+			_ = runtime.call(request{kind: requestStart})
 		}
 	}
 	go m.idleLoop(ctx)
@@ -148,12 +139,9 @@ func (m *Manager) assignPorts(spec *apps.App) error {
 	return nil
 }
 
-// selectCgroup returns the cgroup backend when the host can use it and the defaults do not force
-// procgroup. A box without the cgroup v2 hierarchy gets nil and the procgroup fallback.
-func selectCgroup(cfg config.Config) res.Backend {
-	if cfg.Defaults.Resources == "procgroup" {
-		return nil
-	}
+// selectCgroup returns the cgroup backend when the host can use it. A box without a writable
+// cgroup v2 hierarchy gets nil and the procgroup fallback.
+func selectCgroup() res.Backend {
 	if !res.Available(res.DefaultCgroupRoot) {
 		return nil
 	}
@@ -162,7 +150,7 @@ func selectCgroup(cfg config.Config) res.Backend {
 
 func (m *Manager) add(ctx context.Context, spec *apps.App) {
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, secrets: m.secrets, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
+	runtime := &appRuntime{ctx: runtimeCtx, cancel: cancel, cfg: m.cfg, spec: spec, allocator: m.ports, backend: m.backend, cgroup: m.cgroup, echo: m.echo, host: m.HostConfig, sink: m.sink, restart: m.Restart, markCreated: m.markCreated, requests: make(chan request), events: make(chan processEvent, 32), state: Stopped, processes: map[string]*process{}, failures: map[string]int{}, cron: map[string]*jobState{}, hooks: map[string]*jobState{}, lifecycle: map[string]*jobState{}, closed: make(chan struct{})}
 	runtime.lastActivity = m.activities[spec.Name]
 	runtime.maintenance = m.maintenance[spec.Name]
 	m.desiredMu.Lock()
@@ -250,13 +238,9 @@ func (m *Manager) Destroy(name string) error {
 		return err
 	}
 
-	var remaining []*apps.App
 	m.mu.Lock()
 	delete(m.apps, name)
 	delete(m.activities, name)
-	for _, live := range m.apps {
-		remaining = append(remaining, live.spec)
-	}
 	m.mu.Unlock()
 	m.inflightMu.Lock()
 	delete(m.inflight, name)
@@ -268,7 +252,6 @@ func (m *Manager) Destroy(name string) error {
 	if err := apps.Destroy(m.cfg.Apps, name); err != nil {
 		return fmt.Errorf("destroy %s: %w", name, err)
 	}
-	m.syncHookSecrets(remaining)
 	return nil
 }
 
@@ -468,7 +451,6 @@ func (m *Manager) Rescan() ([]error, error) {
 		runtime.cancel()
 		<-runtime.closed
 	}
-	m.syncHookSecrets(discovered)
 	return invalid, nil
 }
 
@@ -488,8 +470,11 @@ func (m *Manager) cronLoop(ctx context.Context) {
 	}
 }
 
+// idleTick is how often idle_stop is checked; a var so tests can run it faster.
+var idleTick = time.Minute
+
 func (m *Manager) idleLoop(ctx context.Context) {
-	ticker := time.NewTicker(m.cfg.Daemon.IdleTick.Value())
+	ticker := time.NewTicker(idleTick)
 	defer ticker.Stop()
 	for {
 		select {

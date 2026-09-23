@@ -39,12 +39,7 @@ func TestCatalogRoundTrip(t *testing.T) {
 }
 
 func TestSelectedDatabases(t *testing.T) {
-	backup := config.PostgresBackup{
-		Databases: map[string]config.DatabaseBackup{
-			"reports": {Rotation: "month"},
-			"app":     {Rotation: "week"},
-		},
-	}
+	backup := config.PostgresBackups{"reports": "month", "app": ""}
 	if got := backup.Selected(); len(got) != 2 || got[0] != "app" || got[1] != "reports" {
 		t.Fatalf("Selected() = %v", got)
 	}

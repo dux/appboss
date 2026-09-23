@@ -27,7 +27,7 @@ func TestClientIP(t *testing.T) {
 	r := httptest.NewRequest("GET", "http://example.test", nil)
 	r.RemoteAddr = "127.0.0.1:1234"
 	r.Header.Set("CF-Connecting-IP", "203.0.113.9")
-	if got := clientIP(r, []string{"CF-Connecting-IP"}); got != "203.0.113.9" {
+	if got := clientIP(r, true); got != "203.0.113.9" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -88,20 +88,19 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if err := os.MkdirAll(appDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := fmt.Sprintf("procfile:\n  web:\n    command: %s -test.run=TestProxyHelperProcess\n    hosts: [demo.test]\nmax_body: 1k\nerror_page_path: public/error_500.html\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
+	appConfig := fmt.Sprintf("procfile:\n  web:\n    command: %s -test.run=TestProxyHelperProcess\n    hosts: [demo.test]\nmax_body: 1k\nheaders:\n  X-Powered-By: \"\"\n  X-Frame-Options: DENY\n", os.Args[0])
 	writeProxyFixture(t, filepath.Join(appDir, config.FileName), appConfig)
 	writeProxyFixture(t, filepath.Join(appDir, ".env"), "BOSS_PROXY_HELPER=1\n")
-	writeProxyFixture(t, filepath.Join(appDir, "public", "error_500.html"), "<h1>custom error {{APP_NAME}}</h1>")
+	writeProxyFixture(t, filepath.Join(appDir, "public", "error_pages", "error.html"), "<h1>custom error {{app}} {{status}}</h1>")
 	cfg := config.Default()
 	cfg.Apps = filepath.Join(root, "apps")
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = [2]int{32200, 32220}
-	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
+	cfg.Ports = [2]int{32200, 32220}
+	cfg.Proxy.Cloudflare = true
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
-	cfg.Daemon.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +108,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
 	}
-	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
+	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", time.Hour, 0)
 	defer requestLogs.Close()
 	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), manager, requestLogs, nil)
 	if err != nil {
@@ -120,7 +119,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	wakeRequest.Header.Set("Accept", "text/html")
 	wakeResponse := httptest.NewRecorder()
 	handler.ServeHTTP(wakeResponse, wakeRequest)
-	if wakeResponse.Code != http.StatusServiceUnavailable || !strings.Contains(wakeResponse.Body.String(), "Starting demo") {
+	if wakeResponse.Code != http.StatusServiceUnavailable || !strings.Contains(wakeResponse.Body.String(), "demo is starting") {
 		t.Fatalf("unexpected wake response: %d %s", wakeResponse.Code, wakeResponse.Body.String())
 	}
 	waitForProxyState(t, manager, supervisor.Running)
@@ -176,6 +175,7 @@ func TestWakeProxyAndRequestLog(t *testing.T) {
 	}
 	assertUpgradePassthrough(t, handler)
 	assertAppErrorPage(t, handler)
+	assertDbossPages(t, handler)
 	if err := manager.Stop("demo"); err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +197,9 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = [2]int{32300, 32320}
-	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
+	cfg.Ports = [2]int{32300, 32320}
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
-	cfg.Daemon.LogFlush = config.Duration(10 * time.Millisecond)
-	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := supervisor.New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +207,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("invalid apps: %v", invalid)
 	}
-	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", "", time.Hour, 0)
+	requestLogs := logstore.New(cfg.LogDir, 10*time.Millisecond, nil, "", time.Hour, 0)
 	defer requestLogs.Close()
 	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), manager, requestLogs, nil)
 	if err != nil {
@@ -220,7 +218,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	get.Header.Set("Accept", "text/html")
 	getResponse := httptest.NewRecorder()
 	handler.ServeHTTP(getResponse, get)
-	if getResponse.Code != http.StatusServiceUnavailable || !strings.Contains(getResponse.Body.String(), "Start app: demo") {
+	if getResponse.Code != http.StatusServiceUnavailable || !strings.Contains(getResponse.Body.String(), "Start demo") {
 		t.Fatalf("stopped button page = %d %s", getResponse.Code, getResponse.Body.String())
 	}
 	if snapshot, _ := manager.Snapshot("demo"); snapshot.State != supervisor.Stopped {
@@ -231,7 +229,7 @@ func TestButtonAppWakesOnPost(t *testing.T) {
 	post.Header.Set("Accept", "text/html")
 	postResponse := httptest.NewRecorder()
 	handler.ServeHTTP(postResponse, post)
-	if postResponse.Code != http.StatusServiceUnavailable || !strings.Contains(postResponse.Body.String(), "Starting demo") {
+	if postResponse.Code != http.StatusServiceUnavailable || !strings.Contains(postResponse.Body.String(), "demo is starting") {
 		t.Fatalf("post wake response = %d %s", postResponse.Code, postResponse.Body.String())
 	}
 	waitForProxyState(t, manager, supervisor.Running)
@@ -271,8 +269,26 @@ func assertUpgradePassthrough(t *testing.T, handler http.Handler) {
 	}
 }
 
-// assertAppErrorPage pins error_page_path against a live app: a 5xx answer to an HTML GET gets the
-// static file with the app's status, and nothing else the app says is rewritten.
+// assertDbossPages pins the pages dboss answers without an app: the logo on any host, and the
+// built-in 404 for a host no app owns.
+func assertDbossPages(t *testing.T, handler *Handler) {
+	t.Helper()
+	for _, host := range []string{"demo.test", "nobody.test"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://"+host+"/.well-known/dboss/logo.svg", nil))
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(response.Body.String(), "<svg") {
+			t.Fatalf("logo on %s = %d %v", host, response.Code, response.Header())
+		}
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://nobody.test/", nil))
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "Nothing here") {
+		t.Fatalf("unknown host = %d %s", response.Code, response.Body.String())
+	}
+}
+
+// assertAppErrorPage pins the app's error page against a live app: a 5xx answer to an HTML GET gets
+// public/error_pages/error.html with the app's status, and nothing else the app says is rewritten.
 func assertAppErrorPage(t *testing.T, handler *Handler) {
 	t.Helper()
 	call := func(method, target, accept string) *httptest.ResponseRecorder {
@@ -286,8 +302,7 @@ func assertAppErrorPage(t *testing.T, handler *Handler) {
 		return response
 	}
 	page := call(http.MethodGet, "/boom", "text/html,application/xhtml+xml")
-	// The file is sent as it is on disk: no placeholder substitution.
-	if page.Code != http.StatusInternalServerError || page.Body.String() != "<h1>custom error {{APP_NAME}}</h1>" {
+	if page.Code != http.StatusInternalServerError || page.Body.String() != "<h1>custom error demo 500</h1>" {
 		t.Fatalf("app 500 on an html GET = %d %q", page.Code, page.Body.String())
 	}
 	if got := page.Header(); !strings.Contains(got.Get("Content-Type"), "text/html") || got.Get("Cache-Control") != "no-store" || got.Get("Content-Encoding") != "" || got.Get("Etag") != "" || got.Get("Content-Length") != strconv.Itoa(page.Body.Len()) {

@@ -12,5 +12,4 @@ procfile:
 autostart: button
 
 # Any AuthCog account may sign in; the page shows the X-Dboss-User header dboss sets.
-auth:
-  allow_emails: ["*"]
+auth: ["*"]

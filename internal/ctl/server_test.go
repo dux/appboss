@@ -32,16 +32,13 @@ func (f *fakeRuntime) Destroy(string) error    { return nil }
 func (f *fakeRuntime) SetMaintenance(string, bool) error {
 	return nil
 }
-func (f *fakeRuntime) RunCron(string, string) error { return nil }
-func (f *fakeRuntime) RunHook(string, string) error { return nil }
-func (f *fakeRuntime) RotateHook(name, hook string) (supervisor.HookInfo, error) {
-	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}}, nil
-}
+func (f *fakeRuntime) RunCron(string, string) error                { return nil }
+func (f *fakeRuntime) RunHook(string, string) error                { return nil }
 func (f *fakeRuntime) Hooks(string) ([]supervisor.HookInfo, error) { return nil, nil }
-func (f *fakeRuntime) HookSecret(string, string) (string, error) {
+func (f *fakeRuntime) HookToken(string, string) (string, error) {
 	return "", nil
 }
-func (f *fakeRuntime) HostHookSecret(string) (string, error) { return "", nil }
+func (f *fakeRuntime) HostHookToken(string) (string, error) { return "", nil }
 func (f *fakeRuntime) Exec(string, []string, time.Duration) (supervisor.ExecResult, error) {
 	return supervisor.ExecResult{}, nil
 }

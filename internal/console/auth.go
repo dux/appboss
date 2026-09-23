@@ -12,6 +12,7 @@ import (
 
 	"dboss/internal/authcog"
 	"dboss/internal/config"
+	"dboss/internal/pages"
 )
 
 const (
@@ -43,25 +44,27 @@ type authenticator struct {
 	cliTokens  map[string]cliToken
 	dev        bool
 	devSession authSession // the one local session a dev run hands out, minted at startup
+	hostPages  func() string
 }
 
-func consoleAuthenticator(flow *authcog.Flow, management config.Management, dev bool) (*authenticator, error) {
+func consoleAuthenticator(flow *authcog.Flow, cfg config.Config, hostPages func() string) (*authenticator, error) {
+	management, dev := cfg.Management, cfg.Dev()
 	hosts := make(map[string]bool, len(management.Host))
 	for _, host := range management.Host {
 		hosts[strings.ToLower(host)] = true
 	}
-	auth := &authenticator{flow: flow, admins: map[string]bool{}, dev: dev}
-	for _, email := range management.Auth.AdminEmails {
+	auth := &authenticator{flow: flow, admins: map[string]bool{}, dev: dev, hostPages: hostPages}
+	for _, email := range management.Admins {
 		auth.admins[strings.ToLower(email)] = true
 	}
 	auth.gate = authcog.Gate{
 		Audience:      authAudience,
-		Realm:         management.Auth.Realm,
+		Realm:         cfg.AuthCogRealm,
 		Hosts:         func(host string) bool { return hosts[host] },
 		CallbackPath:  authCallbackPath,
 		StateCookie:   authStateCookie,
 		SessionCookie: authSessionCookie,
-		TTL:           management.Auth.SessionTTL.Value(),
+		TTL:           cfg.Defaults.SessionTTL.Value(),
 		Allow:         func(email string) bool { return auth.admins[email] },
 	}
 	if dev {
@@ -109,16 +112,12 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 	if loopbackHost(r.Host) {
 		// AuthCog has no destination for a loopback name, so the only way in here is the link
 		// from `dboss login`.
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, cliLoginPage)
+		pages.Page{Name: pages.Login}.Write(w, a.hostPages())
 		return authSession{}, false
 	}
 	a.flow.Start(w, r, a.gate)
 	return authSession{}, false
 }
-
-const cliLoginPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to dboss</title><style>body{background:#f1f5f9;color:#182433;font:15px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;min-height:100vh;place-items:center;margin:0}main{max-width:32rem;padding:0 1.5rem;text-align:center}code{padding:2px 6px;border:1px solid rgb(4 32 69 / 14%);border-radius:4px;background:#fff}p{color:#667382}</style><main><h1>Sign in from the command line</h1><p>Run <code>dboss login</code> on this host and open the link it prints. The link works once and expires after 3 minutes.</p></main></html>`
 
 // loopbackHost reports whether rawHost names this machine: localhost or a loopback address,
 // with or without a port.

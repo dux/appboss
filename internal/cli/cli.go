@@ -71,6 +71,8 @@ func (c CLI) Run(args []string) int {
 		err = c.config(args[1:])
 	case "check":
 		err = c.check(args[1:])
+	case "pages":
+		err = c.pages(args[1:])
 	case "doctor":
 		err = c.doctor(args[1:])
 	case "kill":

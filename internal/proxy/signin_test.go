@@ -14,7 +14,7 @@ import (
 	"dboss/internal/supervisor"
 )
 
-const gated = "auth:\n  allow_emails: [ana@example.com, \"*@team.test\"]\n"
+const gated = "auth: [ana@example.com, \"*@team.test\"]\n"
 
 // signInHandler is the feature handler with a flow whose AuthCog exchange answers email.
 func signInHandler(email string) *Handler {
@@ -95,7 +95,7 @@ func TestSignInGatesTheAppBehindAuthCog(t *testing.T) {
 	if response := serveFeature(t, handler, other, static); response.Code != http.StatusUnauthorized {
 		t.Fatalf("session reused on another app = %d", response.Code)
 	}
-	removed := featureSnapshot(t, "auth:\n  allow_emails: [someone@else.test]\n")
+	removed := featureSnapshot(t, "auth: [someone@else.test]\n")
 	removed.State = supervisor.Stopped
 	if response := serveFeature(t, handler, removed, static); response.Code != http.StatusUnauthorized {
 		t.Fatalf("session of a removed email = %d", response.Code)

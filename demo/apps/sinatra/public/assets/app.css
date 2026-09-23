@@ -1,1 +1,47 @@
-body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; }
+:root {
+  color-scheme: light;
+  --bg: #fbf7f4;
+  --card: #ffffff;
+  --border: #eadfd8;
+  --text: #2b1d17;
+  --muted: #7a6a62;
+  --accent: #b83b2e;
+  --accent-hover: #9f3024;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 48px 16px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main { max-width: 40rem; margin: 0 auto; }
+h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.25; }
+h2 { margin: 40px 0 8px; font-size: 18px; }
+p { margin: 0 0 12px; }
+a { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+code { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); font-size: 14px; }
+.muted { color: var(--muted); }
+
+.tries { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
+.tries li { padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.tries strong { display: block; margin-bottom: 2px; }
+.tries p { margin: 0; color: var(--muted); font-size: 15px; }
+
+/* The dboss pages rendered from public/error_pages/template.html. */
+.page { display: grid; min-height: 100vh; place-items: center; padding: 24px 16px; }
+.card { width: 100%; max-width: 30rem; padding: 32px; border: 1px solid var(--border); border-top: 4px solid var(--accent); border-radius: 8px; background: var(--card); }
+.eyebrow { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 14px; }
+.action { margin: 20px 0 4px; }
+.action:empty { display: none; }
+.action form { margin: 0; }
+.action button,
+.action a { display: inline-block; padding: 9px 18px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.action button:hover,
+.action a:hover { background: var(--accent-hover); color: #fff; }
+.note { margin: 24px 0 0; color: var(--muted); font-size: 13px; }

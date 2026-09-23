@@ -45,6 +45,26 @@ func TestHookEndpointAcceptsGitHubSignature(t *testing.T) {
 	}
 }
 
+// Without tokens.dboss no ping passes, not even a GitHub signature made with the empty key.
+func TestHookEndpointRefusesEverythingWithoutAToken(t *testing.T) {
+	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": ""}}
+	handler := newTestHandler(t, manager, nil)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy?token=", strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/hooks/sinatra/deploy", strings.NewReader(`{}`)),
+	} {
+		request.Header.Set("X-Hub-Signature-256", hookSignature("", `{}`))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d", response.Code)
+		}
+	}
+	if len(manager.actions) != 0 {
+		t.Fatalf("action ran without a token: %v", manager.actions)
+	}
+}
+
 func TestHookEndpointRejectsBadSecret(t *testing.T) {
 	manager := &fakeManager{hookSecrets: map[string]string{"sinatra/deploy": "s3cret"}}
 	handler := newTestHandler(t, manager, nil)

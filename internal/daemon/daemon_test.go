@@ -23,7 +23,7 @@ import (
 
 func TestManagementTakesFirstPort(t *testing.T) {
 	cfg := config.Default()
-	cfg.Ports.Range = [2]int{3100, 3199}
+	cfg.Ports = [2]int{3100, 3199}
 	allocator, port := newAllocator(cfg)
 	if port != 3100 || allocator.Entries()["dboss/management"] != 3100 {
 		t.Fatalf("management port = %d, entries = %v", port, allocator.Entries())
@@ -176,7 +176,7 @@ func TestDevConsoleIsServedWithoutTheProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
-	cfg.Ports.Range = [2]int{0, 0}
+	cfg.Ports = [2]int{0, 0}
 	cfg.Proxy.Listen = nil
 	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}
 	session, err := Build(cfg, nil)
@@ -210,7 +210,7 @@ func TestDevSessionServesHTTPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.StateDir, cfg.LogDir, cfg.Socket = dir+"/state", dir+"/log", dir+"/dboss.sock"
-	cfg.Ports.Range = [2]int{0, 0}
+	cfg.Ports = [2]int{0, 0}
 	cfg.Proxy.Listen = config.List{"127.0.0.1:0"}
 	cfg.Proxy.TLS.Listen = "127.0.0.1:0"
 	cfg.App = &config.App{Procfile: map[string]config.ProcessSpec{}}

@@ -183,8 +183,8 @@ scaffold() {
 case "$mode" in
 	server)
 		scaffold
-		# Ownership before the first start, so state_dir, log_dir, the ACME cache and the
-		# generated hook and pubsub secrets all belong to the service user from the beginning.
+		# Ownership before the first start, so the runtime dir, the ACME cache and the generated
+		# pubsub secrets all belong to the service user from the beginning.
 		chown -R "$service_user:" "$host_dir"
 		"$bin" check -c "$host_dir/dboss.yaml"
 		"$bin" systemd -c "$host_dir/dboss.yaml" --user "$service_user" --bin "$bin" --install
@@ -198,8 +198,7 @@ case "$mode" in
 
 			       management:
 			         host: dboss.example.com
-			         auth:
-			           admin_emails: [you@example.com]
+			         admins: [you@example.com]
 
 			  2. sudo systemctl restart dboss
 			  3. dboss login        # prints a one-time console sign-in link

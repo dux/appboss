@@ -9,7 +9,7 @@ import (
 )
 
 func TestTrafficAggregatesTheRequestLog(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now().UTC()
@@ -78,7 +78,7 @@ func TestTrafficAggregatesTheRequestLog(t *testing.T) {
 
 func TestTrafficNeverCreatesADatabase(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	traffic, err := store.Traffic("quiet", time.Now().Add(-time.Hour))

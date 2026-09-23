@@ -28,14 +28,14 @@ func cronTestConfig(t *testing.T, portRange [2]int, cronYAML string) config.Conf
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = portRange
+	cfg.Ports = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	return cfg
 }
 
 func TestCronListsAndRunsManually(t *testing.T) {
 	cfg := cronTestConfig(t, [2]int{32700, 32720}, "cron:\n  tick:\n    schedule: every 1m\n    command: /bin/echo hello\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestCronListsAndRunsManually(t *testing.T) {
 
 func TestCronSkipsOverlapAndTimesOut(t *testing.T) {
 	cfg := cronTestConfig(t, [2]int{32720, 32740}, "cron:\n  slow:\n    schedule: every 1m\n    command: /bin/sleep 30\n    timeout: 1s\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestCronSkipsOverlapAndTimesOut(t *testing.T) {
 
 func TestCronTickFiresDueJob(t *testing.T) {
 	cfg := cronTestConfig(t, [2]int{32740, 32760}, "cron:\n  tick:\n    schedule: every 1m\n    command: /bin/echo due\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestCronTickFiresDueJob(t *testing.T) {
 
 func TestRescanAppliesNewCron(t *testing.T) {
 	cfg := cronTestConfig(t, [2]int{32760, 32780}, "")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,9 +41,10 @@ func (s *recordingSink) waitFor(t *testing.T, eventType string) notify.Event {
 }
 
 func TestCrashEmitsNotification(t *testing.T) {
+	fastRestart(t)
 	sink := &recordingSink{}
-	cfg := hookConfig(t, [2]int{32900, 32920}, "procfile:\n  web:\n    command: /usr/bin/false\n    hosts: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 1\nrestart_backoff: [1ms, 1.0, 1ms]\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	cfg := hookConfig(t, [2]int{32900, 32920}, "procfile:\n  web:\n    command: /usr/bin/false\n    hosts: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 1\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +55,10 @@ func TestCrashEmitsNotification(t *testing.T) {
 }
 
 func TestRestartLoopEmitsNotification(t *testing.T) {
+	fastRestart(t)
 	sink := &recordingSink{}
-	cfg := hookConfig(t, [2]int{32920, 32940}, "procfile:\n  web:\n    command: /usr/bin/false\n    hosts: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 5\nrestart_backoff: [1ms, 1.0, 1ms]\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	cfg := hookConfig(t, [2]int{32920, 32940}, "procfile:\n  web:\n    command: /usr/bin/false\n    hosts: [demo.test]\nautostart: true\nrestart: on-failure\nmax_restarts: 5\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestRestartLoopEmitsNotification(t *testing.T) {
 func TestHookFailureEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
 	cfg := hookConfig(t, [2]int{32940, 32960}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/false\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +88,7 @@ func TestHookFailureEmitsNotification(t *testing.T) {
 func TestDeployHookEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
 	cfg := hookConfig(t, [2]int{33100, 33120}, "procfile:\n  web: /bin/sleep 30\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/true\n    restart: true\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,7 @@ func TestDeployHookEmitsNotification(t *testing.T) {
 func TestWakeFailureEmitsNotification(t *testing.T) {
 	sink := &recordingSink{}
 	cfg := hookConfig(t, [2]int{32960, 32980}, "procfile:\n  web: /bin/sleep 30\nautostart: false\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil, sink)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil, sink)
 	if err != nil {
 		t.Fatal(err)
 	}

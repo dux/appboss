@@ -129,7 +129,7 @@ func (s *Service) BackupAll(ctx context.Context) error {
 	if _, err := s.connection(ctx); err != nil {
 		return err
 	}
-	selected := postgres.Backup.Selected()
+	selected := postgres.Backups.Selected()
 	if len(selected) == 0 {
 		return errors.New("no databases are selected for backup")
 	}
@@ -292,7 +292,7 @@ func (s *Service) prune() {
 	}
 	keep := map[string]bool{}
 	for database, group := range byDatabase {
-		window := rotationWindow(opts.postgres.Backup.Rotation(database))
+		window := rotationWindow(opts.postgres.Backups.Rotation(database))
 		for id := range keepSet(group, window, now) {
 			keep[id] = true
 		}

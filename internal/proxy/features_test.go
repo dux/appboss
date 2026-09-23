@@ -16,11 +16,7 @@ import (
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
 func featureHandler() *Handler {
-	button, _ := builtinPages.ReadFile("pages/button.html")
-	maintenance, _ := builtinPages.ReadFile("pages/maintenance.html")
-	failed, _ := builtinPages.ReadFile("pages/error.html")
-	denied, _ := builtinPages.ReadFile("pages/forbidden.html")
-	handler := &Handler{cfg: config.Default(), button: button, maintenance: maintenance, failed: failed, denied: denied}
+	handler := &Handler{cfg: config.Default(), hostConfig: config.Default}
 	handler.initFilters()
 	return handler
 }
@@ -32,7 +28,7 @@ func featureSnapshot(t *testing.T, data string) supervisor.Snapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return supervisor.Snapshot{Name: "demo", State: supervisor.Running, Dir: dir, Hosts: app.Hosts, WebProcesses: supervisor.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
+	return supervisor.Snapshot{Name: "demo", State: supervisor.Running, Dir: dir, Pages: filepath.Join(dir, app.Pages), Hosts: app.Hosts, WebProcesses: supervisor.WebProcessSnapshots(app.WebProcesses), Web: app.Web}
 }
 
 func serveFeature(t *testing.T, handler *Handler, snapshot supervisor.Snapshot, request *http.Request) *httptest.ResponseRecorder {
@@ -148,21 +144,23 @@ func TestCanonicalHostPerWebProcess(t *testing.T) {
 }
 
 func TestAllowIPsUsesClientIPHeader(t *testing.T) {
+	handler := featureHandler()
+	handler.cfg.Proxy.Cloudflare = true
 	snapshot := featureSnapshot(t, "allow_ips: [10.0.0.0/8]\n")
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 	request.Header.Set("Accept", "text/html")
 	request.Header.Set("CF-Connecting-IP", "203.0.113.1")
-	response := serveFeature(t, featureHandler(), snapshot, request)
-	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "Forbidden") {
+	response := serveFeature(t, handler, snapshot, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "Access denied") {
 		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
 	}
 	request.Header.Set("CF-Connecting-IP", "10.1.1.1")
-	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code == http.StatusForbidden {
+	if response := serveFeature(t, handler, snapshot, request); response.Code == http.StatusForbidden {
 		t.Fatal("allowed address was rejected")
 	}
 	request.Header.Set("CF-Connecting-IP", "203.0.113.1")
 	request.Header.Del("Accept")
-	if response := serveFeature(t, featureHandler(), snapshot, request); response.Code != http.StatusForbidden || response.Body.Len() != 0 {
+	if response := serveFeature(t, handler, snapshot, request); response.Code != http.StatusForbidden || response.Body.Len() != 0 {
 		t.Fatalf("non-html client should get an empty 403: %d %q", response.Code, response.Body.String())
 	}
 }
@@ -215,26 +213,47 @@ func TestUnauthorizedRequestNeverWakesAStoppedApp(t *testing.T) {
 }
 
 func TestMaintenancePageLookup(t *testing.T) {
-	snapshot := featureSnapshot(t, "    static: ./public\n")
+	snapshot := featureSnapshot(t, "")
 	snapshot.Maintenance = true
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
 	request.Header.Set("Accept", "text/html")
 	response := serveFeature(t, featureHandler(), snapshot, request)
-	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "30" || !strings.Contains(response.Body.String(), "demo will be back shortly") {
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "30" || !strings.Contains(response.Body.String(), "demo is under maintenance") {
 		t.Fatalf("unexpected built-in page: %d %s", response.Code, response.Body.String())
 	}
-	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "503.html"), "<h1>static 503</h1>")
-	if response := serveFeature(t, featureHandler(), snapshot, request); response.Body.String() != "<h1>static 503</h1>" {
-		t.Fatalf("static/503.html should win over the built-in page: %s", response.Body.String())
+	writeProxyFixture(t, filepath.Join(snapshot.Pages, "template.html"), "<h1>{{status}} {{title}}</h1>")
+	if response := serveFeature(t, featureHandler(), snapshot, request); response.Body.String() != "<h1>503 demo is under maintenance</h1>" {
+		t.Fatalf("the app template should win over the built-in page: %s", response.Body.String())
 	}
-	writeProxyFixture(t, filepath.Join(snapshot.Dir, "down.html"), "<h1>custom</h1>")
-	snapshot.Web.MaintenancePage = "down.html"
-	if response := serveFeature(t, featureHandler(), snapshot, request); response.Body.String() != "<h1>custom</h1>" {
-		t.Fatalf("maintenance_page should win: %s", response.Body.String())
+	writeProxyFixture(t, filepath.Join(snapshot.Pages, "maintenance.html"), "<h1>down {{app}}</h1>")
+	if response := serveFeature(t, featureHandler(), snapshot, request); response.Body.String() != "<h1>down demo</h1>" {
+		t.Fatalf("maintenance.html should win over the template: %s", response.Body.String())
 	}
 	post := httptest.NewRequest(http.MethodPost, "http://demo.test/", nil)
 	if response := serveFeature(t, featureHandler(), snapshot, post); response.Code != http.StatusServiceUnavailable || response.Body.Len() != 0 {
 		t.Fatalf("non-html request should get an empty 503: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestHostPagesAreTheFallback(t *testing.T) {
+	host := t.TempDir()
+	writeProxyFixture(t, filepath.Join(host, "template.html"), "<p>host {{title}}</p>")
+	handler := featureHandler()
+	handler.hostConfig = func() config.Config {
+		cfg := config.Default()
+		cfg.Pages = host
+		return cfg
+	}
+	snapshot := featureSnapshot(t, "")
+	snapshot.Maintenance = true
+	request := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	request.Header.Set("Accept", "text/html")
+	if response := serveFeature(t, handler, snapshot, request); response.Body.String() != "<p>host demo is under maintenance</p>" {
+		t.Fatalf("host template should serve an app without pages: %s", response.Body.String())
+	}
+	writeProxyFixture(t, filepath.Join(snapshot.Pages, "template.html"), "<p>app</p>")
+	if response := serveFeature(t, handler, snapshot, request); response.Body.String() != "<p>app</p>" {
+		t.Fatalf("app pages should win over the host: %s", response.Body.String())
 	}
 }
 
@@ -323,30 +342,21 @@ func TestErrorPageForProxyErrors(t *testing.T) {
 		return serveFeature(t, featureHandler(), snapshot, request)
 	}
 	builtIn := get(featureSnapshot(t, ""), "text/html")
-	if builtIn.Code != http.StatusBadGateway || !strings.Contains(builtIn.Body.String(), "demo did not answer") || builtIn.Header().Get("Cache-Control") != "no-store" {
+	if builtIn.Code != http.StatusBadGateway || !strings.Contains(builtIn.Body.String(), "Something went wrong") || builtIn.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("built-in error page = %d %v %q", builtIn.Code, builtIn.Header(), builtIn.Body.String())
 	}
 	if api := get(featureSnapshot(t, ""), "application/json"); api.Code != http.StatusBadGateway || api.Body.Len() != 0 {
 		t.Fatalf("non-html client should get an empty 502: %d %q", api.Code, api.Body.String())
 	}
 
-	custom := featureSnapshot(t, "error_page_path: public/error_500.html\n")
-	// The key points at a file that is not there yet: the built-in page still answers.
-	if response := get(custom, "text/html"); response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "demo did not answer") {
-		t.Fatalf("unreadable error_page_path = %d %q", response.Code, response.Body.String())
-	}
-	writeProxyFixture(t, filepath.Join(custom.Dir, "public", "error_500.html"), "<h1>ours {{APP_NAME}}</h1>")
+	custom := featureSnapshot(t, "")
+	writeProxyFixture(t, filepath.Join(custom.Pages, "error.html"), "<h1>ours {{status}} {{app}} {{unknown}}</h1>")
 	response := get(custom, "text/html")
-	if response.Code != http.StatusBadGateway || response.Body.String() != "<h1>ours {{APP_NAME}}</h1>" || !strings.Contains(response.Header().Get("Content-Type"), "text/html") {
+	if response.Code != http.StatusBadGateway || response.Body.String() != "<h1>ours 502 demo {{unknown}}</h1>" || !strings.Contains(response.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("custom error page = %d %v %q", response.Code, response.Header(), response.Body.String())
 	}
 	if api := get(custom, ""); api.Code != http.StatusBadGateway || api.Body.Len() != 0 {
 		t.Fatalf("non-html client should get an empty 502 with a custom page too: %d %q", api.Code, api.Body.String())
-	}
-	// The page itself is never a static hit, so it cannot be fetched with a 200.
-	direct := serveFeature(t, featureHandler(), custom, httptest.NewRequest(http.MethodGet, "http://demo.test/error_500.html", nil))
-	if direct.Code != http.StatusBadGateway {
-		t.Fatalf("error page fetched directly = %d", direct.Code)
 	}
 }
 

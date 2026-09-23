@@ -20,7 +20,7 @@ func (h *Handler) writePG(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "rotation": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
 // pgRefresh re-inspects the server on demand. It is read-only, so it writes no audit row.
@@ -33,7 +33,7 @@ func (h *Handler) pgRefresh(w http.ResponseWriter, r *http.Request, session auth
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot, "backups": h.service.Backups(), "rotation": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
 func (h *Handler) writePGBackups(w http.ResponseWriter, _ *http.Request) {
@@ -197,7 +197,7 @@ func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authS
 		return
 	}
 	var request struct {
-		Backup config.PostgresBackup `json:"backup"`
+		Backups config.PostgresBackups `json:"backups"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -209,7 +209,7 @@ func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authS
 		if err != nil {
 			return file, err
 		}
-		contents, err := patchPostgresBackup(file.Contents, request.Backup)
+		contents, err := patchPostgresBackup(file.Contents, request.Backups)
 		if err != nil {
 			return file, err
 		}
@@ -220,12 +220,12 @@ func (h *Handler) pgConfig(w http.ResponseWriter, r *http.Request, session authS
 		return
 	}
 	snapshot, _ := h.service.PGSnapshot(false)
-	writeJSON(w, http.StatusOK, map[string]any{"file": result.File, "snapshot": snapshot, "backups": h.service.Backups(), "backup": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"file": result.File, "snapshot": snapshot, "backups": h.service.Backups(), "rotation": h.service.PGBackupConfig(), "updated_at": time.Now().UTC()})
 }
 
-// patchPostgresBackup replaces the postgres.backup mapping in a host config, leaving every other
+// patchPostgresBackup replaces the postgres.backups mapping in a host config, leaving every other
 // key untouched. Comments in the file are normalized, since the override is machine-managed.
-func patchPostgresBackup(contents string, backup config.PostgresBackup) (string, error) {
+func patchPostgresBackup(contents string, backups config.PostgresBackups) (string, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(contents), &root); err != nil {
 		return "", err
@@ -236,10 +236,10 @@ func patchPostgresBackup(contents string, backup config.PostgresBackup) (string,
 	document := root.Content[0]
 	postgres := ensureMapping(document, "postgres")
 	var node yaml.Node
-	if err := node.Encode(backup); err != nil {
+	if err := node.Encode(backups); err != nil {
 		return "", err
 	}
-	setMapping(postgres, "backup", &node)
+	setMapping(postgres, "backups", &node)
 	out, err := yaml.Marshal(&root)
 	if err != nil {
 		return "", err

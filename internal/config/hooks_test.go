@@ -16,7 +16,6 @@ hooks:
     command: ./deploy.sh
     timeout: 10m
     restart: true
-    secret: s3cret
   notify:
     command: ./notify.sh
     disabled: true
@@ -28,7 +27,7 @@ hooks:
 		t.Fatalf("hooks = %+v", app.Hooks)
 	}
 	deploy := app.Hooks["deploy"]
-	if deploy.Command != "./deploy.sh" || deploy.Timeout.Value() != 10*time.Minute || !deploy.Restart || deploy.Secret != "s3cret" {
+	if deploy.Command != "./deploy.sh" || deploy.Timeout.Value() != 10*time.Minute || !deploy.Restart {
 		t.Fatalf("deploy = %+v", deploy)
 	}
 	if notify := app.Hooks["notify"]; !notify.Disabled {
@@ -50,23 +49,14 @@ func TestHookPullShorthand(t *testing.T) {
 	}
 }
 
-func TestGithubTokenDefaultsAndOverride(t *testing.T) {
+func TestTokensAreHostKeys(t *testing.T) {
+	cfg, err := Parse([]byte("apps: ./apps\ntokens:\n  github: gh\n  dboss: db\n"), "/srv/dboss.yaml")
+	if err != nil || cfg.Tokens.Github != "gh" || cfg.Tokens.Dboss != "db" {
+		t.Fatalf("tokens = %+v, %v", cfg.Tokens, err)
+	}
 	path := filepath.Join(t.TempDir(), FileName)
-	defaults := Default().Defaults
-	defaults.GithubToken = "host-token"
-	app, err := ParseApp([]byte("procfile:\n  web: ./server\n"), path, defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if app.GithubToken != "host-token" {
-		t.Fatalf("inherited token = %q", app.GithubToken)
-	}
-	app, err = ParseApp([]byte("procfile:\n  web: ./server\ngithub_token: app-token\n"), path, defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if app.GithubToken != "app-token" {
-		t.Fatalf("override token = %q", app.GithubToken)
+	if _, err := ParseApp([]byte("procfile:\n  web: ./server\ntokens:\n  github: x\n"), path, Default().Defaults); err == nil || !strings.Contains(err.Error(), "only valid in the root") {
+		t.Fatalf("tokens in an app file = %v", err)
 	}
 }
 

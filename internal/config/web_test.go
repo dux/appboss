@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestStaticAndErrorPageKeys(t *testing.T) {
+func TestStaticKeys(t *testing.T) {
 	dir := t.TempDir()
 	defaults := Default().Defaults
 	base := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n"
@@ -15,14 +15,14 @@ func TestStaticAndErrorPageKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.WebProcesses[0].Static != DefaultStatic || !slices.Contains(app.Web.StaticExtensions, "css") || slices.Contains(app.Web.StaticExtensions, "html") || app.Web.ErrorPagePath != "" {
+	if app.WebProcesses[0].Static != DefaultStatic || !slices.Contains(app.Web.StaticExtensions, "css") || slices.Contains(app.Web.StaticExtensions, "html") {
 		t.Fatalf("unexpected web defaults: %+v", app.WebProcesses[0])
 	}
-	custom, err := ParseApp([]byte(base+"    static: /srv/assets\nstatic_extensions: []\nerror_page_path: public/error_500.html\n"), filepath.Join(dir, FileName), defaults)
+	custom, err := ParseApp([]byte(base+"    static: /srv/assets\nstatic_extensions: []\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.WebProcesses[0].Static != "/srv/assets" || len(custom.Web.StaticExtensions) != 0 || custom.Web.ErrorPagePath != "public/error_500.html" {
+	if custom.WebProcesses[0].Static != "/srv/assets" || len(custom.Web.StaticExtensions) != 0 {
 		t.Fatalf("app keys did not override the defaults: %+v", custom.WebProcesses[0])
 	}
 	disabled, err := ParseApp([]byte(base+"    static: false\n"), filepath.Join(dir, FileName), defaults)

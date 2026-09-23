@@ -7,7 +7,7 @@ import (
 )
 
 func TestAuditRecordSearchAndPrune(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, time.Hour)
 	defer store.Close()
 	now := time.Now()
 	rows := []AuditEntry{
@@ -83,7 +83,7 @@ func TestAuditRecordSearchAndPrune(t *testing.T) {
 }
 
 func TestVacuumKeepsDatabaseUsable(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, time.Hour)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, time.Hour)
 	defer store.Close()
 	if err := store.RecordLogs("web", []LogEntry{{Time: time.Now(), Source: "stdout", Process: "web", Level: "info", Message: "hello"}}); err != nil {
 		t.Fatal(err)

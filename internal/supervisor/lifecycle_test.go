@@ -16,7 +16,7 @@ func lifecycleManager(t *testing.T, portRange [2]int, extra string) (*Manager, s
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "trace")
 	cfg := supervisorTestConfigApp(t, portRange, strings.ReplaceAll(extra, "TRACE", trace))
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -102,8 +102,9 @@ func TestLifecycleStopKillsARunningStep(t *testing.T) {
 }
 
 func TestLifecycleStartIsNotRerunForACrashedProcess(t *testing.T) {
+	fastRestart(t)
 	marker := filepath.Join(t.TempDir(), "hang-once")
-	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\nlifecycle:\n  start: echo start >> TRACE\n", marker)
+	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nlifecycle:\n  start: echo start >> TRACE\n", marker)
 	manager, trace, _ := lifecycleManager(t, [2]int{33460, 33480}, "autostart: false\nliveness_interval: 50ms\n"+extra)
 	if err := manager.Start("demo"); err != nil {
 		t.Fatal(err)

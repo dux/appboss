@@ -10,7 +10,7 @@ import (
 
 func TestStartOrderPutsWebFirst(t *testing.T) {
 	cfg := hookConfig(t, [2]int{33040, 33060}, "procfile:\n  alpha: /usr/bin/true\n  web:\n    command: /usr/bin/true\n    hosts: [demo.test]\n  zeta: /usr/bin/true\nautostart: false\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestStartOrderPutsWebFirst(t *testing.T) {
 
 func TestStopDrainsInFlightRequests(t *testing.T) {
 	cfg := hookConfig(t, [2]int{33000, 33020}, "procfile:\n  web: /usr/bin/true\nautostart: false\nstop_timeout: 5s\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestStopDrainsInFlightRequests(t *testing.T) {
 
 func TestDrainGivesUpAfterStopTimeout(t *testing.T) {
 	cfg := hookConfig(t, [2]int{33020, 33040}, "procfile:\n  web: /usr/bin/true\nautostart: false\nstop_timeout: 150ms\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

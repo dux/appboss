@@ -13,13 +13,11 @@ autostart: false
 # Sleeps after 2 minutes without requests (the host default is never); the next request wakes it.
 idle_stop: 2m
 
-# Replaces the proxy's own error page and app 5xx bodies for browsers; try /boom.
-error_page_path: ./public/500.html
+# The dboss pages (starting, maintenance, error, ...) come from public/error_pages/template.html,
+# the default pages folder, so they carry the app's look; try /boom.
 
-# Posts error-rate to the notify webhook once 5 requests in a minute are more than 10% errors.
+# Posts error-rate to the notify webhook once more than 10% of the requests in 5 minutes fail.
 alerts:
-  window: 1m
-  min_requests: 5
   error_rate: 10
 
 # Per-process overrides: the job worker stops fast and always comes back; web keeps the app values.

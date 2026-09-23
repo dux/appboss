@@ -174,7 +174,7 @@ func TestDevConsoleHostNeedsNoAdminEmails(t *testing.T) {
 	}
 	host := filepath.Join(t.TempDir(), FileName)
 	writeConfigFile(t, host, "apps: ./apps\nmanagement:\n  host: dboss.lvh.me\n")
-	if _, err := Load(host); err == nil || !strings.Contains(err.Error(), "admin_emails") {
+	if _, err := Load(host); err == nil || !strings.Contains(err.Error(), "management.admins") {
 		t.Fatalf("a host console without admins should be rejected, got %v", err)
 	}
 }

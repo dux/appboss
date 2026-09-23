@@ -61,11 +61,13 @@ type ExecResult struct {
 }
 
 type Snapshot struct {
-	Name            string               `json:"name"`
-	State           State                `json:"state"`
-	Maintenance     bool                 `json:"maintenance"`
-	Draining        bool                 `json:"draining,omitempty"`
-	Dir             string               `json:"dir"`
+	Name        string `json:"name"`
+	State       State  `json:"state"`
+	Maintenance bool   `json:"maintenance"`
+	Draining    bool   `json:"draining,omitempty"`
+	Dir         string `json:"dir"`
+	// Pages is the app's own pages folder, resolved against Dir.
+	Pages           string               `json:"pages"`
 	Hosts           []string             `json:"hosts"`
 	WebProcesses    []WebProcessSnapshot `json:"web_processes"`
 	Autostart       bool                 `json:"autostart"`

@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,6 +62,14 @@ type Daemon struct {
 // EACCES portably.
 var netListen = net.Listen
 
+// Built-in cadence: the log store writes queued rows every logFlush, process logs are sealed and
+// ingested every logIngestInterval, and one app event is notified at most once per notifyQuiet.
+const (
+	logFlush          = time.Second
+	logIngestInterval = 5 * time.Second
+	notifyQuiet       = 5 * time.Minute
+)
+
 // devCADir is the test seam for where a dev session keeps its certificate authority.
 var devCADir = devtls.DefaultDir
 
@@ -70,21 +77,21 @@ var devCADir = devtls.DefaultDir
 // the console and the control socket. Listeners bind here, so a returned error leaves nothing
 // behind.
 func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
-	logx.SetLevel(cfg.Daemon.LogLevel)
+	logx.SetLevel(cfg.LogLevel)
 	for _, dir := range []string{cfg.StateDir, cfg.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, err
 		}
 	}
-	cleared, err := ports.ClearPortRange(cfg.Ports.Range, cfg.Defaults.StopTimeout.Value())
+	cleared, err := ports.ClearPortRange(cfg.Ports, cfg.Defaults.StopTimeout.Value())
 	if err != nil {
 		return nil, err
 	}
 	if len(cleared) > 0 {
-		logx.Infof("cleared app port range %d-%d: pids=%v", cfg.Ports.Range[0], cfg.Ports.Range[1], cleared)
+		logx.Infof("cleared app port range %d-%d: pids=%v", cfg.Ports[0], cfg.Ports[1], cleared)
 	}
 	allocator, managementPort := newAllocator(cfg)
-	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: cfg.Notify.Format, Events: cfg.Notify.Events, MinInterval: cfg.Notify.MinInterval.Value(), Headers: cfg.Notify.Headers})
+	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: notify.FormatFor(cfg.Notify.URL), Events: cfg.Notify.Events, MinInterval: notifyQuiet, Headers: cfg.Notify.Headers})
 	manager, invalid, err := supervisor.New(cfg, allocator, echo, notifier)
 	if err != nil {
 		notifier.Close()
@@ -93,16 +100,16 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 	for _, scanErr := range invalid {
 		logx.Warnf("skip invalid app: %v", scanErr)
 	}
-	logs := logstore.New(cfg.LogDir, cfg.Daemon.LogFlush.Value(), manager, cfg.Daemon.PruneAt, cfg.Daemon.VacuumAt, cfg.Defaults.StdoutRetention.Value(), cfg.Daemon.AuditRetention.Value())
+	logs := logstore.New(cfg.LogDir, logFlush, manager, cfg.MaintenanceAt, cfg.Defaults.StdoutRetention.Value(), cfg.AuditRetention.Value())
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
-	ingester := ingest.New(manager, manager, logs, cfg.Daemon.LogIngestInterval.Value())
+	ingester := ingest.New(manager, manager, logs, logIngestInterval)
 	sysInfo := sysinfo.New([]sysinfo.DirSpec{
 		{Name: "config", Path: cfg.Dir},
-		{Name: "state_dir", Path: cfg.StateDir},
-		{Name: "log_dir", Path: cfg.LogDir},
-		{Name: "socket", Path: filepath.Dir(cfg.Socket)},
+		{Name: "dir/state", Path: cfg.StateDir},
+		{Name: "dir/log", Path: cfg.LogDir},
+		{Name: "dir", Path: cfg.RuntimeDir},
 	})
 	channels, err := pubsub.New(cfg.StateDir)
 	if err != nil {
@@ -156,7 +163,7 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 		}
 		for index, address := range cfg.Proxy.Listen {
 			handler := http.Handler(edge)
-			if certs != nil && cfg.Proxy.TLS.Redirect {
+			if certs != nil {
 				handler = certs.HTTPHandler(nil)
 			}
 			listener, bound, err := bindProxy("proxy", "proxy.listen", address, proxyProcess(index), allocator, echo != nil)
@@ -169,7 +176,7 @@ func Build(cfg config.Config, echo *supervisor.Echo) (*Daemon, error) {
 		}
 	}
 	if management != nil {
-		listener, err := bind("management", managementAddress(managementPort), "ports.range")
+		listener, err := bind("management", managementAddress(managementPort), "ports")
 		if err != nil {
 			d.Close()
 			return nil, err
@@ -240,7 +247,7 @@ func (d *Daemon) Close() error {
 // newAllocator reserves the first port of the range for the management console before any app
 // is discovered, so app ports never shift when the console is turned on or off.
 func newAllocator(cfg config.Config) (*ports.Allocator, int) {
-	allocator := ports.New(cfg.Ports.Range)
+	allocator := ports.New(cfg.Ports)
 	port, _ := allocator.Allocate("dboss", "management")
 	return allocator, port
 }
@@ -259,11 +266,7 @@ func edgeHandler(cfg config.Config, flow *authcog.Flow, manager *supervisor.Mana
 	if management != nil && cfg.Management.Enabled() {
 		handler = proxy.HostSwitch(cfg.Management.Host, management, appProxy)
 	}
-	edge, err := proxy.TrustedOnly(cfg.Proxy.TrustedCIDRs, handler)
-	if err != nil {
-		return nil, err
-	}
-	return proxy.CloudflareOnly(cfg.Proxy.CloudflareOnly, edge), nil
+	return proxy.CloudflareOnly(cfg.Proxy.Cloudflare, handler), nil
 }
 
 func startHTTPServer(name string, listener net.Listener, handler http.Handler) *http.Server {
@@ -306,7 +309,7 @@ func bindError(name, address, key string, err error) error {
 }
 
 // bindProxy is bind for a proxy address, with the terminal fallback: a hand-run session that may
-// not hold the configured port moves to the first free port of ports.range instead of exiting,
+// not hold the configured port moves to the first free port of ports instead of exiting,
 // so developing against an app needs no sudo. Under systemd stdout is a pipe, so a service start
 // still fails. name and key label the listener and the config key that moves it in errors.
 func bindProxy(name, key, address, process string, allocator *ports.Allocator, interactive bool) (net.Listener, string, error) {

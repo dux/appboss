@@ -12,10 +12,10 @@ func TestPostgresBackupValidation(t *testing.T) {
 		data string
 		want string
 	}{
-		{"valid", "postgres:\n  backup:\n    databases:\n      app_production: {rotation: week}\n      reports: {rotation: month}\n", ""},
-		{"empty rotation", "postgres:\n  backup:\n    databases:\n      app_production: {}\n", ""},
-		{"bad name", "postgres:\n  backup:\n    databases:\n      \"app-production\": {}\n", "invalid database name"},
-		{"bad rotation", "postgres:\n  backup:\n    databases:\n      app_production: {rotation: daily}\n", "must be week or month"},
+		{"valid", "postgres:\n  backups:\n    app_production: week\n    reports: month\n", ""},
+		{"empty rotation", "postgres:\n  backups:\n    app_production: \"\"\n", ""},
+		{"bad name", "postgres:\n  backups:\n    \"app-production\": week\n", "invalid database name"},
+		{"bad rotation", "postgres:\n  backups:\n    app_production: daily\n", "must be week or month"},
 	} {
 		_, err := Parse([]byte(base+test.data), "/srv/dboss.yaml")
 		if test.want == "" {

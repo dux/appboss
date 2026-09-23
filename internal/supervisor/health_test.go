@@ -35,11 +35,10 @@ func TestMonitorSlowsDownOnceReady(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime := &appRuntime{ctx: ctx, events: make(chan processEvent, 8)}
-	runtime.cfg.Proxy.Upstream.DialTimeout = config.Duration(time.Second)
+	fastHealth(t)
 	proc := &process{name: "web", port: port, done: make(chan struct{})}
 	defaults := config.Process{
 		Health:             "/up",
-		HealthInterval:     config.Duration(5 * time.Millisecond),
 		LivenessInterval:   config.Duration(10 * time.Second),
 		HealthTimeout:      config.Duration(time.Second),
 		UnhealthyThreshold: 3,
@@ -98,11 +97,10 @@ func TestMonitorStopsAtReadinessWithoutAThreshold(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime := &appRuntime{ctx: ctx, events: make(chan processEvent, 8)}
-	runtime.cfg.Proxy.Upstream.DialTimeout = config.Duration(time.Second)
+	fastHealth(t)
 	proc := &process{name: "web", port: port, done: make(chan struct{})}
 	defaults := config.Process{
 		Health:             "tcp",
-		HealthInterval:     config.Duration(5 * time.Millisecond),
 		HealthTimeout:      config.Duration(time.Second),
 		UnhealthyThreshold: 0,
 	}
@@ -118,4 +116,20 @@ func TestMonitorStopsAtReadinessWithoutAThreshold(t *testing.T) {
 		t.Fatal("monitor kept running after readiness with unhealthy_threshold: 0")
 	}
 	close(proc.done)
+}
+
+// fastHealth polls readiness every 5ms for one test, so a health check lands at once.
+func fastHealth(t *testing.T) {
+	t.Helper()
+	previous := healthInterval
+	healthInterval = 5 * time.Millisecond
+	t.Cleanup(func() { healthInterval = previous })
+}
+
+// fastRestart restarts a failed process after a millisecond for one test.
+func fastRestart(t *testing.T) {
+	t.Helper()
+	first, maximum := restartBackoffFirst, restartBackoffMax
+	restartBackoffFirst, restartBackoffMax = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { restartBackoffFirst, restartBackoffMax = first, maximum })
 }

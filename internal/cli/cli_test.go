@@ -300,7 +300,7 @@ func TestConfigPrintsGivenFileOrDefaults(t *testing.T) {
 		t.Fatalf("given: exit %d %q", code, out.String())
 	}
 	out.Reset()
-	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "-c", path, "--defaults"}); code != 0 || !strings.Contains(out.String(), "\n  idle_stop: 2h0m0s\n") || !strings.Contains(out.String(), "\nports:\n  range:\n") {
+	if code := (CLI{Out: &out, Err: io.Discard}).Run([]string{"config", "-c", path, "--defaults"}); code != 0 || !strings.Contains(out.String(), "\n  idle_stop: 2h0m0s\n") || !strings.Contains(out.String(), "\nports:\n  - 3100\n") {
 		t.Fatalf("defaults: exit %d %s", code, out.String())
 	}
 	var errOut strings.Builder
@@ -323,9 +323,9 @@ func TestParseRemoteReadsFlagsAfterOperands(t *testing.T) {
 	if request.Method != ops.ActionPubsubPublish || request.App != "demo" || request.Channel != "chat" || request.Event != "note" || request.Process != "api" || string(request.Data) != `{"a":1}` {
 		t.Fatalf("request = %+v", request)
 	}
-	opts, _ = commonArgs([]string{"rotate", "demo", "deploy"})
-	if request, err = c.parseRemote("hooks", opts, &workdir{}); err != nil || request.Method != ops.ActionHookRotate || request.App != "demo" || request.Hook != "deploy" {
-		t.Fatalf("hooks rotate = %+v, %v", request, err)
+	opts, _ = commonArgs([]string{"run", "demo", "deploy"})
+	if request, err = c.parseRemote("hooks", opts, &workdir{}); err != nil || request.Method != ops.ActionHookRun || request.App != "demo" || request.Hook != "deploy" {
+		t.Fatalf("hooks run = %+v, %v", request, err)
 	}
 	opts, _ = commonArgs([]string{"demo", "-n", "5", "-f"})
 	if request, err = c.parseRemote("logs", opts, &workdir{}); err != nil || request.App != "demo" || request.Lines != 5 || !opts.follow {
@@ -333,15 +333,15 @@ func TestParseRemoteReadsFlagsAfterOperands(t *testing.T) {
 	}
 }
 
-// Every action that answers with a value has a result type, so its human output never type-asserts
-// the placeholder map.
-func TestPrintHumanHookRotate(t *testing.T) {
+// A hook without a ping URL says which keys give it one.
+func TestPrintHumanHooksNamesTheMissingToken(t *testing.T) {
 	var out bytes.Buffer
 	c := CLI{Out: &out, Err: &out}
-	if err := c.printHuman(ops.ActionHookRotate, supervisor.HookInfo{URL: "https://dboss.test/hooks/demo/deploy?token=x"}); err != nil {
+	hooks := []supervisor.HookInfo{{HookSnapshot: supervisor.HookSnapshot{Name: "deploy", Command: "./deploy.sh"}}}
+	if err := c.printHuman(ops.ActionHook, hooks); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "https://dboss.test/hooks/demo/deploy?token=x") {
+	if !strings.Contains(out.String(), "set tokens.dboss") {
 		t.Fatalf("output = %q", out.String())
 	}
 }

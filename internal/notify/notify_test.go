@@ -175,3 +175,20 @@ func TestSendIgnoresUnselectedEvents(t *testing.T) {
 		t.Fatalf("webhook called %d times, want 0", got)
 	}
 }
+
+func TestFormatForFollowsTheWebhookHost(t *testing.T) {
+	for webhook, want := range map[string]string{
+		"https://hooks.slack.com/services/T/B/x":   "slack",
+		"https://discord.com/api/webhooks/1/abc":   "discord",
+		"https://discordapp.com/api/webhooks/1/ab": "discord",
+		"https://ntfy.sh/dboss":                    "ntfy",
+		"https://ntfy.example.com/dboss":           "ntfy",
+		"https://discord.com/channels/1":           "generic",
+		"https://example.com/hook":                 "generic",
+		"::bad":                                    "generic",
+	} {
+		if got := FormatFor(webhook); got != want {
+			t.Errorf("FormatFor(%q) = %q, want %q", webhook, got, want)
+		}
+	}
+}

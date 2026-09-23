@@ -27,13 +27,13 @@ func TestKeysDocumentEveryConfigKey(t *testing.T) {
 	}
 	for path, want := range map[string]Key{
 		"idle_stop":       {Block: "runtime", Scope: ScopeBoth, Type: "duration", Default: "0", Example: "30m", PerProcess: true},
-		"health_interval": {Block: "runtime", Scope: ScopeBoth, Type: "duration", Default: "500ms", Example: "1s", PerProcess: true},
-		"restart_backoff": {Block: "runtime", Scope: ScopeBoth, Type: "list", Default: "[1s, 2, 60s]", Example: "[500ms, 2.0, 30s]", PerProcess: true},
-		"ports.range":     {Block: "ports", Scope: ScopeService, Type: "[from, to]", Default: "[3100, 3990]"},
+		"ports":           {Block: "host", Scope: ScopeService, Type: "[from, to]", Default: "[3100, 3990]"},
+		"authcog":         {Block: "auth", Scope: ScopeBoth, Type: "string | bool", Example: "/login"},
+		"pages":           {Block: "app", Scope: ScopeApp, Type: "string", Default: "./public/error_pages", Example: "./public/errors"},
 		"autostart":       {Block: "app", Scope: ScopeApp, Type: "bool | button", Default: "true"},
 		"deletable":       {Block: "app", Scope: ScopeApp, Type: "bool", Default: "false"},
 		"management.host": {Block: "management", Scope: ScopeService, Type: "string | list", Example: "dboss.example.com"},
-		"log_max_size":    {Block: "runtime", Scope: ScopeBoth, Type: "size", Default: "10m", Example: "50m", PerProcess: true},
+		"memory_max":      {Block: "runtime", Scope: ScopeBoth, Type: "size", Default: "0", Example: "512m", PerProcess: true},
 	} {
 		got, ok := seen[path]
 		if !ok {

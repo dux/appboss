@@ -28,7 +28,7 @@ func pgHandler(t *testing.T) *Handler {
 	cfg.Dir = dir
 	cfg.StateDir = filepath.Join(dir, ".dboss")
 	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	cfg.Management.Admins = []string{"admin@example.com"}
 	cfg.Postgres.Enabled = true
 
 	service := ops.New(&fakeManager{}, fakeLogs{}, pg.New(cfg, nil), nil, nil, nil)

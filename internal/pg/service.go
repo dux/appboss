@@ -125,10 +125,10 @@ func (s *Service) Enabled() bool {
 }
 
 // BackupConfig returns the effective backup policy for the console.
-func (s *Service) BackupConfig() config.PostgresBackup {
+func (s *Service) BackupConfig() config.PostgresBackups {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.opts.postgres.Backup
+	return s.opts.postgres.Backups
 }
 
 // Available reports whether the last inspection reached a server.
@@ -212,7 +212,7 @@ func (s *Service) Refresh(ctx context.Context) Snapshot {
 	defer s.refreshMu.Unlock()
 
 	s.mu.RLock()
-	enabled, connConfig, backupConfig := s.opts.postgres.Enabled, s.connConfig, s.opts.postgres.Backup
+	enabled, connConfig, backupConfig := s.opts.postgres.Enabled, s.connConfig, s.opts.postgres.Backups
 	s.mu.RUnlock()
 	if !enabled {
 		snapshot := Snapshot{CollectedAt: time.Now(), Error: "postgres is disabled"}

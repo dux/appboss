@@ -115,19 +115,16 @@ type CronJob struct {
 // repository that contains the app. The existing restart path rolls the app when git exits 0.
 const pullCommand = "git pull --ff-only"
 
-// Hook is one named one-shot command triggered by a signed HTTP ping to
-// /hooks/<app>/<hook>. Restart restarts the app when the command exits 0. Secret is the token
-// the caller must present; when empty, dboss generates one under state_dir and it never
-// belongs in the committed config. A scalar true is shorthand for {command: git pull --ff-only,
-// restart: true}.
+// Hook is one named one-shot command triggered by a ping to /hooks/<app>/<hook> signed with
+// tokens.dboss. Restart restarts the app when the command exits 0. A scalar true is shorthand
+// for {command: git pull --ff-only, restart: true}.
 type Hook struct {
 	Command  string   `yaml:"command" json:"command"`
 	Timeout  Duration `yaml:"timeout" json:"timeout"`
 	Restart  bool     `yaml:"restart" json:"restart"`
 	Overlap  bool     `yaml:"overlap" json:"overlap"`
 	Disabled bool     `yaml:"disabled" json:"disabled"`
-	Secret   string   `yaml:"secret" json:"-"`
-	// Pull marks the scalar shorthand; the pull job then authenticates with github_token.
+	// Pull marks the scalar shorthand; the pull job then authenticates with tokens.github.
 	Pull bool `yaml:"-" json:"pull,omitempty"`
 
 	// The fields below configure the built-in github_pr host hook. They are invalid on an app
@@ -168,7 +165,7 @@ func (l *LifecycleCommand) UnmarshalYAML(node *yaml.Node) error {
 }
 
 // UnmarshalYAML accepts a bare true, shorthand for pulling the current branch and restarting, or
-// a {command, timeout, restart, overlap, disabled, secret} mapping. The keys are checked here
+// a {command, timeout, restart, overlap, disabled} mapping. The keys are checked here
 // because a custom decoder is a leaf as far as the schema walk is concerned.
 func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
@@ -183,14 +180,16 @@ func (h *Hook) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
-			case "command", "timeout", "restart", "overlap", "disabled", "secret",
+			case "command", "timeout", "restart", "overlap", "disabled",
 				"repo", "template":
+			case "secret":
+				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: "secret was removed", Hint: "every hook is signed with tokens.dboss in the host dboss.yaml"}
 			default:
-				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled, secret"}
+				return &Error{Line: node.Content[i].Line, Key: "hooks", Message: fmt.Sprintf("unknown key %q", key), Hint: "valid keys here: command, timeout, restart, overlap, disabled"}
 			}
 		}
 		type plain Hook
 		return node.Decode((*plain)(h))
 	}
-	return &Error{Line: node.Line, Key: "hooks", Message: "must be true or a {command, timeout, restart, overlap, disabled, secret} mapping"}
+	return &Error{Line: node.Line, Key: "hooks", Message: "must be true or a {command, timeout, restart, overlap, disabled} mapping"}
 }

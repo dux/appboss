@@ -168,7 +168,8 @@ func (c CLI) printHuman(method string, data any) error {
 			return nil
 		}
 		writer := tabwriter.NewWriter(c.Out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "HOOK\tSOURCE\tLAST\tCOMMAND\tURL")
+		fmt.Fprintln(writer, "HOOK\tLAST\tCOMMAND\tURL")
+		missing := false
 		for _, hook := range hooks {
 			last := "-"
 			switch {
@@ -183,12 +184,18 @@ func (c CLI) printHuman(method string, data any) error {
 			if hook.Disabled {
 				name += " (disabled)"
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, hook.Source, last, hook.Command, hook.URL)
+			link := hook.URL
+			if link == "" {
+				link, missing = "-", true
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", name, last, hook.Command, link)
 		}
-		return writer.Flush()
-	case ops.ActionHookRotate:
-		fmt.Fprintln(c.Out, "rotated; new ping URL:")
-		fmt.Fprintln(c.Out, data.(supervisor.HookInfo).URL)
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		if missing {
+			fmt.Fprintln(c.Out, "no ping URL: set tokens.dboss and management.host in the host dboss.yaml")
+		}
 	case ops.ActionAudit:
 		rows := data.([]logstore.AuditEntry)
 		if len(rows) == 0 {

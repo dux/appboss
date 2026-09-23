@@ -36,7 +36,7 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app, hookName := parts[0], parts[1]
-	secret, err := h.service.HookSecret(app, hookName)
+	secret, err := h.service.HookToken(app, hookName)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -60,7 +60,7 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 // handleHostHook runs a host-level hook (the github_pr built-in). It answers 202 at once and
 // deploys in the background, since a checkout can take minutes.
 func (h *Handler) handleHostHook(w http.ResponseWriter, r *http.Request, name string, body []byte) {
-	secret, err := h.service.HostHookSecret(name)
+	secret, err := h.service.HostHookToken(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -105,8 +105,12 @@ func qsEnvName(key string) string {
 }
 
 // hookAuthorized accepts either a GitHub HMAC signature over the raw body or a bearer token in
-// the query, Authorization header or X-Gitlab-Token. Every comparison is constant time.
+// the query, Authorization header or X-Gitlab-Token. Every comparison is constant time, and an
+// unset token refuses every ping.
 func hookAuthorized(r *http.Request, secret string, body []byte) bool {
+	if secret == "" {
+		return false
+	}
 	if signature := r.Header.Get("X-Hub-Signature-256"); strings.HasPrefix(signature, "sha256=") {
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(body)
@@ -150,22 +154,6 @@ func (h *Handler) hookRun(w http.ResponseWriter, r *http.Request, session authSe
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func (h *Handler) hookRotate(w http.ResponseWriter, r *http.Request, session authSession) {
-	if !h.requireCSRF(w, r, session) {
-		return
-	}
-	request, ok := h.decodeHookAction(w, r)
-	if !ok {
-		return
-	}
-	result, err := h.service.Do(ops.Request{Method: ops.ActionHookRotate, App: request.App, Hook: request.Hook, Actor: session.Email})
-	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hook": result})
 }
 
 type hookAction struct {

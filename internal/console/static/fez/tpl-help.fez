@@ -17,7 +17,7 @@
         { id: 'idle', title: 'Idle stop & wake', summary: 'Stops apps nobody uses and starts them again on the next request.' },
         { id: 'routing', title: 'Routing', summary: 'Sends each hostname to the right app, with redirects, headers and maintenance mode.' },
         { id: 'access', title: 'Access control', summary: 'AuthCog sign-in, basic auth, IP allow lists and a Cloudflare-only origin.' },
-        { id: 'static', title: 'Static & error pages', summary: 'Serves assets from disk and one branded page for errors.' },
+        { id: 'static', title: 'Static & pages', summary: 'Serves assets from disk, and every page dboss answers with from one template you can replace.' },
         { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
@@ -46,8 +46,7 @@
     apps: ./apps
     proxy:
       listen: ":80"
-    ports:
-      range: [3100, 3199]
+    ports: [3100, 3199]
     defaults:
       idle_stop: 30m
     `,
@@ -73,7 +72,7 @@
         health: /up
       worker: bundle exec sidekiq
     autostart: false
-    health_interval: 500ms
+    health_timeout: 90s
     processes:
       worker:
         stop_timeout: 120s
@@ -100,9 +99,8 @@
     `,
     access: `
     # app file, or under defaults: in the host file
-    auth:
-      allow_emails: [ana@example.com, "*@example.com"]
-      session_ttl: 24h
+    auth: [ana@example.com, "*@example.com"]
+    session_ttl: 24h
     basic_auth:
       alice: "$2a$10$..."   # dboss password
     allow_ips:
@@ -110,9 +108,7 @@
 
     # host file
     proxy:
-      client_ip_headers: [CF-Connecting-IP, X-Forwarded-For]
-      trusted_cidrs:
-        - 173.245.48.0/20
+      cloudflare: true
     `,
     static: `
     procfile:
@@ -121,13 +117,25 @@
         hosts: [shop.example.com]
         static: ./public
     static_immutable: [/assets/, /packs/]
-    error_page_path: public/error_500.html
-    maintenance_page: ./public/503.html
+    pages: ./public/error_pages   # the default
+    `,
+    pagesTemplate: `
+    <!doctype html>
+    <title>{{title}}</title>
+    <img src="{{dboss_logo}}" alt="">
+    <h1>{{status}} - {{title}}</h1>
+    <p>{{message}}</p>
+    {{action}}
+    `,
+    pagesCli: `
+    dboss pages shop                  # which file serves each page
+    dboss pages dump shop             # write template.html to edit
+    dboss pages dump shop error       # write error.html with its wording
+    dboss pages dump --all            # the host template and every page
     `,
     logs: `
     log_retention: 168h
     stdout_retention: 12h
-    log_max_size: 50m
     `,
     logsCli: `
     dboss logs -f shop
@@ -152,9 +160,11 @@
     `,
     previews: `
     # host file: one built-in hook, github_pr
+    tokens:
+      github: $GITHUB_TOKEN   # pulls a private repo
+      dboss: $DBOSS_TOKEN     # every ping presents it
     hooks:
       github_pr:
-        # secret: $GITHUB_WEBHOOK_SECRET   # generated under state_dir when omitted
         repo: https://github.com/owner/repo.git   # fallback when the ping omits repo
         template:
           name: $QS_BRANCH
@@ -177,7 +187,7 @@
       destroy: bin/drop-db              # after dboss destroy stops the app
     `,
     previewsPing: `
-    curl -fsS -X POST "https://dboss.example/hooks/github_pr?action=\${{ github.event.action }}&branch=\${{ github.head_ref }}&repo=\${{ github.event.pull_request.head.repo.clone_url }}&num=\${{ github.event.number }}"
+    curl -fsS -X POST "https://dboss.example/hooks/github_pr?token=\${{ secrets.DBOSS_TOKEN }}&action=\${{ github.event.action }}&branch=\${{ github.head_ref }}&repo=\${{ github.event.pull_request.head.repo.clone_url }}&num=\${{ github.event.number }}"
     `,
     pubsub: `
     procfile:
@@ -204,45 +214,37 @@
       -d '{"event":"message","data":{"text":"hello"}}'
     `,
     audit: `
-    daemon:
-      audit_retention: 720h   # 0 keeps rows forever
+    audit_retention: 30d   # 0 keeps rows forever
     `,
     health: `
-    # host file
-    management:
-      metrics:
-        enabled: true
-        token: $METRICS_TOKEN
+    # host file: /metrics needs this as a bearer token
+    tokens:
+      dboss: $DBOSS_TOKEN
 
     # app file
     health_endpoint: /healthz
     `,
     alerts: `
-    # host file: every app, 5% errors or a 2s p95 over ten minutes
+    # host file: every app, 5% errors or a 2s p95
     defaults:
       alerts:
-        window: 10m
         error_rate: 5
         slow_p95: 2s
 
-    # app file: a low-traffic app needs fewer requests before a check runs
+    # app file: this one only checks latency
     alerts:
-      min_requests: 5
+      error_rate: 0
     `,
     notify: `
     notify:
       url: $ALERT_WEBHOOK_URL
       events: [crash, restart-loop, health-timeout, wake-failed]
-      min_interval: 5m
     `,
     postgres: `
     postgres:
-      backup:
-        databases:
-          myapp_production:
-            rotation: week    # keep 7 days; month keeps 30
-          reports:
-            rotation: month
+      backups:
+        myapp_production: week   # keep 7 days; month keeps 30
+        reports: month
     `,
   }
 
@@ -342,7 +344,7 @@
         <p>Any key can be written twice, once with a <code>_dev</code> suffix. A dev session - one app run from its own folder, <code>dboss s</code> where the config file has <code>procfile</code> - takes the <code>_dev</code> value; every other session drops it, so one committed app file serves both.</p>
         <db-preview-yaml :text="state.examples.configDev" />
         <p>The suffix works at every depth and inside free-form maps such as <code>procfile</code>, <code>env</code> and <code>headers</code>. The value replaces the base key outright, so a block override names the leaf key it changes (<code>proxy.listen_dev</code>) rather than restating the block. A <code>&#60;key&#62;_dev</code> is checked against the schema in both modes, so a typo is still caught by <code>dboss check</code> on the host.</p>
-        <p>A dev session also gets this console on <code>127.0.0.1:&#60;first port of ports.range&#62;</code> with no <code>management</code> block, and a request coming from that machine is signed in without <code>dboss login</code>, so <code>admin_emails</code> is not needed either. The check is the connecting address and never a forwarded-for header, so an app run this way does not belong behind a reverse proxy on the same box.</p>
+        <p>A dev session also gets this console on <code>127.0.0.1:&#60;first port of ports&#62;</code> with no <code>management</code> block, and a request coming from that machine is signed in without <code>dboss login</code>, so <code>management.admins</code> is not needed either. The check is the connecting address and never a forwarded-for header, so an app run this way does not belong behind a reverse proxy on the same box.</p>
         <p>A dev session serves HTTPS too, on <code>:443</code> or <code>proxy.tls.listen</code>, with certificates from a local certificate authority kept in your user config directory. Plain http keeps working. The first dev start asks whether to trust that authority, and <code>dboss trust</code> does it any time, so the browser accepts the certificates.</p>
       </section>
     {/if}
@@ -360,7 +362,7 @@
           <li>Capping one app's memory and CPU on a shared box (cgroup v2; process groups elsewhere ignore the limits).</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health_interval,health_timeout,unhealthy_threshold,restart,max_restarts,restart_reset,restart_backoff,stop_timeout,stop_signal,env,resources,memory_max,cpu_max,daemon.resume_running" /></div>
+        <div fez:keep="keys-supervision"><db-config-keys paths="procfile,autostart,processes,health_timeout,liveness_interval,unhealthy_threshold,restart,max_restarts,stop_timeout,stop_signal,env,memory_max,cpu_max" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.supervision" />
         <h3>Details</h3>
@@ -368,8 +370,8 @@
         <ul>
           <li><code>autostart: false</code> keeps an app down until <code>dboss run</code>, the console, or a request starts it. <code>autostart: button</code> is the same, except a request answers a start button and only its POST starts the app, so crawler and favicon GETs never do.</li>
           <li><code>health</code> on a web process is the readiness check: a path such as <code>/up</code> that must answer 2xx, or omit it for a plain TCP connect. A process that never passes it within <code>health_timeout</code> is restarted.</li>
-          <li>After a web process is ready the check keeps running every <code>health_interval</code>; <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
-          <li>Restarts follow <code>restart</code>, <code>restart_backoff</code> and <code>max_restarts</code>; after that many consecutive failures the app is <code>crashed</code>. <code>restart_reset</code> of uptime clears the counter.</li>
+          <li>While a web process starts it is polled every 500ms; once ready the check keeps running every <code>liveness_interval</code>, and <code>unhealthy_threshold</code> consecutive failures restart it (<code>0</code> disables the ongoing check). Workers are not polled.</li>
+          <li>Restarts follow <code>restart</code> and <code>max_restarts</code>, backing off from 1s and doubling up to 60s; after that many consecutive failures the app is <code>crashed</code>. A minute of uptime clears the counter.</li>
         </ul>
       </section>
     {/if}
@@ -385,13 +387,13 @@
           <li>Giving visitors a clear page instead of an error while an app boots, with <code>Retry-After</code> for API clients.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-idle"><db-config-keys paths="idle_stop,autostart,daemon.idle_tick,proxy.wake.retry_after,proxy.wake.starting_page,proxy.wake.crashed_page" /></div>
+        <div fez:keep="keys-idle"><db-config-keys paths="idle_stop,autostart,pages" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.idle" />
         <h3>Details</h3>
         <ul>
-          <li>Idle apps are checked every <code>daemon.idle_tick</code>; <code>idle_stop</code> is off (<code>0s</code>) unless an app or <code>defaults</code> sets it.</li>
-          <li>A stopped app gets the starting page, then the real response once it is healthy. A crashed app gets the crashed page.</li>
+          <li>Idle apps are checked every minute; <code>idle_stop</code> is off (<code>0s</code>) unless an app or <code>defaults</code> sets it.</li>
+          <li>A stopped app gets the <code>starting</code> page, which reloads every 5 seconds until the app is healthy. A crashed app gets the <code>crashed</code> page. Both are <a href="#/help?topic=static">pages</a> you can replace.</li>
           <li>Static files, the health endpoint and PubSub are served by dboss itself and never wake the app.</li>
           <li>A wake that fails posts <code>wake-failed</code> to the operator webhook; explicit starts from the CLI or console do not.</li>
         </ul>
@@ -411,12 +413,12 @@
           <li>Adding or removing response headers and limiting the request body for every response, without touching the app.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-routing"><db-config-keys paths="headers,max_body,proxy.listen,proxy.wake.unknown_page,proxy.upstream.dial_timeout,proxy.upstream.response_header_timeout,proxy.upstream.idle_conn_timeout,proxy.upstream.max_idle_conns_per_app" /></div>
+        <div fez:keep="keys-routing"><db-config-keys paths="headers,max_body,proxy.listen,proxy.timeout" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.routing" />
         <h3>Details</h3>
         <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list, and in single-app dev mode a process with no hosts is bound to <code>.lvh.me</code>.</p>
-        <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy. A host no app matches gets <code>proxy.wake.unknown_page</code>.</p>
+        <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy. A host no app matches gets the host's <code>404</code> page.</p>
         <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, health endpoint, <code>auth</code> sign-in, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward. Forwarded headers (<code>X-Forwarded-Proto</code>, <code>X-Forwarded-Host</code>, <code>X-Real-IP</code>) are added only when missing, so Cloudflare's values win.</p>
       </section>
     {/if}
@@ -424,7 +426,7 @@
     {#if state.topic === 'access'}
       <section>
         <h2>Access control</h2>
-        <p>Three app-level gates, <code>auth</code>, <code>basic_auth</code> and <code>allow_ips</code>, run in the proxy before the app sees a request. Three host-level keys make sure the origin only talks to Cloudflare and reads the real client IP from it. A fourth app-level feature, <code>authcog</code>, runs the AuthCog sign-in for an app that has no auth code of its own.</p>
+        <p>Three app-level gates, <code>auth</code>, <code>basic_auth</code> and <code>allow_ips</code>, run in the proxy before the app sees a request. One host key, <code>proxy.cloudflare</code>, makes sure the origin only talks to Cloudflare and reads the real client IP from it. A fourth app-level feature, <code>authcog</code>, runs the AuthCog sign-in for an app that has no auth code of its own.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Letting only named people into an app: <code>auth</code> asks for an AuthCog sign-in and admits the listed emails, the way Cloudflare Access does.</li>
@@ -435,20 +437,20 @@
           <li>Keeping protected sleeping apps asleep: a request without valid credentials never wakes them.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-access"><db-config-keys paths="auth.allow_emails,auth.session_ttl,authcog.login,authcog.path,authcog.realm,basic_auth,allow_ips,proxy.trusted_cidrs,proxy.client_ip_headers,proxy.cloudflare_only" /></div>
+        <div fez:keep="keys-access"><db-config-keys paths="auth,session_ttl,authcog,authcog_realm,basic_auth,allow_ips,proxy.cloudflare" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.access" />
         <h3>Details</h3>
-        <p><code>auth</code> sends a visitor without a session to AuthCog (the realm is <code>management.auth.realm</code>). They return to <code>/.well-known/dboss/auth</code> and get a signed, host-only cookie; <code>/.well-known/dboss/logout</code> signs out. <code>allow_emails</code> takes exact addresses, <code>*@domain</code> patterns and <code>"*"</code> for any account, and is checked on every request, so removing an entry ends that session on the next rescan.</p>
-        <p><code>authcog</code> is a login service, not a gate: the app links to <code>authcog.path</code> (default <code>/authcog</code>), dboss signs the visitor in to <code>authcog.realm</code> and then forwards one request to that path with the profile in <code>X-Dboss-User</code>, and the app reads it and creates its own session. Any AuthCog account is admitted, logout is the app's job, and the login path is never gated by <code>auth</code>.</p>
+        <p><code>auth</code> sends a visitor without a session to AuthCog (<code>authcog_realm</code>). They return to <code>/.well-known/dboss/auth</code> and get a signed, host-only cookie that lasts <code>session_ttl</code>; <code>/.well-known/dboss/logout</code> signs out. The list takes exact addresses, <code>*@domain</code> patterns and <code>"*"</code> for any account, and is checked on every request, so removing an entry ends that session on the next rescan.</p>
+        <p><code>authcog</code> is a login service, not a gate: <code>authcog: true</code> (the path <code>/authcog</code>) or <code>authcog: /path</code>. The app links to that path, dboss signs the visitor in and then forwards one request to that path with the profile in <code>X-Dboss-User</code>, and the app reads it and creates its own session. Any AuthCog account is admitted, logout is the app's job, and the login path is never gated by <code>auth</code>.</p>
         <ul>
           <li>The app receives the signed-in email as <code>X-Dboss-User</code>. dboss removes that header from every inbound request, so the app can trust it.</li>
           <li>A request that does not accept <code>text/html</code> gets <code>401</code> instead of a redirect.</li>
           <li>A session is issued for one app: it opens neither another app nor the console.</li>
           <li><code>basic_auth</code> is independent: when both are set, both must pass.</li>
         </ul>
-        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs, matched against the client IP from <code>proxy.client_ip_headers</code>.</p>
-        <p><code>proxy.trusted_cidrs</code> refuses connections from any other source; point it at the Cloudflare ranges. <code>proxy.cloudflare_only</code> is the header-only alternative that refuses requests without <code>CF-Ray</code> and <code>CF-Connecting-IP</code>; headers are spoofable, so also lock the origin at the firewall.</p>
+        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs (address ranges such as <code>10.0.0.0/8</code>), matched against the client address.</p>
+        <p><code>proxy.cloudflare: true</code> accepts connections only from Cloudflare's published ranges, built into dboss, and from the box itself; anything else gets <code>403</code>. The client address then comes from <code>CF-Connecting-IP</code>, which only Cloudflare can set. Without it the client address is the connection's own.</p>
         <ul>
           <li>A request with no or wrong credentials, or without a sign-in session, stops at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.</li>
           <li>With no <code>basic_auth</code> any request wakes a stopped app, except an <code>autostart: button</code> app, which only its start button's POST wakes.</li>
@@ -460,33 +462,37 @@
 
     {#if state.topic === 'static'}
       <section>
-        <h2>Static &amp; error pages</h2>
-        <p>Each web process can serve asset files straight from its own <code>static</code> directory, and dboss answers errors and maintenance mode with static HTML files the app ships.</p>
+        <h2>Static &amp; pages</h2>
+        <p>Each web process can serve asset files straight from its own <code>static</code> directory. Every page dboss answers with itself (starting, stopped, crashed, maintenance, error, forbidden, signed out, and on the host 404 and the console login) is built in and can be replaced with your own HTML.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Serving CSS, JS, images and fonts without spending app workers, and without waking a stopped app.</li>
           <li>Year-long immutable caching for fingerprinted asset folders, so Cloudflare and browsers keep them.</li>
-          <li>One branded error page for both proxy errors and the app's own <code>5xx</code> answers, while API clients still get the real response.</li>
-          <li>A custom maintenance page per app.</li>
+          <li>One branded template for every page dboss shows, per app or for the whole host, while API clients still get the bare status.</li>
+          <li>Replacing the app's own <code>5xx</code> body with the same branded page.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-static"><db-config-keys paths="static_extensions,static_immutable,error_page_path,maintenance_page" /></div>
+        <div fez:keep="keys-static"><db-config-keys paths="static_extensions,static_immutable,pages" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.static" />
         <h3>Details</h3>
         <p>Files under a web process's <code>static</code> (default <code>./public</code>; <code>static: false</code> disables it) are served straight from disk for GET and HEAD without waking the app, but only the asset types in <code>static_extensions</code>. A missing file, or any other extension such as <code>.html</code>, is a normal request to the app. An empty list serves any file.</p>
-        <p><code>error_page_path</code> names one static HTML file, relative to the app folder. It is sent as it is on disk, and only to a GET that accepts <code>text/html</code>, so API answers are never rewritten.</p>
+        <p>For each page dboss reads, on every request, the first of: <code>&#60;name&#62;.html</code> in the app's <code>pages</code> folder, <code>template.html</code> there, the same two in the host's <code>pages</code> folder, then the built-in template. So one <code>template.html</code> covers every page. Pages go only to a GET that accepts <code>text/html</code>; everything else gets the bare status.</p>
+        <p>A page fills these tokens and leaves any other <code>&#123;&#123;...&#125;&#125;</code> alone: <code>&#123;&#123;status&#125;&#125;</code>, <code>&#123;&#123;title&#125;&#125;</code>, <code>&#123;&#123;message&#125;&#125;</code>, <code>&#123;&#123;action&#125;&#125;</code> (the start button or sign-in link dboss builds), <code>&#123;&#123;app&#125;&#125;</code> and <code>&#123;&#123;dboss_logo&#125;&#125;</code> (the dboss mark, served at <code>/.well-known/dboss/logo.svg</code> on every host).</p>
+        <db-preview-yaml :text="state.examples.pagesTemplate" lang="text" />
         <ul>
-          <li>dboss's own errors (<code>502</code> when the app is unreachable, timed out or has no port) answer with this file, or with the built-in error page when the key is empty or the file is missing.</li>
-          <li>The app's own <code>5xx</code> answers are replaced with this file, status kept, only when the key is set. Leave it empty to keep the app's own error page.</li>
+          <li>dboss's own errors (<code>502</code> when the app is unreachable, timed out or has no port) always render the <code>error</code> page.</li>
+          <li>The app's own <code>5xx</code> answers are replaced with the <code>error</code> page, status kept, only when the app's pages folder has <code>error.html</code> or <code>template.html</code>. An app that ships no pages keeps its own error bodies.</li>
+          <li>An app's own <code>404</code>s are never touched; the host <code>404</code> page is only for a host no app owns.</li>
         </ul>
+        <db-preview-yaml :text="state.examples.pagesCli" lang="text" />
       </section>
     {/if}
 
     {#if state.topic === 'logs'}
       <section>
         <h2>Logs</h2>
-        <p>Each app has one SQLite store at <code>log_dir/&#60;app&#62;/dboss.sqlite</code> holding its requests, process output and app log files. The full-screen viewer at <code>/logs</code> and <code>dboss logs</code> read the same data.</p>
+        <p>Each app has one SQLite store at <code>dir/log/&#60;app&#62;/dboss.sqlite</code> holding its requests, process output and app log files. The full-screen viewer at <code>/logs</code> and <code>dboss logs</code> read the same data.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Finding one failing request: full-text search over messages and raw lines, with level and request filters. A Cloudflare Ray ID can be pasted as is.</li>
@@ -495,7 +501,7 @@
           <li>Bounded disk use: rotation, retention per channel, a daily prune and SQLite <code>VACUUM</code>.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-logs"><db-config-keys paths="log_retention,stdout_retention,log_max_size,log_keep,log_tail_lines,log_dir,daemon.prune_at,daemon.vacuum_at,daemon.log_ingest_interval,daemon.log_flush,daemon.log_level" /></div>
+        <div fez:keep="keys-logs"><db-config-keys paths="log_retention,stdout_retention,dir,maintenance_at,log_level" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.logs" />
         <h3>Details</h3>
@@ -505,7 +511,7 @@
           <li><code>dboss</code> - the daemon's own log.</li>
           <li>one channel per <code>*.log</code> file under the app's <code>log/</code> folder.</li>
         </ul>
-        <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app. A daily job also runs SQLite <code>VACUUM</code> on every store at <code>daemon.vacuum_at</code> (default 04:30).</p>
+        <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app. The daily prune runs at <code>maintenance_at</code> (default 04:10) and is followed by SQLite <code>VACUUM</code> on every store. Process log files rotate at 10m and keep five rotated files.</p>
         <db-preview-yaml :text="state.examples.logsCli" lang="text" />
         <p>With <code>--search</code>, <code>--level</code> or <code>--channel</code> the command queries the store instead of tailing files.</p>
       </section>
@@ -530,7 +536,7 @@
           <li><code>log_retention</code> (default two weeks) bounds how far back the numbers go; with <code>log_retention: 0</code> the app has no request log and the tab stays empty.</li>
           <li>Latency quantiles are computed over the newest 50,000 requests of the range. Counts are exact.</li>
           <li>A path needs 5 requests in the range to show up under slowest paths, so one slow outlier does not top the list.</li>
-          <li>Countries come from Cloudflare's <code>CF-IPCountry</code> header and client IPs from <code>proxy.client_ip_headers</code>.</li>
+          <li>Countries come from Cloudflare's <code>CF-IPCountry</code> header, and client IPs from <code>CF-Connecting-IP</code> behind <code>proxy.cloudflare</code>.</li>
           <li>Long-lived pubsub connections are not request rows, so they never skew the latency.</li>
         </ul>
       </section>
@@ -567,11 +573,11 @@
           <li>Running migrations or a console one-liner in the app's exact environment with <code>dboss exec</code>.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-hooks"><db-config-keys paths="hooks,management.host" /></div>
+        <div fez:keep="keys-hooks"><db-config-keys paths="hooks,tokens.dboss,management.host" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.hooks" />
         <h3>Details</h3>
-        <p>Authentication is the hook's own secret, accepted as <code>?token=</code> in the URL, <code>Authorization: Bearer</code>, <code>X-Gitlab-Token</code>, or a GitHub <code>X-Hub-Signature-256</code> HMAC over the raw body. With no <code>secret</code> in the config, dboss generates one under <code>state_dir</code> on first use. <code>dboss hooks</code> prints the ready-made URL and <code>dboss hooks rotate</code> mints a new one.</p>
+        <p>Every ping presents <code>tokens.dboss</code> from the host file, a value you choose: <code>?token=</code> in the URL, <code>Authorization: Bearer</code>, <code>X-Gitlab-Token</code> (GitLab's Secret token field), or a GitHub <code>X-Hub-Signature-256</code> HMAC over the raw body (GitHub's Secret field). Without it every ping answers <code>401</code>. <code>dboss hooks</code> prints the ready-made URL; to change the token, edit it and run <code>dboss rescan</code>.</p>
         <p><code>dboss exec shop bundle exec rails runner ...</code> runs a one-off command in the same environment and prints its combined output; options like <code>--timeout</code> come before the command. Both hooks and cron write to their own log channel.</p>
       </section>
     {/if}
@@ -593,7 +599,7 @@
         <h3>Details</h3>
         <ul>
           <li>Each step is a command or a <code>&#123;command, timeout&#125;</code> mapping; the timeout defaults to 3m. It runs in the app folder with the cron and hook environment (no <code>PORT</code>) and logs to the <code>lifecycle-&#60;step&#62;</code> channel.</li>
-          <li><code>create</code> runs inside the first start, before <code>start</code>. The app is recorded in <code>state_dir/created.json</code> only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.</li>
+          <li><code>create</code> runs inside the first start, before <code>start</code>. The app is recorded in <code>dir/state/created.json</code> only when it exits 0, so a failure retries on the next start, and destroy clears the record. An app that already existed runs it once on its next start, so write it to be idempotent.</li>
           <li><code>start</code> runs on every start and restart, including a wake by the proxy. The app is <code>starting</code> meanwhile and its processes spawn only after a clean exit. A process restarted after a crash does not rerun it.</li>
           <li>A failed or timed-out <code>create</code> or <code>start</code> leaves the app <code>crashed</code> with the step's output in the error log and sends the <code>crash</code> event. Stopping the app kills a step still running.</li>
           <li><code>destroy</code> runs after <code>dboss destroy</code> has stopped and detached the app, before its folder is removed. It is cleanup: a failure is logged and sends <code>hook-failed</code>, and the destroy still completes.</li>
@@ -613,7 +619,7 @@
           <li>Clean teardown, with no orphaned processes or checkouts left behind.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-previews"><db-config-keys paths="hooks,github_token,management.host" /></div>
+        <div fez:keep="keys-previews"><db-config-keys paths="hooks,tokens.github,tokens.dboss,management.host" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.previews" />
         <p>The ping carries the branch and a few query params; a GitHub Action step sends them straight from the event:</p>
@@ -625,7 +631,7 @@
           <li><code>action=closed</code> destroys the app, which runs its <code>destroy</code> step and removes the checkout; the template needs <code>deletable: true</code>. Any other action checks out the branch tip, writes the app from <code>template</code> and restarts it, which runs its <code>create</code> and <code>start</code> steps.</li>
           <li><code>template</code> is an app file with <code>$VAR</code> and <code>$&#123;VAR&#125;</code> interpolation. Its <code>name</code> is required and names the app folder; <code>main</code> and <code>development</code> are refused.</li>
           <li>A value in <code>hosts</code> or <code>canonical_host</code> is sanitized as a DNS label (<code>/</code> and <code>_</code> become <code>-</code>); everywhere else it is an identifier (<code>/</code> becomes <code>_</code>). A top-level <code>hosts</code> is the default for every procfile entry that declares none.</li>
-          <li>A private <code>repo</code> over HTTPS is pulled with <code>github_token</code>; a fork PR works because the ping passes the head repo's clone URL. Pings for one branch run one at a time, while different branches deploy in parallel.</li>
+          <li>A private <code>repo</code> over HTTPS is pulled with <code>tokens.github</code>; a fork PR works because the ping passes the head repo's clone URL. Pings for one branch run one at a time, while different branches deploy in parallel.</li>
           <li>Every step is audited under actor <code>hook:github_pr</code>. The preview is a normal app, so the console, <code>dboss ls</code>, the request log and <code>/metrics</code> all see it.</li>
         </ul>
       </section>
@@ -654,7 +660,7 @@
         <p><strong>Publish.</strong> A POST to the same URL publishes with the app's secret. A body shaped like <code>&#123;"event","data"&#125;</code> is sent as written; any other body becomes the data of a <code>message</code> event.</p>
         <db-preview-yaml :text="state.examples.pubsubPublish" lang="text" />
         <p>Each message is <code>&#123;"event","data","ts"&#125;</code>; the last <code>replay</code> messages are replayed to a subscriber that joins late, oldest first. A slow subscriber is dropped rather than blocking the publisher. <code>client_events: true</code> lets a WebSocket client publish to its own channel with the same envelope.</p>
-        <p>With no <code>secret</code> in the config, dboss generates one per web process under <code>state_dir</code>; the PubSub tab and <code>dboss pubsub</code> print it and <code>dboss pubsub rotate</code> replaces it. The self-test at <code>&#60;path&#62;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
+        <p>With no <code>secret</code> in the config, dboss generates one per web process under <code>dir/state</code>; the PubSub tab and <code>dboss pubsub</code> print it and <code>dboss pubsub rotate</code> replaces it. The self-test at <code>&#60;path&#62;/_test</code> (when <code>test: true</code>) opens a WebSocket and an SSE connection and reports PASS or FAIL.</p>
       </section>
     {/if}
 
@@ -669,13 +675,13 @@
           <li>Keeping a change record for as long as your policy needs.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-audit"><db-config-keys paths="daemon.audit_retention,state_dir" /></div>
+        <div fez:keep="keys-audit"><db-config-keys paths="audit_retention,dir" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.audit" />
         <h3>Details</h3>
         <p>Audited actions: start, stop, restart, destroy, maintenance, rescan, cron and hook runs, <code>exec</code>, and config writes and restores, each with how it turned out.</p>
-        <p>Rows live in the reserved <code>_dboss</code> database, are kept for <code>daemon.audit_retention</code> (default one year, <code>0</code> forever) and are pruned with the daily log prune. The Audit tab filters by app, actor and action; <code>dboss audit</code> prints the same rows.</p>
-        <p>Every config save first copies the current file to <code>state_dir/config-history</code>, keeping the last 50 revisions per file. The Configuration view's History button lists them and can restore one, revision-checked; <code>dboss config history|restore</code> does the same from the CLI.</p>
+        <p>Rows live in the reserved <code>_dboss</code> database, are kept for <code>audit_retention</code> (default one year, <code>0</code> forever) and are pruned with the daily log prune. The Audit tab filters by app, actor and action; <code>dboss audit</code> prints the same rows.</p>
+        <p>Every config save first copies the current file to <code>dir/state/config-history</code>, keeping the last 50 revisions per file. The Configuration view's History button lists them and can restore one, revision-checked; <code>dboss config history|restore</code> does the same from the CLI.</p>
       </section>
     {/if}
 
@@ -691,15 +697,15 @@
           <li>Checking a new box before the first start with <code>dboss doctor</code>.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-health"><db-config-keys paths="health_endpoint,management.metrics.enabled,management.metrics.token" /></div>
+        <div fez:keep="keys-health"><db-config-keys paths="health_endpoint,tokens.dboss" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.health" />
         <h3>Details</h3>
-        <p>The management host serves three endpoints when <code>management.metrics.enabled</code> is true (the default):</p>
+        <p>The management host serves three endpoints:</p>
         <ul>
           <li><code>GET /healthz</code> - <code>200 ok</code> while the daemon is up.</li>
           <li><code>GET /readyz</code> - <code>200</code> only while every <code>autostart</code> app is running, else <code>503</code>.</li>
-          <li><code>GET /metrics</code> - Prometheus text: per-app state, memory, CPU, restart and request rates, latency quantiles and the last cron and hook runs. Set <code>management.metrics.token</code> to require a bearer token.</li>
+          <li><code>GET /metrics</code> - Prometheus text: per-app state, memory, CPU, restart and request rates, latency quantiles and the last cron and hook runs. It needs <code>tokens.dboss</code> as a bearer token and does not exist without one.</li>
         </ul>
         <p>Each app also answers on its own hosts at <code>health_endpoint</code> (default <code>/.well-known/dboss/health</code>): <code>200</code> while running and not draining, <code>503</code> otherwise. It runs before auth and never wakes a stopped app. <code>dboss doctor</code> preflights a box: tools, writable directories, a valid config and a clear port range.</p>
         <p>A web process's <code>health</code> path that gates readiness and restarts is under Supervision.</p>
@@ -715,14 +721,14 @@
           <li>Hearing about a crash or a restart loop in chat before a user reports it.</li>
           <li>Knowing a deploy hook failed, a deploy went out or a backup did not run.</li>
           <li>Seeing config changes made from the console.</li>
-          <li>No alert storm: a crash loop posts once per <code>min_interval</code>.</li>
+          <li>No alert storm: one event for one app posts at most once every 5 minutes.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-notify"><db-config-keys paths="notify.url,notify.format,notify.events,notify.min_interval,notify.headers" /></div>
+        <div fez:keep="keys-notify"><db-config-keys paths="notify.url,notify.events,notify.headers" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.notify" />
         <h3>Details</h3>
-        <p>Events: <code>crash</code>, <code>restart-loop</code>, <code>health-timeout</code>, <code>wake-failed</code>, <code>hook-failed</code>, <code>deploy</code>, <code>config-changed</code>, <code>backup-failed</code>, <code>error-rate</code> and <code>slow</code>. The last two come from the app's <code>alerts:</code> block: once a minute dboss checks the 5xx share and the p95 latency of the request log over <code>alerts.window</code>. An empty <code>url</code> disables it. <code>wake-failed</code> comes only from a request-triggered start; explicit starts from the CLI or console do not notify.</p>
+        <p>Events: <code>crash</code>, <code>restart-loop</code>, <code>health-timeout</code>, <code>wake-failed</code>, <code>hook-failed</code>, <code>deploy</code>, <code>config-changed</code>, <code>backup-failed</code>, <code>error-rate</code> and <code>slow</code>. The last two come from the app's <code>alerts:</code> block: once a minute dboss checks the 5xx share and the p95 latency of the last 5 minutes of requests. An empty <code>url</code> disables it, and the payload follows the address: Slack, Discord and ntfy webhooks get their own shape, anything else the event as JSON. <code>wake-failed</code> comes only from a request-triggered start; explicit starts from the CLI or console do not notify.</p>
       </section>
     {/if}
 
@@ -735,17 +741,17 @@
           <li>Hearing that an app serves 500s while its process is still up, which a crash alert never catches.</li>
           <li>Noticing a slow database or a stuck dependency from the p95 latency, before users complain.</li>
           <li>One policy for the whole box under <code>defaults:</code>, tuned per app where traffic differs.</li>
-          <li>No false alarms on quiet apps: a window below <code>min_requests</code> is ignored.</li>
+          <li>No false alarms on quiet apps: a check needs at least 20 requests in its 5 minute window.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-alerts"><db-config-keys paths="alerts.window,alerts.min_requests,alerts.error_rate,alerts.slow_p95" /></div>
+        <div fez:keep="keys-alerts"><db-config-keys paths="alerts.error_rate,alerts.slow_p95" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.alerts" />
         <h3>Details</h3>
         <ul>
           <li><code>error-rate</code> fires when the share of 5xx answers in the window reaches <code>error_rate</code> percent. The message reads <code>12.4% 5xx (31 of 250) in 5m</code>.</li>
           <li><code>slow</code> fires when the p95 latency reaches <code>slow_p95</code>. It is off by default, since a sane limit depends on the app.</li>
-          <li>Both need <code>notify.url</code> and their name in <code>notify.events</code> (on by default). <code>notify.min_interval</code> bounds the repeats; there is no recovery event, a quiet webhook means it stopped.</li>
+          <li>Both need <code>notify.url</code> and their name in <code>notify.events</code> (on by default). The 5 minute quiet period bounds the repeats; there is no recovery event, a quiet webhook means it stopped.</li>
           <li>An app with <code>log_retention: 0</code> has no request log and is never checked.</li>
           <li>The Traffic tab shows the same numbers for any range.</li>
         </ul>
@@ -764,13 +770,13 @@
           <li>A SQL prompt without an SSH session: the <b>SQL</b> tab on a database runs statements against it from the browser.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.enabled,postgres.dsn,postgres.backup.databases" /></div>
+        <div fez:keep="keys-postgres"><db-config-keys paths="postgres.dsn,postgres.backups" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.postgres" />
         <h3>Details</h3>
         <ul>
           <li>Connection: <code>postgres.dsn</code>, else the unix socket (<code>/var/run/postgresql</code>, then <code>/tmp</code>), else <code>127.0.0.1:5432</code>, with the libpq <code>PG*</code> environment merged in.</li>
-          <li>Scheduled dumps run once a day at 04:00 local time. <code>databases</code> maps each selected database to its <code>rotation</code>: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
+          <li>Scheduled dumps run once a day at 04:00 local time. <code>backups</code> maps each selected database to its rotation: <code>week</code> keeps 7 days, <code>month</code> keeps 30. A manual backup from the tab is never rotated away.</li>
           <li>Each dump is a zip of a plain-SQL dump under <code>pg_backup/&lt;database&gt;/BACKUP_&lt;timestamp&gt;.zip</code>. The inspector itself writes nothing.</li>
           <li><b>Download</b> serves that zip as it is, and <b>Upload backup</b> stores one you picked as a manual entry, so a database moves between hosts: download here, upload there, restore there.</li>
           <li>A database page has a <b>Backup</b> and a <b>SQL</b> tab. SQL runs whatever you type as the role dboss connects with, <code>Cmd/Ctrl+Enter</code> runs it, a pasted batch runs in order and shows the last result set, and 500 rows travel while the full count is still reported. A run is bounded by a 30 second <code>statement_timeout</code>, and because it can write, every run is audited as <code>pg-query</code> with the statement.</li>
@@ -787,7 +793,7 @@
         <h3>Host session</h3>
         <div class="help-cmd"><code>start</code><span>run the host in the foreground; Ctrl-C stops every app</span></div>
         <div class="help-cmd"><code>systemd</code><span>print the systemd unit, or install and enable it</span></div>
-        <div class="help-cmd"><code>kill</code><span>stop every app and clear every listener in ports.range</span></div>
+        <div class="help-cmd"><code>kill</code><span>stop every app and clear every listener in ports</span></div>
         <div class="help-cmd"><code>login</code><span>print a one-time console URL that signs you in as cli@localhost</span></div>
         <h3>Apps</h3>
         <div class="help-cmd"><code>ls</code><span>list apps with state, ports, uptime, activity and memory</span></div>
@@ -799,12 +805,13 @@
         <div class="help-cmd"><code>logs</code><span>print or follow the process logs; <code>-f</code> follows</span></div>
         <div class="help-cmd"><code>maintenance</code><span>serve the maintenance page while the app keeps running</span></div>
         <div class="help-cmd"><code>cron</code><span>list an app's scheduled jobs, or run one now</span></div>
-        <div class="help-cmd"><code>hooks</code><span>list an app's deploy hooks, run one, or rotate its secret</span></div>
+        <div class="help-cmd"><code>hooks</code><span>list an app's deploy hooks with their ping URL, or run one</span></div>
         <div class="help-cmd"><code>exec</code><span>run a one-off command in the app's environment</span></div>
         <div class="help-cmd"><code>audit</code><span>list operator actions: start, stop, restart, destroy, hook runs and config writes</span></div>
         <h3>Config</h3>
         <div class="help-cmd"><code>config</code><span>validate and print a config, the resolved config, keys, or saved revisions</span></div>
         <div class="help-cmd"><code>check</code><span>validate the config and every app without starting anything</span></div>
+        <div class="help-cmd"><code>pages</code><span>list which file renders each dboss page, or write the built-in ones out to edit</span></div>
         <div class="help-cmd"><code>doctor</code><span>preflight a box: tools, writable directories, valid config, clear ports</span></div>
         <div class="help-cmd"><code>rescan</code><span>re-read the apps directory and every dboss.yaml</span></div>
         <div class="help-cmd"><code>ports</code><span>show the live port table, one fixed port per process</span></div>

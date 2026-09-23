@@ -41,7 +41,7 @@ func Keys() []Key {
 		}
 		keys = append(keys, key)
 	})
-	app := App{Autostart: AutostartOn}
+	app := App{Autostart: AutostartOn, Pages: DefaultPages}
 	walk(reflect.ValueOf(app), "", false, func(key Key) {
 		if key.Scope == ScopeBoth {
 			return
@@ -50,7 +50,6 @@ func Keys() []Key {
 	})
 	walk(reflect.ValueOf(defaults.Defaults.Process), "", true, func(key Key) { keys = append(keys, key) })
 	walk(reflect.ValueOf(defaults.Defaults.Web), "", false, func(key Key) { keys = append(keys, key) })
-	walk(reflect.ValueOf(defaults.Defaults.Deploy), "", false, func(key Key) { keys = append(keys, key) })
 	return keys
 }
 
@@ -120,6 +119,8 @@ func typesOf(t reflect.Type) []string {
 		return []string{"string", "list"}
 	case reflect.TypeOf(Autostart("")):
 		return []string{"bool", "button"}
+	case reflect.TypeOf(AuthCogPath("")):
+		return []string{"string", "bool"}
 	}
 	switch t.Kind() {
 	case reflect.String:

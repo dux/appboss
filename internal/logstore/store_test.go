@@ -10,7 +10,7 @@ import (
 
 func TestRecordSearchAndPrune(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	if err := store.Record("demo", time.Hour, RequestEntry{Time: time.Now(), Method: "GET", Host: "demo.test", Path: "/hello", Status: 200, IP: "1.2.3.4", UserAgent: "curl", RequestID: "ray-abc", Country: "HR"}); err != nil {
@@ -57,7 +57,7 @@ func TestAppendLogsCommitsSynchronously(t *testing.T) {
 	dir := t.TempDir()
 	// A long flush interval keeps the async loop out of the picture, so the row can only be
 	// visible through the synchronous AppendLogs path.
-	store := New(dir, time.Hour, nil, "", "", time.Hour, 0)
+	store := New(dir, time.Hour, nil, "", time.Hour, 0)
 	defer store.Close()
 	if err := store.AppendLogs("demo", []LogEntry{{Time: time.Now(), Source: "file", Process: "production.log", Level: "info", Message: "synced", Raw: "synced"}}); err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestAppendLogsCommitsSynchronously(t *testing.T) {
 
 func TestPruneCleansDatabaseOfRemovedApp(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	if err := store.AppendLogs("gone", []LogEntry{{Time: time.Now().Add(-2 * time.Hour), Source: "file", Process: "app.log", Level: "info", Message: "old", Raw: "old"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestPruneCleansDatabaseOfRemovedApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later session has no snapshot for the removed app, only its database on disk.
-	reopened := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	reopened := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer reopened.Close()
 	if err := reopened.Prune(context.Background(), "gone", time.Hour, time.Hour); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestPruneCleansDatabaseOfRemovedApp(t *testing.T) {
 
 func TestChannelsFilterAndPruneBySource(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now()
@@ -147,7 +147,7 @@ func TestChannelsFilterAndPruneBySource(t *testing.T) {
 
 func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now()
@@ -192,7 +192,7 @@ func TestTreeReportsSizeWithoutCreatingDatabases(t *testing.T) {
 }
 
 func TestTailOffsetsRoundTrip(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	path := "/app/log/production.log"

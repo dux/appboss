@@ -42,7 +42,6 @@ const (
 	ActionCronRun       = "cron-run"
 	ActionHook          = "hook"
 	ActionHookRun       = "hook-run"
-	ActionHookRotate    = "hook-rotate"
 	ActionHostHookRun   = "host-hook-run"
 	ActionExec          = "exec"
 	ActionAudit         = "audit"
@@ -63,7 +62,7 @@ const (
 // auditActions are the methods that write an audit row when they run.
 var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
-	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHookRotate: true, ActionHostHookRun: true, ActionExec: true,
+	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHostHookRun: true, ActionExec: true,
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true,
 }
@@ -79,10 +78,9 @@ type Runtime interface {
 	SetMaintenance(name string, on bool) error
 	RunCron(name, job string) error
 	RunHook(name, hook string) error
-	RotateHook(name, hook string) (supervisor.HookInfo, error)
 	Hooks(name string) ([]supervisor.HookInfo, error)
-	HookSecret(name, hook string) (string, error)
-	HostHookSecret(name string) (string, error)
+	HookToken(name, hook string) (string, error)
+	HostHookToken(name string) (string, error)
 	Exec(name string, argv []string, timeout time.Duration) (supervisor.ExecResult, error)
 	Rescan() ([]error, error)
 	RestartRequired() []string
@@ -135,7 +133,7 @@ type PG interface {
 	Restore(ctx context.Context, request pg.RestoreRequest) (pg.RestoreResult, error)
 	DropDatabase(ctx context.Context, database, confirm string) error
 	Query(ctx context.Context, database, sql string) (pg.QueryResult, error)
-	BackupConfig() config.PostgresBackup
+	BackupConfig() config.PostgresBackups
 	Apply(cfg config.Config)
 }
 
@@ -249,8 +247,6 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return nil, s.runHook(request.App, request.Hook)
 	case ActionHostHookRun:
 		return nil, s.runHostHook(request.Hook, request.Params)
-	case ActionHookRotate:
-		return s.rotateHook(request.App, request.Hook)
 	case ActionExec:
 		return s.exec(request.App, request.Argv, request.Timeout)
 	case ActionAudit:
@@ -330,7 +326,7 @@ func auditDetail(request Request) string {
 			return "on"
 		}
 		return "off"
-	case ActionCronRun, ActionHookRun, ActionHookRotate:
+	case ActionCronRun, ActionHookRun:
 		if request.Job != "" {
 			return request.Job
 		}

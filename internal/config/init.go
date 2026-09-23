@@ -63,7 +63,7 @@ func initLines(role string) ([]initLine, error) {
 	case TemplateService:
 		value = reflect.ValueOf(Default())
 	case TemplateApp:
-		value = reflect.ValueOf(App{Autostart: AutostartOn, Defaults: Default().Defaults})
+		value = reflect.ValueOf(App{Autostart: AutostartOn, Pages: DefaultPages, Defaults: Default().Defaults})
 	default:
 		return nil, fmt.Errorf("unknown config type %q (use service or app)", role)
 	}
@@ -90,7 +90,7 @@ func collectInit(lines *[]initLine, lastSection *string, value reflect.Value, pr
 		}
 		path := prefix + name
 		fieldValue := value.Field(i)
-		if structType(field.Type) != nil {
+		if field.Type.Kind() == reflect.Struct {
 			appendSection(lines, lastSection, sectionTitle(path, fieldValue), indent)
 			*lines = append(*lines, initLine{kind: kindYAML, indent: indent, text: name + ":"})
 			collectInit(lines, lastSection, fieldValue, path+".", indent+1)
@@ -132,7 +132,7 @@ func firstBlock(prefix string, value reflect.Value) string {
 			continue
 		}
 		name, options, _ := strings.Cut(tag, ",")
-		if structType(field.Type) != nil {
+		if field.Type.Kind() == reflect.Struct {
 			childPrefix := prefix
 			if !strings.Contains(options, "inline") {
 				childPrefix = prefix + name + "."

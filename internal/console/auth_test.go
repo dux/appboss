@@ -287,8 +287,13 @@ func testAuthenticator(hosts ...string) *authenticator {
 
 // devAuthenticator is the same gate with the dev flag set either way.
 func devAuthenticator(dev bool, hosts ...string) *authenticator {
-	management := config.Management{Host: hosts, Auth: config.ManagementAuth{Realm: "auth.authcog.com", AdminEmails: []string{"admin@example.com"}, SessionTTL: config.Duration(time.Hour)}}
-	auth, err := consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), management, dev)
+	cfg := config.Default()
+	cfg.Management = config.Management{Host: hosts, Admins: []string{"admin@example.com"}}
+	cfg.Defaults.SessionTTL = config.Duration(time.Hour)
+	if dev {
+		cfg.App = &config.App{}
+	}
+	auth, err := consoleAuthenticator(authcog.NewWithKey([]byte("01234567890123456789012345678901")), cfg, func() string { return "" })
 	if err != nil {
 		panic(err)
 	}

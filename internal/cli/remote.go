@@ -26,7 +26,6 @@ var results = map[string]func() any{
 	ops.ActionPorts:         func() any { return &map[string]int{} },
 	ops.ActionCron:          func() any { return &[]supervisor.CronSnapshot{} },
 	ops.ActionHook:          func() any { return &[]supervisor.HookInfo{} },
-	ops.ActionHookRotate:    func() any { return &supervisor.HookInfo{} },
 	ops.ActionAudit:         func() any { return &[]logstore.AuditEntry{} },
 	ops.ActionRescan:        func() any { return &ops.RescanResult{} },
 	ctl.LoginMethod:         func() any { return &map[string]string{} },
@@ -124,7 +123,7 @@ func (c CLI) parseRemote(command string, opts *remoteOptions, here *workdir) (ct
 	case "cron":
 		return parseJobs(opts.rest, here, "cron", ops.ActionCron, map[string]string{"run": ops.ActionCronRun})
 	case "hooks":
-		return parseJobs(opts.rest, here, "hooks", ops.ActionHook, map[string]string{"run": ops.ActionHookRun, "rotate": ops.ActionHookRotate})
+		return parseJobs(opts.rest, here, "hooks", ops.ActionHook, map[string]string{"run": ops.ActionHookRun})
 	case "audit":
 		return c.parseAudit(opts.rest)
 	case "pg":

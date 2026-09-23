@@ -46,11 +46,13 @@ func TestProcessEnvPriority(t *testing.T) {
 }
 
 func TestBackoffCaps(t *testing.T) {
-	values := []any{"1s", 2.0, "5s"}
-	if got := backoff(values, 1); got != time.Second {
+	if got := backoff(1); got != time.Second {
 		t.Fatalf("first = %s", got)
 	}
-	if got := backoff(values, 10); got != 5*time.Second {
+	if got := backoff(3); got != 4*time.Second {
+		t.Fatalf("third = %s", got)
+	}
+	if got := backoff(10); got != time.Minute {
 		t.Fatalf("cap = %s", got)
 	}
 }
@@ -84,7 +86,7 @@ func TestHealthcheckSendsAppHost(t *testing.T) {
 
 func TestSupervisorStartsAndStopsWebProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32100, 32120})
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +125,8 @@ func TestSnapshotListsEveryProcfileService(t *testing.T) {
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = [2]int{32600, 32620}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	cfg.Ports = [2]int{32600, 32620}
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +154,7 @@ func TestSnapshotListsEveryProcfileService(t *testing.T) {
 
 func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32300, 32320})
-	first, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	first, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +168,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 	if alive(pid) {
 		t.Fatalf("process %d survived manager close", pid)
 	}
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +185,7 @@ func TestSupervisorStopsAndRestartsDesiredProcessAfterManagerRestart(t *testing.
 
 func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +195,7 @@ func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.Close()
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +207,7 @@ func TestSupervisorStartsEveryAppWithoutRunningList(t *testing.T) {
 
 func TestRestartDoesNotOrphanProcess(t *testing.T) {
 	cfg := supervisorTestConfig(t, [2]int{32400, 32420})
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +254,7 @@ func TestSpawnKillsSquatterOnPort(t *testing.T) {
 	}
 	cfg := supervisorTestConfig(t, [2]int{32500, 32520})
 	squatter := startListenerHelperOnPort(t, 32500)
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,8 +288,8 @@ func TestPortsFollowAppNameOrder(t *testing.T) {
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = [2]int{32600, 32620}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	cfg.Ports = [2]int{32600, 32620}
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +324,7 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -339,7 +341,7 @@ func TestRescanPicksUpNewAppsDirectoryEntries(t *testing.T) {
 
 func TestDestroyRequiresOptIn(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32650, 32670}, "autostart: false\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -362,7 +364,7 @@ func TestDestroyRejectsSingleAppMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -385,7 +387,7 @@ func TestDestroyRejectsSingleAppMode(t *testing.T) {
 
 func TestDestroyStopsAndRemovesOptedInApp(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32675, 32695}, "autostart: false\ndeletable: true\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil || len(invalid) != 0 {
 		t.Fatalf("new manager: %v, invalid: %v", err, invalid)
 	}
@@ -422,7 +424,7 @@ func TestDestroyStopsAndRemovesOptedInApp(t *testing.T) {
 
 func TestSupervisorSkipsAutostartFalseOnFirstStart(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{32700, 32720}, "autostart: false\n")
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +453,7 @@ func TestSupervisorSkipsAutostartFalseWhenListedInRunningJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.StateDir, "running.json"), []byte("[\n  \"demo\"\n]\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,9 +493,9 @@ func supervisorTestConfigApp(t *testing.T, portRange [2]int, extraYAML string) c
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Ports.Range = portRange
+	cfg.Ports = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
-	cfg.Defaults.HealthInterval = config.Duration(10 * time.Millisecond)
+	fastHealth(t)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	return cfg
 }
@@ -549,10 +551,11 @@ func TestSupervisorHelperProcess(t *testing.T) {
 }
 
 func TestSupervisorRestartsUnhealthyWebProcess(t *testing.T) {
+	fastRestart(t)
 	marker := filepath.Join(t.TempDir(), "hang-once")
-	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\nrestart_backoff: [10ms, 1.0, 50ms]\n", marker)
+	extra := fmt.Sprintf("env:\n  dboss_TEST_HELPER_HANG_ONCE: %s\nunhealthy_threshold: 2\n", marker)
 	cfg := supervisorTestConfigApp(t, [2]int{32200, 32220}, extra)
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +600,7 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +625,7 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 		t.Fatal("maintenance flag not set")
 	}
 	manager.Close()
-	second, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	second, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,8 +643,10 @@ func TestRescanReloadsDefaultsAndReportsHostKeys(t *testing.T) {
 
 func TestIdleStopKeepsAppWithInFlightRequest(t *testing.T) {
 	cfg := supervisorTestConfigApp(t, [2]int{33300, 33320}, "idle_stop: 150ms\n")
-	cfg.Daemon.IdleTick = config.Duration(20 * time.Millisecond)
-	manager, invalid, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	previousTick := idleTick
+	idleTick = 20 * time.Millisecond
+	t.Cleanup(func() { idleTick = previousTick })
+	manager, invalid, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"dboss/internal/config"
 	"dboss/internal/logstore"
 	"dboss/internal/logx"
 	"dboss/internal/module"
@@ -57,15 +58,15 @@ func (m *Module) runOnce(now time.Time) {
 		if snapshot.LogRetention <= 0 || !alerts.Enabled() {
 			continue
 		}
-		window, err := m.store.Window(snapshot.Name, now.Add(-alerts.Window.Value()))
+		window, err := m.store.Window(snapshot.Name, now.Add(-config.AlertWindow))
 		if err != nil {
 			logx.Warnf("alerts %s: %v", snapshot.Name, err)
 			continue
 		}
-		if window.Count == 0 || window.Count < int64(alerts.MinRequests) {
+		if window.Count == 0 || window.Count < config.AlertMinRequests {
 			continue
 		}
-		span := short(alerts.Window.Value())
+		span := short(config.AlertWindow)
 		if rate := window.ErrorRate(); alerts.ErrorRate > 0 && rate >= float64(alerts.ErrorRate) {
 			m.sink.Send(notify.Event{Type: notify.ErrorRate, App: snapshot.Name, Time: now, Error: fmt.Sprintf("%.1f%% 5xx (%d of %d) in %s", rate, window.Errors, window.Count, span)})
 		}

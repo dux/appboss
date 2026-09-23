@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +44,25 @@ var Events = []string{Crash, RestartLoop, HealthTimeout, WakeFailed, HookFailed,
 // Sink is what the supervisor calls. A disabled notifier drops the event.
 type Sink interface {
 	Send(Event)
+}
+
+// FormatFor picks the payload shape from the webhook address: Slack, Discord and ntfy get their
+// own, anything else the raw event JSON.
+func FormatFor(webhook string) string {
+	parsed, err := url.Parse(webhook)
+	if err != nil {
+		return "generic"
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "hooks.slack.com":
+		return "slack"
+	case (host == "discord.com" || host == "discordapp.com" || strings.HasSuffix(host, ".discord.com")) && strings.HasPrefix(parsed.Path, "/api/webhooks/"):
+		return "discord"
+	case host == "ntfy.sh" || strings.HasPrefix(host, "ntfy."):
+		return "ntfy"
+	}
+	return "generic"
 }
 
 // Config is the notify: block of the host config.

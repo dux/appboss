@@ -12,6 +12,7 @@ import (
 	"dboss/internal/config"
 	"dboss/internal/httpx"
 	"dboss/internal/metrics"
+	"dboss/internal/pages"
 	"dboss/internal/version"
 )
 
@@ -25,17 +26,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // routes is the console's URL table. Hook pings, health and metrics come first and stay outside
-// the session: a Git host, an uptime checker or Prometheus cannot hold one, so a hook carries its
-// own secret and /metrics takes a bearer token when one is configured. Every other route signs
-// the request in first.
+// the session: a Git host, an uptime checker or Prometheus cannot hold one, so a hook ping and
+// /metrics present tokens.dboss instead. Every other route signs the request in first.
 func (h *Handler) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/", h.handleHook)
-	if h.metricsEnabled {
-		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { h.healthz(w) })
-		mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { h.readyz(w) })
-		mux.HandleFunc("GET /metrics", h.metrics)
-	}
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { h.healthz(w) })
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { h.readyz(w) })
+	mux.HandleFunc("GET /metrics", h.metrics)
+	mux.HandleFunc("GET "+pages.LogoPath, func(w http.ResponseWriter, _ *http.Request) { pages.ServeLogo(w) })
 	session := func(pattern string, serve func(http.ResponseWriter, *http.Request, authSession)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if current, ok := h.auth.authenticate(w, r); ok {
@@ -52,7 +51,7 @@ func (h *Handler) routes() *http.ServeMux {
 	signedIn("GET /{$}", func(w http.ResponseWriter, r *http.Request) { h.serveAsset(w, r, "index.html") })
 	signedIn("GET /logs.txt", h.writeLogs)
 	signedIn("GET /assets/{asset...}", func(w http.ResponseWriter, r *http.Request) { h.serveAsset(w, r, r.PathValue("asset")) })
-	signedIn("GET /favicon.ico", h.serveFavicon)
+	signedIn("GET /favicon.ico", func(w http.ResponseWriter, _ *http.Request) { pages.ServeLogo(w) })
 	session("GET /api/bootstrap", h.writeDashboard)
 	signedIn("GET /api/apps", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"apps": h.service.Apps(), "capabilities": h.capabilities(), "updated_at": time.Now().UTC()})
@@ -80,7 +79,6 @@ func (h *Handler) routes() *http.ServeMux {
 	session("POST /api/config/apply", h.configApply)
 	signedIn("GET /api/hooks", h.hooks)
 	session("POST /api/hooks/run", h.hookRun)
-	session("POST /api/hooks/rotate", h.hookRotate)
 	signedIn("GET /api/traffic", h.traffic)
 	signedIn("GET /api/audit", h.audit)
 	signedIn("GET /api/sys", h.writeSys)
@@ -124,19 +122,6 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, name string
 	_, _ = w.Write(data)
 }
 
-// serveFavicon answers the browser's default /favicon.ico request with the SVG mark, so no
-// request escapes to a 404 before the <link rel="icon"> is read.
-func (h *Handler) serveFavicon(w http.ResponseWriter, r *http.Request) {
-	data, err := fs.ReadFile(h.static, "favicon.svg")
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "image/svg+xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
-}
-
 func (h *Handler) writeDashboard(w http.ResponseWriter, _ *http.Request, session authSession) {
 	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), Version: version.String(), UpdatedAt: time.Now().UTC()})
 }
@@ -169,14 +154,18 @@ func (h *Handler) readyz(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// metrics renders the Prometheus exposition. A configured token must match as a bearer token.
+// metrics renders the Prometheus exposition for a bearer holding tokens.dboss. Without a token
+// configured the endpoint does not exist.
 func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
-	if h.metricsToken != "" {
-		if subtle.ConstantTimeCompare([]byte(httpx.BearerToken(r)), []byte(h.metricsToken)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="dboss"`)
-			http.Error(w, "forbidden", http.StatusUnauthorized)
-			return
-		}
+	token := h.service.DbossToken()
+	if token == "" {
+		http.Error(w, "metrics are off: set tokens.dboss in the host dboss.yaml and send it as a bearer token", http.StatusNotFound)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(httpx.BearerToken(r)), []byte(token)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="dboss"`)
+		http.Error(w, "forbidden", http.StatusUnauthorized)
+		return
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

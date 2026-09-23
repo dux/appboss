@@ -219,8 +219,8 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		return nil
 	}
 	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env)
-	if state.pull && a.spec.Config.GithubToken != "" {
-		git.AuthEnv(env, a.spec.Config.GithubToken)
+	if token := a.host().Tokens.Github; state.pull && token != "" {
+		git.AuthEnv(env, token)
 	}
 	cmd, err := newCommand(a.spec.Dir, state.command, env)
 	if err != nil {
@@ -339,8 +339,7 @@ func (a *appRuntime) jobLog(state *jobState) (*logWriter, error) {
 	if state.log != nil {
 		return state.log, nil
 	}
-	defaults := a.spec.Config.Process(state.channel)
-	writer, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, state.channel+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
+	writer, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, state.channel+".log"), logMaxSize, logKeep)
 	if err != nil {
 		return nil, err
 	}

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// AuthEnv points git at a github_token through a credential helper carried in the environment, so
+// AuthEnv points git at tokens.github through a credential helper carried in the environment, so
 // the token reaches neither argv nor the repository's config. The helper answers only the
 // credential "get"; GIT_TERMINAL_PROMPT=0 makes a bad token fail instead of hanging.
 func AuthEnv(env map[string]string, token string) {

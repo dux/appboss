@@ -3,7 +3,6 @@ package supervisor
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -27,9 +26,9 @@ func hookConfig(t *testing.T, portRange [2]int, appYAML string) config.Config {
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Socket = filepath.Join(root, "dboss.sock")
-	cfg.Management.URL = "https://dboss.example.com"
+	cfg.Tokens.Dboss = "hook-token"
 	cfg.Management.Host = config.List{"dboss.example.com"}
-	cfg.Ports.Range = portRange
+	cfg.Ports = portRange
 	cfg.Defaults.StopTimeout = config.Duration(2 * time.Second)
 	cfg.Defaults.HealthTimeout = config.Duration(2 * time.Second)
 	return cfg
@@ -54,9 +53,9 @@ func waitForHookEnd(t *testing.T, manager *Manager, app, hook string) HookSnapsh
 	return HookSnapshot{}
 }
 
-func TestHookListsRunsAndGeneratesSecret(t *testing.T) {
+func TestHookListsRunsAndCarriesTheToken(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32800, 32820}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hello\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,15 +73,15 @@ func TestHookListsRunsAndGeneratesSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(infos) != 1 || infos[0].Source != "generated" || len(infos[0].Secret) != 64 {
+	if len(infos) != 1 || infos[0].URL != "https://dboss.example.com/hooks/demo/deploy?token=hook-token" {
 		t.Fatalf("hook info = %+v", infos)
 	}
-	if !strings.Contains(infos[0].URL, "?token="+infos[0].Secret) {
-		t.Fatalf("hook url = %q", infos[0].URL)
+	token, err := manager.HookToken("demo", "deploy")
+	if err != nil || token != "hook-token" {
+		t.Fatalf("HookToken = %q, %v", token, err)
 	}
-	secret, err := manager.HookSecret("demo", "deploy")
-	if err != nil || secret != infos[0].Secret {
-		t.Fatalf("HookSecret = %q, %v", secret, err)
+	if _, err := manager.HookToken("demo", "missing"); err == nil {
+		t.Fatal("an unknown hook must not have a token")
 	}
 
 	if err := manager.RunHook("demo", "deploy"); err != nil {
@@ -94,51 +93,23 @@ func TestHookListsRunsAndGeneratesSecret(t *testing.T) {
 	}
 }
 
-func TestHookRotateAndConfigSecretWins(t *testing.T) {
-	cfg := hookConfig(t, [2]int{32820, 32840}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hi\n    secret: fromconfig\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+func TestHookURLNeedsTheToken(t *testing.T) {
+	cfg := hookConfig(t, [2]int{32820, 32840}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hi\n")
+	cfg.Tokens.Dboss = ""
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-
 	infos, _ := manager.Hooks("demo")
-	if len(infos) != 1 || infos[0].Source != "config" || infos[0].Secret != "fromconfig" {
-		t.Fatalf("hook info = %+v", infos)
-	}
-	if _, err := manager.RotateHook("demo", "deploy"); err == nil {
-		t.Fatal("rotating a config secret was accepted")
-	}
-}
-
-func TestHookRotateReplacesGeneratedSecret(t *testing.T) {
-	cfg := hookConfig(t, [2]int{32840, 32860}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo hi\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Close()
-
-	before, _ := manager.Hooks("demo")
-	info, err := manager.RotateHook("demo", "deploy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Secret == before[0].Secret {
-		t.Fatal("rotate did not change the secret")
-	}
-	if !strings.Contains(info.URL, info.Secret) {
-		t.Fatalf("rotated url = %q", info.URL)
-	}
-	secret, _ := manager.HookSecret("demo", "deploy")
-	if secret != info.Secret {
-		t.Fatalf("HookSecret after rotate = %q, want %q", secret, info.Secret)
+	if len(infos) != 1 || infos[0].URL != "" {
+		t.Fatalf("a hook without tokens.dboss must have no URL: %+v", infos)
 	}
 }
 
 func TestHookWithRestartStartsTheApp(t *testing.T) {
 	cfg := hookConfig(t, [2]int{32860, 32880}, "procfile:\n  web: /bin/sleep 30\nautostart: false\nhooks:\n  deploy:\n    command: /usr/bin/true\n    restart: true\n")
-	manager, _, err := New(cfg, ports.New(cfg.Ports.Range), nil)
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

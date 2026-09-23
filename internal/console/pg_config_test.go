@@ -10,10 +10,8 @@ import (
 )
 
 func TestPatchPostgresBackupKeepsOtherKeys(t *testing.T) {
-	contents := "apps: ./apps\nproxy:\n  listen: \":80\"\npostgres:\n  enabled: true\n  dsn: $DATABASE_URL\n  backup:\n    databases:\n      old: {rotation: week}\n"
-	patched, err := patchPostgresBackup(contents, config.PostgresBackup{
-		Databases: map[string]config.DatabaseBackup{"app_production": {Rotation: "month"}},
-	})
+	contents := "apps: ./apps\nproxy:\n  listen: \":80\"\npostgres:\n  dsn: $DATABASE_URL\n  backups:\n    old: week\n"
+	patched, err := patchPostgresBackup(contents, config.PostgresBackups{"app_production": "month"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,16 +25,16 @@ func TestPatchPostgresBackupKeepsOtherKeys(t *testing.T) {
 	if !parsed.Postgres.Enabled || parsed.Postgres.DSN != "$DATABASE_URL" {
 		t.Fatalf("postgres keys outside backup were lost:\n%s", patched)
 	}
-	if len(parsed.Postgres.Backup.Databases) != 1 || parsed.Postgres.Backup.Rotation("app_production") != "month" {
+	if len(parsed.Postgres.Backups) != 1 || parsed.Postgres.Backups.Rotation("app_production") != "month" {
 		t.Fatalf("backup block was not replaced:\n%s", patched)
 	}
-	if selected := parsed.Postgres.Backup.Selected(); len(selected) != 1 || selected[0] != "app_production" {
+	if selected := parsed.Postgres.Backups.Selected(); len(selected) != 1 || selected[0] != "app_production" {
 		t.Fatalf("database selection lost:\n%s", patched)
 	}
 }
 
 func TestPatchPostgresBackupCreatesBlock(t *testing.T) {
-	patched, err := patchPostgresBackup("apps: ./apps\n", config.PostgresBackup{Databases: map[string]config.DatabaseBackup{"reports": {Rotation: "month"}}})
+	patched, err := patchPostgresBackup("apps: ./apps\n", config.PostgresBackups{"reports": "month"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +45,7 @@ func TestPatchPostgresBackupCreatesBlock(t *testing.T) {
 	if _, ok := root["postgres"]; !ok {
 		t.Fatalf("postgres block was not created:\n%s", patched)
 	}
-	if !strings.Contains(patched, "rotation: month") {
+	if !strings.Contains(patched, "reports: month") {
 		t.Fatalf("backup rotation missing:\n%s", patched)
 	}
 }

@@ -48,6 +48,8 @@ type fakeManager struct {
 	warnings    []error
 	hooks       map[string][]supervisor.HookInfo
 	hookSecrets map[string]string
+	// token is tokens.dboss of the fake host config.
+	token string
 }
 
 func (m *fakeManager) Snapshots() []supervisor.Snapshot {
@@ -107,16 +109,11 @@ func (m *fakeManager) RunHook(app, hook string) error {
 	return nil
 }
 
-func (m *fakeManager) RotateHook(app, hook string) (supervisor.HookInfo, error) {
-	m.actions = append(m.actions, fmt.Sprintf("hook-rotate %s %s", app, hook))
-	return supervisor.HookInfo{HookSnapshot: supervisor.HookSnapshot{Name: hook}, Secret: "new-secret", URL: "https://dboss.example.com/hooks/" + app + "/" + hook + "?token=new-secret"}, nil
-}
-
 func (m *fakeManager) Hooks(app string) ([]supervisor.HookInfo, error) {
 	return m.hooks[app], nil
 }
 
-func (m *fakeManager) HookSecret(app, hook string) (string, error) {
+func (m *fakeManager) HookToken(app, hook string) (string, error) {
 	secret, ok := m.hookSecrets[app+"/"+hook]
 	if !ok {
 		return "", errors.New("unknown hook")
@@ -124,7 +121,7 @@ func (m *fakeManager) HookSecret(app, hook string) (string, error) {
 	return secret, nil
 }
 
-func (m *fakeManager) HostHookSecret(name string) (string, error) {
+func (m *fakeManager) HostHookToken(name string) (string, error) {
 	return "host-secret", nil
 }
 
@@ -139,7 +136,11 @@ func (m *fakeManager) Rescan() ([]error, error) {
 }
 
 func (m *fakeManager) RestartRequired() []string { return nil }
-func (m *fakeManager) HostConfig() config.Config { return config.Default() }
+func (m *fakeManager) HostConfig() config.Config {
+	cfg := config.Default()
+	cfg.Tokens.Dboss = m.token
+	return cfg
+}
 
 // fakeStore keeps the files in memory but follows the real store's contract: revisions are
 // hashes of the contents and a stale revision is a conflict.
@@ -483,7 +484,7 @@ func newTestHandler(t *testing.T, manager *fakeManager, rates fakeRates) *Handle
 	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	cfg.Management.Admins = []string{"admin@example.com"}
 	return handlerFor(t, cfg, manager, rates)
 }
 
@@ -557,7 +558,7 @@ func TestConsoleRefreshesAppDiskUsage(t *testing.T) {
 	cfg.Apps = "/apps"
 	cfg.StateDir = t.TempDir()
 	cfg.Management.Host = config.List{"dboss.lvh.me", "dboss.internal"}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	cfg.Management.Admins = []string{"admin@example.com"}
 	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "sinatra", State: supervisor.Running}}}
 	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{}, nil, nil, &fakeDisk{}, nil), newFakeStore(), &fakeSys{})
 	if err != nil {
@@ -789,7 +790,7 @@ func TestConsoleConfigFormWritesRealOverride(t *testing.T) {
 	cfg.StateDir = filepath.Join(root, "state")
 	cfg.LogDir = filepath.Join(root, "log")
 	cfg.Management.Host = config.List{"dboss.lvh.me"}
-	cfg.Management.Auth.AdminEmails = []string{"admin@example.com"}
+	cfg.Management.Admins = []string{"admin@example.com"}
 	store := apps.NewStore(cfg)
 	manager := &fakeManager{}
 	handler, err := New(cfg, authcog.NewWithKey([]byte("01234567890123456789012345678901")), ops.New(manager, fakeLogs{}, nil, nil, nil, nil), store, &fakeSys{})

@@ -44,7 +44,7 @@ func (s *Service) deployPreview(cfg config.Config, hook config.Hook, request pre
 	// Stop a running preview before resetting its checkout, so git never touches files an Odoo
 	// process is reading. An unknown app (first deploy) is fine to ignore.
 	_ = s.runtime.Stop(appName)
-	if err := git.Checkout(appDir, request.Repo, request.Branch, cfg.Defaults.GithubToken); err != nil {
+	if err := git.Checkout(appDir, request.Repo, request.Branch, cfg.Tokens.Github); err != nil {
 		s.Audit(actor, appName, "deploy", detail, err)
 		return err
 	}

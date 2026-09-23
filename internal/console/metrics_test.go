@@ -59,17 +59,17 @@ func TestReadyzCountsASleepingAutostartAppAsReady(t *testing.T) {
 	}
 }
 
-func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
+func TestMetricsEndpointNeedsTheDbossToken(t *testing.T) {
 	manager := &fakeManager{snapshots: []supervisor.Snapshot{{Name: "web", State: supervisor.Running, Autostart: true}}}
 	handler := newTestHandler(t, manager, nil)
 
-	open := httptest.NewRecorder()
-	handler.ServeHTTP(open, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil))
-	if open.Code != http.StatusOK || !strings.Contains(open.Body.String(), `dboss_app_up{app="web"} 1`) {
-		t.Fatalf("open metrics = %d: %s", open.Code, open.Body.String())
+	hidden := httptest.NewRecorder()
+	handler.ServeHTTP(hidden, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil))
+	if hidden.Code != http.StatusNotFound || !strings.Contains(hidden.Body.String(), "set tokens.dboss") {
+		t.Fatalf("metrics without tokens.dboss = %d, want 404", hidden.Code)
 	}
 
-	handler.metricsToken = "s3cret"
+	manager.token = "s3cret"
 	denied := httptest.NewRecorder()
 	handler.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081/metrics", nil))
 	if denied.Code != http.StatusUnauthorized {
@@ -79,20 +79,7 @@ func TestMetricsEndpointRendersAndChecksToken(t *testing.T) {
 	allowed.Header.Set("Authorization", "Bearer s3cret")
 	allowedResponse := httptest.NewRecorder()
 	handler.ServeHTTP(allowedResponse, allowed)
-	if allowedResponse.Code != http.StatusOK {
-		t.Fatalf("bearer metrics = %d", allowedResponse.Code)
-	}
-}
-
-func TestMetricsDisabledHidesEndpoints(t *testing.T) {
-	handler := newTestHandler(t, &fakeManager{}, nil)
-	handler.metricsEnabled = false
-	handler.mux = handler.routes()
-	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081"+path, nil))
-		if response.Code == http.StatusOK || strings.Contains(response.Body.String(), "dboss_app_up") {
-			t.Fatalf("%s = %d, want the endpoint disabled", path, response.Code)
-		}
+	if allowedResponse.Code != http.StatusOK || !strings.Contains(allowedResponse.Body.String(), `dboss_app_up{app="web"} 1`) {
+		t.Fatalf("bearer metrics = %d: %s", allowedResponse.Code, allowedResponse.Body.String())
 	}
 }

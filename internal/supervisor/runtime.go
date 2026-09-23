@@ -17,7 +17,6 @@ import (
 	"dboss/internal/notify"
 	"dboss/internal/ports"
 	"dboss/internal/res"
-	"dboss/internal/secret"
 )
 
 type requestKind int
@@ -37,7 +36,6 @@ const (
 	requestCronRun
 	requestHookRun
 	requestHooks
-	requestHookRotate
 	requestExecInfo
 	requestDrain
 )
@@ -57,7 +55,7 @@ type response struct {
 	snapshot    Snapshot
 	logs        map[string][]string
 	sealed      []string
-	hooks       []HookInfo
+	hooks       []HookSnapshot
 	app         *apps.App
 	err         error
 	idleStopped bool
@@ -85,24 +83,25 @@ type process struct {
 }
 
 type appRuntime struct {
-	ctx              context.Context
-	cancel           context.CancelFunc
-	cfg              config.Config
-	spec             *apps.App
-	allocator        *ports.Allocator
-	backend          res.Backend
-	cgroup           res.Backend
-	echo             *Echo
-	requests         chan request
-	events           chan processEvent
-	state            State
-	processes        map[string]*process
-	cron             map[string]*jobState
-	hooks            map[string]*jobState
-	lifecycle        map[string]*jobState
-	created          bool
-	markCreated      func(string)
-	secrets          *secret.Store
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cfg         config.Config
+	spec        *apps.App
+	allocator   *ports.Allocator
+	backend     res.Backend
+	cgroup      res.Backend
+	echo        *Echo
+	requests    chan request
+	events      chan processEvent
+	state       State
+	processes   map[string]*process
+	cron        map[string]*jobState
+	hooks       map[string]*jobState
+	lifecycle   map[string]*jobState
+	created     bool
+	markCreated func(string)
+	// host is the live host config, for the keys a rescan may change (tokens).
+	host             func() config.Config
 	sink             notify.Sink
 	restart          func(string) error
 	failures         map[string]int
@@ -203,9 +202,7 @@ func (a *appRuntime) handle(req request) response {
 	case requestHookRun:
 		return response{err: a.runHook(req.hook, time.Now())}
 	case requestHooks:
-		return response{hooks: a.hookInfos()}
-	case requestHookRotate:
-		return response{err: a.rotateHook(req.hook)}
+		return response{hooks: a.hookSnapshot()}
 	case requestExecInfo:
 		return response{app: a.spec}
 	}

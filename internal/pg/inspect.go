@@ -165,7 +165,7 @@ ORDER BY spcname
 
 // collect runs every inspection query against one open connection. A failure in the optional
 // sections (replication, tablespaces) is tolerated, since a restricted role may not read them.
-func collect(ctx context.Context, conn *pgx.Conn, connConfig *pgx.ConnConfig, backupConfig config.PostgresBackup) Snapshot {
+func collect(ctx context.Context, conn *pgx.Conn, connConfig *pgx.ConnConfig, backupConfig config.PostgresBackups) Snapshot {
 	snapshot := Snapshot{CollectedAt: time.Now(), Server: Server{Description: describe(connConfig)}}
 	if connConfig != nil {
 		snapshot.Server.Host = connConfig.Host
@@ -187,7 +187,7 @@ func collect(ctx context.Context, conn *pgx.Conn, connConfig *pgx.ConnConfig, ba
 	return snapshot
 }
 
-func collectDatabases(ctx context.Context, conn *pgx.Conn, backupConfig config.PostgresBackup) []Database {
+func collectDatabases(ctx context.Context, conn *pgx.Conn, backupConfig config.PostgresBackups) []Database {
 	rows, err := conn.Query(ctx, databaseQuery)
 	if err != nil {
 		return nil
@@ -199,7 +199,7 @@ func collectDatabases(ctx context.Context, conn *pgx.Conn, backupConfig config.P
 		if err := rows.Scan(&database.Name, &database.Owner, &database.SizeBytes, &database.Encoding, &database.Collate, &database.Connections, &database.XactCommit, &database.XactRollback, &database.Deadlocks, &database.TempBytes); err != nil {
 			continue
 		}
-		_, database.BackupSelected = backupConfig.Databases[database.Name]
+		_, database.BackupSelected = backupConfig[database.Name]
 		database.BackupRotation = backupConfig.Rotation(database.Name)
 		databases = append(databases, database)
 	}

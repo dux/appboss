@@ -33,14 +33,14 @@ func snapshot(name string, alerts config.Alerts) supervisor.Snapshot {
 }
 
 func TestRunOnceFiresOverThreshold(t *testing.T) {
-	checks := config.Alerts{Window: config.Duration(5 * time.Minute), MinRequests: 20, ErrorRate: 10, SlowP95: config.Duration(2 * time.Second)}
+	checks := config.Alerts{ErrorRate: 10, SlowP95: config.Duration(2 * time.Second)}
 	quiet := snapshot("unlogged", checks)
 	quiet.LogRetention = 0
 	apps := fakeApps{snapshots: []supervisor.Snapshot{
 		snapshot("shop", checks),
 		snapshot("calm", checks),
 		snapshot("tiny", checks),
-		snapshot("off", config.Alerts{Window: config.Duration(5 * time.Minute)}),
+		snapshot("off", config.Alerts{}),
 		quiet,
 	}}
 	bad := logstore.Window{Count: 250, Errors: 31, P95: 3200}

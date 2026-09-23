@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"dboss/internal/pages"
 	"dboss/internal/supervisor"
 )
 
@@ -46,8 +47,8 @@ func (h *Handler) canonical(w http.ResponseWriter, r *http.Request, app supervis
 }
 
 func (h *Handler) allow(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
-	if !allowed(clientIP(r, h.cfg.Proxy.ClientIPHeaders), app.Web.AllowPrefixes()) {
-		h.forbidden(w, r)
+	if !allowed(clientIP(r, h.cfg.Proxy.Cloudflare), app.Web.AllowPrefixes()) {
+		h.forbidden(w, r, app)
 		return
 	}
 	next()
@@ -66,7 +67,7 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, app supervis
 // app owns its authcog login namespace, where dboss hands the identity over, and a module can
 // vouch for a request, e.g. a pubsub publisher presenting its own secret.
 func (h *Handler) exempt(r *http.Request, app supervisor.Snapshot) bool {
-	if app.Web.AuthCog.Enabled() && withinPath(app.Web.AuthCog.Path, r.URL.Path) {
+	if app.Web.AuthCog.Enabled() && withinPath(string(app.Web.AuthCog), r.URL.Path) {
 		return true
 	}
 	return h.pubsub != nil && h.pubsub.AuthorizesPublish(r, app)
@@ -95,7 +96,7 @@ func (h *Handler) publicHealth(w http.ResponseWriter, r *http.Request, app super
 
 func (h *Handler) maintain(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
 	if app.Maintenance {
-		h.unavailablePage(w, r, h.maintenancePage(app, r.Host), app.Name, maintenanceRetryAfter)
+		h.unavailablePage(w, r, app, pages.Maintenance, maintenanceRetryAfter)
 		return
 	}
 	next()

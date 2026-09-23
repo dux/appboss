@@ -8,7 +8,7 @@ Enable it in the app's dboss.yaml (or in defaults: of the host file):
 
     pubsub:
       path: /socketio      # empty disables it
-      # secret: $PUBSUB_SECRET   # empty generates one per app under state_dir
+      # secret: $PUBSUB_SECRET   # empty generates one per app under dir/state
       # replay: 10
       # max_clients: 500
       # max_message_size: 64k
@@ -64,5 +64,5 @@ Notes:
     ` + "`replay`" + ` messages are replayed to a subscriber that joins late, oldest first.
   * Channels are one path segment; client.js, _test and _selftest are reserved.
   * A slow subscriber is dropped rather than blocking the publisher. The limit is max_clients.
-  * The publish secret comes from the config or is generated under state_dir. Read it with
+  * The publish secret comes from the config or is generated under dir/state. Read it with
     ` + "`dboss pubsub`" + `, replace it with ` + "`dboss pubsub rotate`" + `.`

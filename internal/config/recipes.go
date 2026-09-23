@@ -55,22 +55,12 @@ var recipeSpecs = []recipeSpec{
 	{
 		id:          "auth",
 		title:       "Sign-in",
-		description: "Ask visitors to sign in through AuthCog and let only the listed emails reach the app.",
+		description: "Ask visitors to sign in through AuthCog and let only the listed emails reach the app, or run the AuthCog sign-in for the app and hand it the profile once.",
 		scope:       RecipeApp,
 		fields: []recipeField{
-			{path: "auth.allow_emails"},
-			{path: "auth.session_ttl"},
-		},
-	},
-	{
-		id:          "authcog",
-		title:       "AuthCog login",
-		description: "Run the AuthCog sign-in for the app and hand it the profile once; the app creates its own session.",
-		scope:       RecipeApp,
-		fields: []recipeField{
-			{path: "authcog.login"},
-			{path: "authcog.path"},
-			{path: "authcog.realm"},
+			{path: "auth"},
+			{path: "session_ttl"},
+			{path: "authcog"},
 		},
 	},
 	{
@@ -81,8 +71,6 @@ var recipeSpecs = []recipeSpec{
 		fields: []recipeField{
 			{path: "alerts.error_rate"},
 			{path: "alerts.slow_p95"},
-			{path: "alerts.window"},
-			{path: "alerts.min_requests"},
 		},
 	},
 	{
@@ -100,8 +88,7 @@ var recipeSpecs = []recipeSpec{
 			{path: "allow_ips"},
 			{path: "headers"},
 			{path: "basic_auth"},
-			{path: "maintenance_page"},
-			{path: "error_page_path"},
+			{path: "pages"},
 		},
 	},
 	{
@@ -111,23 +98,16 @@ var recipeSpecs = []recipeSpec{
 		scope:       RecipeApp,
 		fields: []recipeField{
 			{path: "idle_stop", section: "Health"},
-			{path: "health_interval", section: "Health"},
 			{path: "health_timeout", section: "Health"},
 			{path: "liveness_interval", section: "Health"},
 			{path: "unhealthy_threshold", section: "Health"},
 			{path: "restart", section: "Restart"},
 			{path: "max_restarts", section: "Restart"},
-			{path: "restart_reset", section: "Restart"},
-			{path: "restart_backoff", section: "Restart"},
 			{path: "stop_timeout", section: "Restart"},
 			{path: "stop_signal", section: "Restart"},
-			{path: "resources", section: "Resources"},
 			{path: "memory_max", section: "Resources"},
 			{path: "cpu_max", section: "Resources"},
 			{path: "env", section: "Resources"},
-			{path: "log_max_size", section: "Logs"},
-			{path: "log_keep", section: "Logs"},
-			{path: "log_tail_lines", section: "Logs"},
 			{path: "log_retention", section: "Logs"},
 			{path: "stdout_retention", section: "Logs"},
 			{path: "tmp_clean", section: "Housekeeping"},
@@ -140,9 +120,7 @@ var recipeSpecs = []recipeSpec{
 		scope:       RecipeHost,
 		fields: []recipeField{
 			{path: "notify.url"},
-			{path: "notify.format"},
 			{path: "notify.events"},
-			{path: "notify.min_interval"},
 			{path: "notify.headers"},
 		},
 	},
@@ -152,7 +130,6 @@ var recipeSpecs = []recipeSpec{
 		description: "How dboss reaches the server it inspects and backs up.",
 		scope:       RecipeHost,
 		fields: []recipeField{
-			{path: "postgres.enabled"},
 			{path: "postgres.dsn"},
 		},
 	},
@@ -199,6 +176,8 @@ func widgetKind(key Key) string {
 	}
 	for _, typ := range key.Types {
 		switch typ {
+		case "string":
+			return "text"
 		case "int":
 			return "number"
 		case "bool":

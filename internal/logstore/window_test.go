@@ -8,7 +8,7 @@ import (
 )
 
 func TestWindowSummarizesRequests(t *testing.T) {
-	store := New(t.TempDir(), 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	now := time.Now()
@@ -56,7 +56,7 @@ func TestWindowSummarizesRequests(t *testing.T) {
 
 func TestReadsNeverCreateADatabase(t *testing.T) {
 	dir := t.TempDir()
-	store := New(dir, 5*time.Millisecond, nil, "", "", time.Hour, 0)
+	store := New(dir, 5*time.Millisecond, nil, "", time.Hour, 0)
 	defer store.Close()
 
 	window, err := store.Window("quiet", time.Now().Add(-time.Hour))

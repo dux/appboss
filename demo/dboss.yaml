@@ -1,14 +1,14 @@
 management:
   host: dboss.lvh.me
-  url: http://dboss.lvh.me
-  auth:
-    admin_emails:
-      - rejotl@gmail.com
+  admins:
+    - rejotl@gmail.com
 
-ports:
-  range: [3100, 3199]
+ports: [3100, 3199]
+
+# Hook pings and /metrics present this; a real host keeps it in dboss.local.yaml.
+tokens:
+  dboss: demo-token
 
 # Events land in the bun app's stdout through its /notify route.
 notify:
   url: http://bun.lvh.me/notify
-  min_interval: 1m

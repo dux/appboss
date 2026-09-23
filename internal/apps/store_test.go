@@ -148,7 +148,7 @@ func TestStoreCreatesHostOverride(t *testing.T) {
 		t.Fatalf("local file missing: %v", err)
 	}
 	// The active host file is now the override, so writes target it.
-	updated, err := store.Write("host", file.Contents+"\npostgres:\n  enabled: false\n", file.Revision)
+	updated, err := store.Write("host", file.Contents+"\npostgres: false\n", file.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +184,11 @@ func TestStoreHandlesMissingHostFile(t *testing.T) {
 	if read, err := store.Read("host"); err != nil || read.Contents != "" {
 		t.Fatalf("read = %+v, %v", read, err)
 	}
-	written, err := store.Write("host", "proxy:\n  cloudflare_only: true\n", files[0].Revision)
+	written, err := store.Write("host", "proxy:\n  cloudflare: true\n", files[0].Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(written.Contents, "cloudflare_only") {
+	if !strings.Contains(written.Contents, "cloudflare") {
 		t.Fatalf("contents = %q", written.Contents)
 	}
 	if _, err := os.Stat(filepath.Join(root, config.FileName)); err != nil {

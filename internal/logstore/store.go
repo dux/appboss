@@ -25,8 +25,7 @@ type Store struct {
 	dir            string
 	flush          time.Duration
 	snapshotter    Snapshotter
-	pruneAt        string
-	vacuumAt       string
+	maintenanceAt  string
 	hostRetention  time.Duration
 	auditRetention time.Duration
 	mu             sync.Mutex
@@ -36,22 +35,24 @@ type Store struct {
 }
 
 // New returns a store that writes under dir (one <app>/dboss.sqlite per app). snapshotter and
-// pruneAt drive the daily retention prune; pass nil to disable it. vacuumAt schedules the daily
-// VACUUM (empty disables it). hostRetention bounds the reserved HostApp database that holds
-// dboss's own daemon log; auditRetention bounds the audit table (0 keeps audit rows forever).
-func New(dir string, flush time.Duration, snapshotter Snapshotter, pruneAt, vacuumAt string, hostRetention, auditRetention time.Duration) *Store {
-	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, pruneAt: pruneAt, vacuumAt: vacuumAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
+// maintenanceAt drive the daily retention prune and the VACUUM after it; a nil snapshotter or an
+// empty time disables both. hostRetention bounds the reserved HostApp database that holds dboss's
+// own daemon log; auditRetention bounds the audit table (0 keeps audit rows forever).
+func New(dir string, flush time.Duration, snapshotter Snapshotter, maintenanceAt string, hostRetention, auditRetention time.Duration) *Store {
+	return &Store{dir: dir, flush: flush, snapshotter: snapshotter, maintenanceAt: maintenanceAt, hostRetention: hostRetention, auditRetention: auditRetention, apps: map[string]*appWriter{}}
 }
 
 func (s *Store) Name() string { return "logstore" }
 
-// Start launches the retention prune loop and the daily vacuum. Databases open lazily on first
-// write.
+// Start launches the daily maintenance: the retention prune, then VACUUM, so the vacuum reclaims
+// what the prune freed. Databases open lazily on first write.
 func (s *Store) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	if s.snapshotter != nil {
-		go schedule.Daily(s.ctx, s.pruneAt, s.pruneAll)
-		go schedule.Daily(s.ctx, s.vacuumAt, s.vacuumAll)
+		go schedule.Daily(s.ctx, s.maintenanceAt, func() {
+			s.pruneAll()
+			s.vacuumAll()
+		})
 	}
 	return nil
 }

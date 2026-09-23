@@ -17,8 +17,8 @@ const (
 // configured path and then forwards one request to that same path with the profile in
 // X-Dboss-User; the app reads it and creates its own session. dboss keeps nothing.
 func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
-	cfg := app.Web.AuthCog
-	if !cfg.Enabled() || r.URL.Path != cfg.Path {
+	path := string(app.Web.AuthCog)
+	if path == "" || r.URL.Path != path {
 		next()
 		return
 	}
@@ -27,7 +27,7 @@ func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app supervisor
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	gate := authCogGate(app)
+	gate := authCogGate(app, h.hostConfig().AuthCogRealm)
 	if r.URL.Query().Get("callback") == "" {
 		h.signin.Start(w, r, gate)
 		return
@@ -49,12 +49,12 @@ func (h *Handler) authCog(w http.ResponseWriter, r *http.Request, app supervisor
 
 // authCogGate describes the app to the shared AuthCog flow. Every host that reaches here already
 // belongs to the app, so the gate answers for all of them. Any AuthCog account is admitted.
-func authCogGate(app supervisor.Snapshot) authcog.Gate {
+func authCogGate(app supervisor.Snapshot, realm string) authcog.Gate {
 	return authcog.Gate{
 		Audience:     authCogAudience + app.Name,
-		Realm:        app.Web.AuthCog.RealmHost(),
+		Realm:        realm,
 		Hosts:        func(string) bool { return true },
-		CallbackPath: app.Web.AuthCog.Path,
+		CallbackPath: string(app.Web.AuthCog),
 		StateCookie:  authCogStateCookie,
 		Allow:        func(string) bool { return true },
 	}

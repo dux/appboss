@@ -80,19 +80,21 @@ func (s *Service) Hooks(name string) ([]supervisor.HookInfo, error) { return s.r
 // runHook starts one deploy hook now.
 func (s *Service) runHook(name, hook string) error { return s.runtime.RunHook(name, hook) }
 
-// HostHookSecret returns the effective secret of a host-level hook, for verifying a ping.
-func (s *Service) HostHookSecret(name string) (string, error) {
-	return s.runtime.HostHookSecret(name)
+// HostHookToken returns the token a ping to a host-level hook must present.
+func (s *Service) HostHookToken(name string) (string, error) {
+	return s.runtime.HostHookToken(name)
 }
 
-// rotateHook mints a new generated secret for one hook and returns it with its URL.
-func (s *Service) rotateHook(name, hook string) (supervisor.HookInfo, error) {
-	return s.runtime.RotateHook(name, hook)
-}
+// DbossToken is tokens.dboss of the live host config: the credential of every hook ping and of
+// /metrics. Empty means neither is served.
+func (s *Service) DbossToken() string { return s.runtime.HostConfig().Tokens.Dboss }
 
-// HookSecret returns the effective secret of one hook, for verifying a ping.
-func (s *Service) HookSecret(name, hook string) (string, error) {
-	return s.runtime.HookSecret(name, hook)
+// HostPages is the host's pages folder from the live host config.
+func (s *Service) HostPages() string { return s.runtime.HostConfig().Pages }
+
+// HookToken returns the token a ping to one app hook must present.
+func (s *Service) HookToken(name, hook string) (string, error) {
+	return s.runtime.HookToken(name, hook)
 }
 
 // exec runs one command in the app's environment and returns its combined output.

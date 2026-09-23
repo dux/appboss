@@ -56,7 +56,7 @@ func (a *appRuntime) spawn(name string, command apps.Command, port int) error {
 	if len(killed) > 0 {
 		logx.Warnf("%s/%s: killed pids %v holding port %d", a.spec.Name, name, killed, port)
 	}
-	logFile, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), int64(defaults.LogMaxSize), defaults.LogKeep)
+	logFile, err := newLogWriter(filepath.Join(a.cfg.LogDir, a.spec.Name, name+".log"), logMaxSize, logKeep)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (a *appRuntime) processExited(event processEvent) {
 		return
 	}
 	defaults := a.spec.Config.Process(name)
-	if time.Since(event.proc.startedAt) >= defaults.RestartReset.Value() {
+	if time.Since(event.proc.startedAt) >= restartReset {
 		a.failures[name] = 0
 	}
 	shouldRestart := defaults.Restart == "always" || (defaults.Restart == "on-failure" && event.exitCode != 0)
@@ -168,35 +168,44 @@ func (a *appRuntime) processExited(event processEvent) {
 	if a.failures[name] >= 2 {
 		a.emit(notify.RestartLoop, fmt.Sprintf("%s failed %d times in a row", name, a.failures[name]))
 	}
-	delay := backoff(defaults.RestartBackoff, a.failures[name])
+	delay := backoff(a.failures[name])
 	time.AfterFunc(delay, func() { a.sendEvent(processEvent{kind: "restart", proc: event.proc}) })
 }
 
-func backoff(values []any, attempt int) time.Duration {
-	first, multiplier, maximum := time.Second, 2.0, 60*time.Second
-	if len(values) == 3 {
-		if parsed, err := time.ParseDuration(fmt.Sprint(values[0])); err == nil {
-			first = parsed
-		}
-		if parsed, err := strconv.ParseFloat(fmt.Sprint(values[1]), 64); err == nil {
-			multiplier = parsed
-		}
-		if parsed, err := time.ParseDuration(fmt.Sprint(values[2])); err == nil {
-			maximum = parsed
-		}
-	}
-	delay := float64(first)
+// Restart pacing: the delay starts at restartBackoffFirst, grows by restartBackoffFactor per
+// consecutive failure up to restartBackoffMax, and the failure count resets once a process has
+// stayed up for restartReset. The delays are vars so tests can restart at once.
+const (
+	restartBackoffFactor = 2.0
+	restartReset         = time.Minute
+)
+
+var (
+	restartBackoffFirst = time.Second
+	restartBackoffMax   = 60 * time.Second
+)
+
+// Process log files rotate above logMaxSize and keep logKeep rotated files; dboss logs without -n
+// prints logTailLines.
+const (
+	logMaxSize   = 10 << 20
+	logKeep      = 5
+	logTailLines = 500
+)
+
+func backoff(attempt int) time.Duration {
+	delay := float64(restartBackoffFirst)
 	for i := 1; i < attempt; i++ {
-		delay *= multiplier
+		delay *= restartBackoffFactor
 	}
-	if time.Duration(delay) > maximum {
-		return maximum
+	if time.Duration(delay) > restartBackoffMax {
+		return restartBackoffMax
 	}
 	return time.Duration(delay)
 }
 
 func (a *appRuntime) snapshot() Snapshot {
-	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Hosts: a.spec.Config.Hosts, WebProcesses: WebProcessSnapshots(a.spec.Config.WebProcesses), Autostart: a.spec.Config.Autostart.Starts(), Deletable: a.spec.Config.Deletable && a.cfg.App == nil, WakeButton: a.spec.Config.Autostart == config.AutostartButton, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), TmpClean: a.spec.Config.TmpClean.Value()}
+	result := Snapshot{Name: a.spec.Name, State: a.state, Maintenance: a.maintenance, Draining: a.draining, Dir: a.spec.Dir, Pages: resolveDir(a.spec.Dir, a.spec.Config.Pages), Hosts: a.spec.Config.Hosts, WebProcesses: WebProcessSnapshots(a.spec.Config.WebProcesses), Autostart: a.spec.Config.Autostart.Starts(), Deletable: a.spec.Config.Deletable && a.cfg.App == nil, WakeButton: a.spec.Config.Autostart == config.AutostartButton, Web: a.spec.Config.Web, Cron: a.cronSnapshot(), Hooks: a.hookSnapshot(), LastActivity: a.lastActivity, Error: a.lastError, LogRetention: a.spec.Config.LogRetention.Value(), StdoutRetention: a.spec.Config.StdoutRetention.Value(), TmpClean: a.spec.Config.TmpClean.Value()}
 	if result.Error != "" {
 		processName := a.lastErrorProcess
 		if processName == "" && len(a.spec.Config.WebProcesses) > 0 {
@@ -235,7 +244,7 @@ func (a *appRuntime) snapshot() Snapshot {
 
 func (a *appRuntime) logs(processName string, lines int) (map[string][]string, error) {
 	if lines <= 0 {
-		lines = a.spec.Config.LogTailLines
+		lines = logTailLines
 	}
 	result := map[string][]string{}
 	for name := range a.spec.Commands {
@@ -288,10 +297,10 @@ func (a *appRuntime) cleanupProcess(name string) {
 	a.removePID(name)
 }
 
-// backendFor picks the resource backend of one process: cgroup unless the process asked for
-// procgroup or cgroups are unavailable on this host.
-func (a *appRuntime) backendFor(process string) res.Backend {
-	if a.cgroup != nil && a.spec.Config.Process(process).Resources != "procgroup" {
+// backendFor picks the resource backend of one process: cgroup unless cgroups are unavailable on
+// this host.
+func (a *appRuntime) backendFor(string) res.Backend {
+	if a.cgroup != nil {
 		return a.cgroup
 	}
 	return a.backend
@@ -309,3 +318,11 @@ func (a *appRuntime) pidPath(name string) string {
 	return filepath.Join(a.cfg.StateDir, a.spec.Name, name+".pid")
 }
 func (a *appRuntime) removePID(name string) { _ = os.Remove(a.pidPath(name)) }
+
+// resolveDir resolves a path from the app file against the app folder.
+func resolveDir(dir, value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Join(dir, value)
+}

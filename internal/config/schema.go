@@ -24,22 +24,19 @@ type Block struct {
 
 // blocks is every block in display order: service, app, then the blocks shared by both.
 var blocks = []Block{
-	{ID: "paths", Title: "Paths", Summary: "Where the apps, runtime state and logs live.", Scope: ScopeService},
+	{ID: "host", Title: "Host", Summary: "Where the apps and runtime files live, the port range and daily housekeeping.", Scope: ScopeService},
+	{ID: "tokens", Title: "Tokens", Summary: "The GitHub token dboss pulls with and the token callers present to dboss.", Scope: ScopeService},
 	{ID: "proxy", Title: "Proxy", Summary: "The public listener and how it routes and guards requests.", Scope: ScopeService},
-	{ID: "management", Title: "Management console", Summary: "Hostnames, sign-in and the health and metrics endpoints.", Scope: ScopeService},
-	{ID: "ports", Title: "Ports", Summary: "The port range dboss owns and allocates from.", Scope: ScopeService},
-	{ID: "daemon", Title: "Daemon", Summary: "Background cadence, log level and audit retention.", Scope: ScopeService},
+	{ID: "management", Title: "Management console", Summary: "Hostnames and admins of the console.", Scope: ScopeService},
 	{ID: "notify", Title: "Notifications", Summary: "One operator webhook for runtime events.", Scope: ScopeService},
 	{ID: "postgres", Title: "PostgreSQL", Summary: "The server the console inspects and backs up.", Scope: ScopeService},
-	{ID: "app", Title: "App", Summary: "Processes, hostnames and start policy.", Scope: ScopeApp},
+	{ID: "app", Title: "App", Summary: "Processes, hostnames, start policy and pages.", Scope: ScopeApp},
 	{ID: "cron", Title: "Cron", Summary: "Scheduled one-shot commands.", Scope: ScopeApp},
-	{ID: "hooks", Title: "Hooks", Summary: "Signed one-shot commands triggered over HTTP.", Scope: ScopeApp},
+	{ID: "hooks", Title: "Hooks", Summary: "One-shot commands triggered over HTTP.", Scope: ScopeApp},
 	{ID: "lifecycle", Title: "Lifecycle", Summary: "Commands run when the app is created, started and destroyed.", Scope: ScopeApp},
-	{ID: "deploy", Title: "Deploy", Summary: "GitHub credentials for the built-in pull hook.", Scope: ScopeBoth},
 	{ID: "runtime", Title: "Runtime", Summary: "How a process is checked, restarted, limited and logged.", Scope: ScopeBoth},
 	{ID: "web", Title: "Web", Summary: "Proxy behaviour in front of the app.", Scope: ScopeBoth},
-	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, for the listed emails only.", Scope: ScopeBoth},
-	{ID: "authcog", Title: "AuthCog login", Summary: "AuthCog sign-in dboss runs for the app, handing it the profile once.", Scope: ScopeBoth},
+	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, or run for the app.", Scope: ScopeBoth},
 	{ID: "alerts", Title: "Alerts", Summary: "Request log checks that post error-rate and slow events.", Scope: ScopeBoth},
 }
 

@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
-	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -27,10 +27,23 @@ import (
 	"dboss/internal/authcog"
 	"dboss/internal/config"
 	"dboss/internal/logstore"
+	"dboss/internal/pages"
 	"dboss/internal/supervisor"
 )
 
-const maintenanceRetryAfter = 30
+// Retry-After of the maintenance page and of the pages in front of a starting app; the starting
+// page also reloads itself after wakeRetryAfter.
+const (
+	maintenanceRetryAfter = 30
+	wakeRetryAfter        = 5
+)
+
+// Upstream connection pool to the apps; the response timeout is proxy.timeout.
+const (
+	upstreamDialTimeout     = 2 * time.Second
+	upstreamIdleTimeout     = 90 * time.Second
+	upstreamIdleConnsPerApp = 32
+)
 
 // Recorder receives one row per proxied request. logstore.Store is the production one.
 type Recorder interface {
@@ -44,43 +57,22 @@ type PublishAuthorizer interface {
 }
 
 type Handler struct {
-	cfg         config.Config
-	manager     *supervisor.Manager
-	recorder    Recorder
-	pubsub      PublishAuthorizer
-	signin      *authcog.Flow
-	transport   *http.Transport
-	starting    []byte
-	crashed     []byte
-	unknown     []byte
-	button      []byte
-	maintenance []byte
-	failed      []byte
-	denied      []byte
-	filters     []Filter
+	cfg       config.Config
+	manager   *supervisor.Manager
+	recorder  Recorder
+	pubsub    PublishAuthorizer
+	signin    *authcog.Flow
+	transport *http.Transport
+	// hostConfig is the live host config, for the keys a rescan may change (pages, realm).
+	hostConfig func() config.Config
+	filters    []Filter
 }
 
 // New builds the proxy. extra stages are inserted before the forward stage, which is where a
 // module hooks its own filter into the pipeline.
 func New(cfg config.Config, signin *authcog.Flow, manager *supervisor.Manager, recorder Recorder, authorizer PublishAuthorizer, extra ...Filter) (*Handler, error) {
-	starting, err := readPage(cfg.Proxy.Wake.StartingPage, "starting.html")
-	if err != nil {
-		return nil, err
-	}
-	crashed, err := readPage(cfg.Proxy.Wake.CrashedPage, "crashed.html")
-	if err != nil {
-		return nil, err
-	}
-	unknown, err := readPage(cfg.Proxy.Wake.UnknownPage, "404.html")
-	if err != nil {
-		return nil, err
-	}
-	button, _ := builtinPages.ReadFile("pages/button.html")
-	maintenance, _ := builtinPages.ReadFile("pages/maintenance.html")
-	failed, _ := builtinPages.ReadFile("pages/error.html")
-	denied, _ := builtinPages.ReadFile("pages/forbidden.html")
-	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: cfg.Proxy.Upstream.DialTimeout.Value()}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Upstream.ResponseHeaderTimeout.Value(), IdleConnTimeout: cfg.Proxy.Upstream.IdleConnTimeout.Value(), MaxIdleConnsPerHost: cfg.Proxy.Upstream.MaxIdleConnsPerApp}
-	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, signin: signin, transport: transport, starting: starting, crashed: crashed, unknown: unknown, button: button, maintenance: maintenance, failed: failed, denied: denied}
+	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext, ResponseHeaderTimeout: cfg.Proxy.Timeout.Value(), IdleConnTimeout: upstreamIdleTimeout, MaxIdleConnsPerHost: upstreamIdleConnsPerApp}
+	h := &Handler{cfg: cfg, manager: manager, recorder: recorder, pubsub: authorizer, signin: signin, transport: transport, hostConfig: manager.HostConfig}
 	h.initFilters(extra...)
 	return h, nil
 }
@@ -89,9 +81,13 @@ func New(cfg config.Config, signin *authcog.Flow, manager *supervisor.Manager, r
 // fixed order. Everything the steps need comes from the snapshot, so a rescan changes behaviour
 // on the next request without any proxy state.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == pages.LogoPath && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		pages.ServeLogo(w)
+		return
+	}
 	snapshot, ok := h.manager.ResolveHost(r.Host)
 	if !ok {
-		h.page(w, http.StatusNotFound, h.unknown, "")
+		pages.Page{Name: pages.NotFound}.Write(w, h.hostPages())
 		return
 	}
 	started := time.Now()
@@ -105,7 +101,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if web, ok := snapshot.WebForHost(r.Host); ok {
 		process = web.Name
 	}
-	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.ClientIPHeaders), UserAgent: r.UserAgent(), RequestID: requestID, Process: process, Country: country(r)})
+	_ = h.recorder.Record(snapshot.Name, snapshot.LogRetention, logstore.RequestEntry{Time: started, Method: r.Method, Host: r.Host, Path: r.URL.RequestURI(), Status: recorder.status, DurationMS: time.Since(started).Milliseconds(), BytesOut: recorder.bytes, IP: clientIP(r, h.cfg.Proxy.Cloudflare), UserAgent: r.UserAgent(), RequestID: requestID, Process: process, Country: country(r)})
 }
 
 // redirectCanonical answers 301 to canonical_host for any other host the app owns, so www never
@@ -284,7 +280,7 @@ func (s *spillWriter) close() {
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot supervisor.Snapshot) {
 	// A draining app is stopping or restarting: answer new requests now, let in-flight ones run.
 	if snapshot.Draining {
-		h.unavailablePage(w, r, h.starting, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
+		h.unavailablePage(w, r, snapshot, pages.Starting, wakeRetryAfter)
 		return
 	}
 	if snapshot.State != supervisor.Running {
@@ -292,23 +288,24 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 			// A button app only wakes on the deliberate POST of its start page, so a GET for
 			// a favicon or a crawler never starts it.
 			if snapshot.WakeButton && r.Method != http.MethodPost {
-				h.stoppedPage(w, r, snapshot.Name)
+				h.stoppedPage(w, r, snapshot)
 				return
 			}
 			go h.manager.Wake(snapshot.Name)
 			if snapshot.WakeButton {
 				// The POST came from our own page: answer the starting page directly instead
 				// of an empty 503, and let its refresh follow the app up.
-				w.Header().Set("Retry-After", strconv.Itoa(h.cfg.Proxy.Wake.RetryAfter))
-				h.page(w, http.StatusServiceUnavailable, h.starting, snapshot.Name)
+				w.Header().Set("Retry-After", strconv.Itoa(wakeRetryAfter))
+				w.Header().Set("Refresh", strconv.Itoa(wakeRetryAfter))
+				pages.Page{Name: pages.Starting, App: snapshot.Name}.Write(w, h.pageDirs(snapshot)...)
 				return
 			}
 		}
 		if snapshot.State == supervisor.Crashed {
-			h.unavailablePage(w, r, h.crashed, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
+			h.unavailablePage(w, r, snapshot, pages.Crashed, wakeRetryAfter)
 			return
 		}
-		h.unavailablePage(w, r, h.starting, snapshot.Name, h.cfg.Proxy.Wake.RetryAfter)
+		h.unavailablePage(w, r, snapshot, pages.Starting, wakeRetryAfter)
 		return
 	}
 	web, ok := snapshot.WebForHost(r.Host)
@@ -351,44 +348,29 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, snapshot super
 	h.manager.Touch(snapshot.Name)
 }
 
-// customErrorPage reads the app's error_page_path on every request, so a deploy can replace it.
-func customErrorPage(snapshot supervisor.Snapshot) ([]byte, bool) {
-	if snapshot.Web.ErrorPagePath == "" {
-		return nil, false
-	}
-	data, err := os.ReadFile(resolveAppPath(snapshot.Dir, snapshot.Web.ErrorPagePath))
-	return data, err == nil
-}
-
-// errorPage answers a failure of the proxy itself. An HTML GET gets the app's error_page_path, or
-// the built-in page when there is none; anything else gets the bare status. The file is sent as
-// it is on disk, with no placeholder substitution.
+// errorPage answers a failure of the proxy itself: an HTML GET gets the error page, anything else
+// the bare status.
 func (h *Handler) errorPage(w http.ResponseWriter, r *http.Request, snapshot supervisor.Snapshot, status int) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !wantsHTML(r) {
 		w.WriteHeader(status)
 		return
 	}
-	if data, ok := customErrorPage(snapshot); ok {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(status)
-		_, _ = w.Write(data)
-		return
-	}
-	h.page(w, status, h.failed, snapshot.Name)
+	pages.Page{Name: pages.Error, App: snapshot.Name, Status: status}.Write(w, h.pageDirs(snapshot)...)
 }
 
-// replaceAppError swaps the body of an app 5xx answer to an HTML GET for the app's
-// error_page_path and keeps the status. It only acts when the key is set and the file is
-// readable, so an app keeps its own error page by default and API answers are never rewritten.
+// replaceAppError swaps the body of an app 5xx answer to an HTML GET for the error page and keeps
+// the status. It only acts when the app's own pages folder has error.html or template.html, so an
+// app that ships no pages keeps its own error bodies and API answers are never rewritten.
 func replaceAppError(response *http.Response, r *http.Request, snapshot supervisor.Snapshot) {
 	if response.StatusCode < http.StatusInternalServerError || !wantsHTML(r) {
 		return
 	}
-	data, ok := customErrorPage(snapshot)
-	if !ok {
+	_, page := pages.Lookup(pages.Error, snapshot.Pages)
+	if page == nil {
 		return
 	}
+	data := pages.Page{Name: pages.Error, App: snapshot.Name, Status: response.StatusCode}.Fill(page)
 	_ = response.Body.Close()
 	response.Body = io.NopCloser(bytes.NewReader(data))
 	response.ContentLength = int64(len(data))
@@ -411,7 +393,7 @@ func (h *Handler) applyForwardedHeaders(r *http.Request) {
 		r.Header.Set("X-Forwarded-Host", r.Host)
 	}
 	if r.Header.Get("X-Real-IP") == "" {
-		if ip := clientIP(r, h.cfg.Proxy.ClientIPHeaders); ip != "" {
+		if ip := clientIP(r, h.cfg.Proxy.Cloudflare); ip != "" {
 			r.Header.Set("X-Real-IP", ip)
 		}
 	}
@@ -453,88 +435,58 @@ func ensureRequestID(r *http.Request) string {
 	return id
 }
 
-func (h *Handler) maintenancePage(snapshot supervisor.Snapshot, host string) []byte {
-	var candidates []string
-	if snapshot.Web.MaintenancePage != "" {
-		candidates = append(candidates, resolveAppPath(snapshot.Dir, snapshot.Web.MaintenancePage))
-	}
-	if web, ok := snapshot.WebForHost(host); ok && web.Static != "" {
-		candidates = append(candidates, filepath.Join(resolveAppPath(snapshot.Dir, web.Static), "503.html"))
-	}
-	for _, candidate := range candidates {
-		if data, err := os.ReadFile(candidate); err == nil {
-			return data
-		}
-	}
-	return h.maintenance
+// hostPages is the host's pages folder from the live host config, so a rescan applies it.
+func (h *Handler) hostPages() string { return h.hostConfig().Pages }
+
+// pageDirs is the lookup order of an app's pages: its own folder, then the host's.
+func (h *Handler) pageDirs(app supervisor.Snapshot) []string {
+	return []string{app.Pages, h.hostPages()}
 }
 
-func resolveAppPath(dir, value string) string {
-	if filepath.IsAbs(value) {
-		return value
-	}
-	return filepath.Join(dir, value)
-}
-
-func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot) {
 	if wantsHTML(r) {
-		h.page(w, http.StatusForbidden, h.denied, "")
+		pages.Page{Name: pages.Forbidden, App: app.Name}.Write(w, h.pageDirs(app)...)
 		return
 	}
 	w.WriteHeader(http.StatusForbidden)
 }
 
-func (h *Handler) unavailablePage(w http.ResponseWriter, r *http.Request, page []byte, app string, retryAfter int) {
+// unavailablePage answers 503 with Retry-After; an HTML GET gets the page, and the starting page
+// also reloads itself after the same delay.
+func (h *Handler) unavailablePage(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, name pages.Name, retryAfter int) {
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-	if wantsHTML(r) {
-		h.page(w, http.StatusServiceUnavailable, page, app)
+	if !wantsHTML(r) {
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	w.WriteHeader(http.StatusServiceUnavailable)
+	if name == pages.Starting {
+		w.Header().Set("Refresh", strconv.Itoa(retryAfter))
+	}
+	pages.Page{Name: name, App: app.Name}.Write(w, h.pageDirs(app)...)
 }
 
 // stoppedPage is the answer for a stopped button app on anything but POST: a page with a start
-// button whose form posts back to the same URL. It carries no Retry-After and no auto-refresh so
+// button whose form posts back to the same URL. It carries no Retry-After and no reload so
 // nothing but a deliberate click starts the app.
-func (h *Handler) stoppedPage(w http.ResponseWriter, r *http.Request, app string) {
+func (h *Handler) stoppedPage(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot) {
 	w.Header().Set("Cache-Control", "no-store")
-	if wantsHTML(r) {
-		h.page(w, http.StatusServiceUnavailable, h.button, app)
+	if !wantsHTML(r) {
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	w.WriteHeader(http.StatusServiceUnavailable)
+	action := `<form method="post"><button type="submit">Start ` + html.EscapeString(app.Name) + `</button></form>`
+	pages.Page{Name: pages.Stopped, App: app.Name, Action: action}.Write(w, h.pageDirs(app)...)
 }
 
 func wantsHTML(r *http.Request) bool {
 	return r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-func (h *Handler) page(w http.ResponseWriter, status int, page []byte, app string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	contents := strings.ReplaceAll(string(page), "{{APP_NAME}}", app)
-	contents = strings.ReplaceAll(contents, "{{RETRY_AFTER}}", strconv.Itoa(h.cfg.Proxy.Wake.RetryAfter))
-	_, _ = w.Write([]byte(contents))
-}
-
-// builtinPages are the pages dboss serves when the config names no file of its own.
-//
-//go:embed pages/*.html
-var builtinPages embed.FS
-
-// readPage returns the operator's file when the config sets one, else the built-in page.
-func readPage(path, builtin string) ([]byte, error) {
-	if path != "" {
-		return os.ReadFile(path)
-	}
-	return builtinPages.ReadFile("pages/" + builtin)
-}
-
-func clientIP(r *http.Request, headers []string) string {
-	for _, header := range headers {
-		if value := r.Header.Get(header); value != "" {
-			return strings.TrimSpace(strings.Split(value, ",")[0])
-		}
+// clientIP is the visitor's address: CF-Connecting-IP behind Cloudflare, where only Cloudflare
+// can connect and the header cannot be spoofed, else the connection's own address.
+func clientIP(r *http.Request, cloudflare bool) string {
+	if value := r.Header.Get("CF-Connecting-IP"); cloudflare && value != "" {
+		return strings.TrimSpace(value)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
@@ -604,4 +556,11 @@ func (r *responseRecorder) ReadFrom(source io.Reader) (int64, error) {
 	n, err := io.Copy(struct{ io.Writer }{r.ResponseWriter}, source)
 	r.bytes += n
 	return n, err
+}
+
+func resolveAppPath(dir, value string) string {
+	if filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Join(dir, value)
 }
