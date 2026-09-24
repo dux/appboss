@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -62,6 +63,8 @@ type Handler struct {
 	dev            bool
 	appScheme      string
 	appPort        string
+	// hostname names the machine in the console's tab title.
+	hostname string
 }
 
 type dashboard struct {
@@ -71,6 +74,7 @@ type dashboard struct {
 	RestartRequired []string              `json:"restart_required"`
 	Capabilities    map[string]bool       `json:"capabilities"`
 	Version         string                `json:"version"`
+	Hostname        string                `json:"hostname"`
 	AppScheme       string                `json:"app_scheme"`
 	AppPort         string                `json:"app_port"`
 	UpdatedAt       time.Time             `json:"updated_at"`
@@ -107,6 +111,7 @@ func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store Conf
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
 	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.ConsolePort), sys: sys, dev: cfg.Dev()}
+	handler.hostname, _ = os.Hostname()
 	handler.mux = handler.routes()
 	if len(cfg.Management.Host) > 0 {
 		handler.publicHost = cfg.Management.Host[0]

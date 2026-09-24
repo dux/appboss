@@ -123,7 +123,7 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, name string
 }
 
 func (h *Handler) writeDashboard(w http.ResponseWriter, _ *http.Request, session authSession) {
-	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), Version: version.String(), AppScheme: h.appScheme, AppPort: h.appPort, UpdatedAt: time.Now().UTC()})
+	writeJSON(w, http.StatusOK, dashboard{Viewer: session.Email, CSRF: session.CSRF, Apps: h.service.Apps(), RestartRequired: h.service.RestartRequired(), Capabilities: h.capabilities(), Version: version.String(), Hostname: h.hostname, AppScheme: h.appScheme, AppPort: h.appPort, UpdatedAt: time.Now().UTC()})
 }
 
 // capabilities tells the shell which optional tabs to show; held raises the ENTER bar.

@@ -144,6 +144,7 @@
         this.state.csrf = data.csrf
         this.state.viewer = data.viewer
         this.state.version = data.version || ''
+        if (data.hostname) document.title = `${data.hostname} | dboss`
         this.globalState.appScheme = data.app_scheme || ''
         this.globalState.appPort = data.app_port || ''
         this.applyApps(data.apps, data.updated_at, data.capabilities)

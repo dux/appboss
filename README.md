@@ -793,6 +793,7 @@ management console: http://127.0.0.1:3100 (run `dboss login` for a one-time sign
 management console: https://dboss.example.com (AuthCog sign-in)
 ```
 `dboss start --login` also prints a one-time loopback sign-in link on stdout (never in the daemon log); `make demo` uses it.
+The browser tab reads `<hostname> | dboss`, so consoles of several boxes stay apart.
 It shows every app with state, uptime, memory, last activity and request rate, offers start, restart, stop and maintenance controls, and adds a typed-confirmation destroy action when the app sets `deletable: true`.
 Next to an app's name a gray `git:<branch>` label names the branch it runs and links to it on the git host: the branch and `origin` remote of the checkout in its folder, or `GIT_BRANCH` and `GIT_REPO` from its `.env` for a packed release without `.git` (lux-deploy writes both).
 It links to the process logs and edits the host and app `dboss.yaml` files in place with validation, conflict detection and a "restart required" notice for host keys that only apply on the next start.

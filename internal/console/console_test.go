@@ -350,6 +350,10 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	if dashboard.Version != version.String() {
 		t.Fatalf("dashboard version = %q, want %q", dashboard.Version, version.String())
 	}
+	// The shell titles the tab "<hostname> | dboss" from it.
+	if host, _ := os.Hostname(); dashboard.Hostname != host {
+		t.Fatalf("dashboard hostname = %q, want %q", dashboard.Hostname, host)
+	}
 
 	actionRequest := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/action", strings.NewReader(`{"app":"sinatra","action":"restart"}`))
 	actionRequest.Header.Set("Content-Type", "application/json")
