@@ -24,7 +24,7 @@ All of it is in the one binary: no sidecars, no agents, no extra database, no YA
 * **Routing built in.** Requests reach the right app by hostname, including wildcard and apex patterns, several web processes per app, canonical host redirects and static files served straight off disk.
 * **Logging built in.** Every process log line and every request lands in a per-app SQLite database with full-text search, read from the console or from `dboss logs`, so there is no log pipeline to run.
 * **Traffic built in.** Requests over time, error rate, latency quantiles and the top paths, status codes, countries and client IPs, per app.
-* **Effortless deploys.** Push to GitHub or GitLab and a signed webhook runs your deploy hook and restarts the app, with no runner and no pipeline credentials on the box.
+* **Effortless deploys.** `dboss deploy sync` pushes the tracked files over ssh and restarts the app, `dboss deploy git` has the box pull and restart with nothing but a token, or push to GitHub or GitLab and a signed webhook does the same, with no runner and no pipeline credentials on the box.
 * **Process supervision.** A procfile per app, workers alongside web processes, several copies of one process behind one host, restart policies with backoff, readiness and liveness checks, and rolling restarts that start the new release next to the old one, so a deploy never drops a request and a broken release never replaces a working one.
 * **Apps that sleep.** An idle app stops on its own and the next request wakes it, so a dozen side projects share one box without holding RAM they are not using.
 * **HTTPS without the chore.** Set one key and dboss gets Let's Encrypt certificates on demand for the hostnames it already serves and renews them, or put Cloudflare in front and let it terminate.
@@ -42,7 +42,8 @@ Each app is a folder with a `dboss.yaml` naming its processes and hostnames.
 dboss reads them, hands every process a fixed `PORT`, proxies HTTP to the right one by hostname, stops idle apps and wakes them on the next request, and ingests every process log and request row into that app's log store.
 Daemon features are modules with a common lifecycle, so a new one (an ingestion sink, a security filter) plugs in at one place.
 
-There are no containers and no deploy logic of its own; rsync, releases and rollback stay in lux-deploy, which calls `dboss restart` at the end of a deploy.
+There are no containers.
+Deploys are two commands, `dboss deploy sync` and `dboss deploy git` (see [Deploying](#deploying)); lux-deploy, when you use it for releases and rollback, calls `dboss restart` at the end of a deploy.
 The configuration reference ships in the binary: `dboss config --reference`, also embedded from `./internal/config/reference.yaml`.
 
 ## Requirements
@@ -245,6 +246,7 @@ Apps
   maintenance   answer every request with the maintenance page while the app keeps running
   cron          list an app's scheduled jobs, or run one now
   hooks         list an app's deploy hooks with their ping URL, or run one
+  deploy        push an app to a box: sync over ssh, or git pull through the deploy hook
   exec          run a one-off command in the app's environment
   audit         list operator actions: start, stop, restart, destroy, hook runs and config writes
 
@@ -434,6 +436,28 @@ Jobs run in the app folder with the app environment, log to their own `cron-<job
 A stopped or idle app still fires its jobs, and there is no catch-up after a daemon restart.
 `dboss cron [app]` lists jobs, next run and last result; `dboss cron run [app] <job>` starts one now; the console card has a **Run** button.
 
+## Deploying
+
+Two commands, both run inside the app folder on your machine:
+
+```
+dboss deploy sync deploy@box.example.com:/srv/dboss/apps/myapp
+dboss deploy git https://dboss.example.com        # token from --token or $DBOSS_TOKEN
+```
+
+`sync` ships exactly the files git tracks (`git ls-files`), with their working-tree content, uncommitted edits included.
+Untracked and ignored files never leave your machine: `.env`, `.env.local`, `dboss.local.yaml` and scratch files stay local, and a file the box needs is placed there on purpose.
+Untracked files that are not ignored are counted in one `skipped N untracked files` line, so a missing `git add` is visible.
+rsync (`--files-from`) copies the changed files, then `dboss deploy apply` runs on the box over ssh: it removes the files an earlier sync shipped and this one no longer does, records the list in `.dboss-sync` in the app folder, and restarts the app.
+Files that only exist on the box (logs, uploads, `.env.local`, `dboss.local.yaml`) are never touched, and the first sync removes nothing.
+rsync's own `--delete` is not used on purpose: openrsync, the macOS default, removes gitignored files on the receiver with it.
+`-n` shows what would be copied and removed without restarting; the app name is the remote folder name unless `--app` says otherwise.
+It needs `git`, `rsync` and `ssh` locally, and `rsync` plus `dboss` on the ssh user's `PATH` on the box; ssh in as the service user.
+
+`git` needs no ssh.
+It posts to the app's `deploy` hook (`hooks: {deploy: true}`, see below) with `tokens.dboss` as a bearer token, then polls `GET /hooks/<app>/deploy` until the pull and the restart are done, and prints the hook's output.
+A failed pull prints git's answer and exits with its code; an app without the hook gets the line to add.
+
 ## Deploy hooks
 
 An app can declare one-shot commands a signed HTTP ping triggers, so a Git host webhook can start a deploy without any shell access:
@@ -454,6 +478,8 @@ For a private repo, set `tokens.github` (a PAT) in the host file; write `$GITHUB
 The ping URL is `https://<management.host>/hooks/<app>/<hook>`. Every ping presents `tokens.dboss` from the host file, a value you choose (for example `openssl rand -hex 32`) and paste into the sender: `?token=<token>` in the URL, `Authorization: Bearer`, `X-Gitlab-Token` (GitLab's Secret token field), or a GitHub `X-Hub-Signature-256` HMAC over the raw body (GitHub's Secret field). Without the token every ping answers `401`. `X-GitHub-Event: ping` (sent when the webhook is created) is acknowledged without running anything.
 
 `dboss hooks [app]` lists hooks with their last result and the ready-made ping URL; `dboss hooks run [app] <hook>` starts one now. To change the token, edit it and run `dboss rescan`; the old URLs stop working. Hooks run in the app folder with the app environment, log to a `hook-<name>` channel, and leave the app alone unless `restart: true`.
+
+`GET /hooks/<app>/<hook>` with the same token answers the hook's last result, whether it is `running` or `restarting` the app, and the tail of its last output; `dboss deploy git` polls it.
 
 `dboss exec [app] <command> [args...]` runs a one-off command in the same environment and prints its combined output. Options come before the command, so the command's own flags pass through; `--timeout` (default 1m) kills it, and its exit code becomes dboss's exit code.
 

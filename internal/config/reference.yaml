@@ -528,7 +528,9 @@ cron:
 # token every ping answers 401; `dboss hooks` prints the full URL.
 hooks:
   # A bare true is shorthand for `git pull --ff-only` in the app folder (git discovers the
-  # repository upward) plus restart on exit 0: `deploy: true`. The mapping form follows.
+  # repository upward) plus restart on exit 0: `deploy: true`. `dboss deploy git <url>` pings
+  # the hook named deploy and waits for it, so `deploy: true` is all a git deploy needs. The
+  # mapping form follows.
   # Hook name, unique in the app; matches [a-z][a-z0-9_-]*.
   deploy:
     # Command run once per trigger in the app folder with the app environment (no PORT).
@@ -635,7 +637,7 @@ alerts:
 #   # comment
 #   export KEY=value       "export " prefix is tolerated and stripped
 #   - No variable interpolation. ${OTHER} stays literal.
-#   - .env.local should be mode 0600 and is never rsynced by lux-deploy.
+#   - .env.local should be mode 0600 and is never shipped by dboss deploy sync or lux-deploy.
 
 # =============================================================================
 # PART 3: state files under dir/state (written by dboss, read-only for humans)

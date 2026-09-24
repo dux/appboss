@@ -104,7 +104,7 @@ func (c CLI) deploySync(args []string) error {
 		return err
 	}
 	if untracked > 0 {
-		fmt.Fprintf(c.Err, "skipped %d untracked files (git add to ship them)\n", untracked)
+		fmt.Fprintf(c.Err, "skipped %d untracked %s (git add to ship them)\n", untracked, plural(untracked, "file"))
 	}
 	manifest := strings.Join(files, "\n") + "\n"
 
@@ -274,7 +274,7 @@ func (c CLI) deployApply(args []string) error {
 		}
 	}
 	if len(removed) > 0 {
-		fmt.Fprintf(c.Out, "removed %d files the app no longer ships\n", len(removed))
+		fmt.Fprintf(c.Out, "removed %d %s the app no longer ships\n", len(removed), plural(len(removed), "file"))
 	}
 	if err := fsutil.WriteFile(filepath.Join(root, syncManifestName), []byte(strings.Join(next, "\n")+"\n"), 0o644); err != nil {
 		return err
@@ -283,7 +283,10 @@ func (c CLI) deployApply(args []string) error {
 	if *socket != "" {
 		restart = append(restart, "--socket", *socket)
 	}
-	return c.remote("restart", restart)
+	if err := c.remote("restart", restart); err != nil {
+		return fmt.Errorf("restart %s: %w", *app, err)
+	}
+	return nil
 }
 
 // readManifest reads one relative path per line and refuses anything that would leave the app
@@ -421,7 +424,7 @@ func (c CLI) deployGit(args []string) error {
 			fmt.Fprintln(c.Out, output)
 		}
 		if info.LastExit != 0 || info.LastError != "" {
-			fmt.Fprintf(c.Err, "dboss: deploy of %s failed: %s\n", *app, cmp(info.LastError, fmt.Sprintf("exit code %d", info.LastExit)))
+			fmt.Fprintf(c.Err, "dboss: deploy of %s failed: %s\n", *app, orElse(info.LastError, fmt.Sprintf("exit code %d", info.LastExit)))
 			return &exitError{code: max(info.LastExit, 1)}
 		}
 		fmt.Fprintf(c.Out, "deployed %s: pulled and restarted\n", *app)
@@ -455,7 +458,14 @@ func hookErrorText(body []byte) string {
 	return strings.TrimSpace(string(body))
 }
 
-func cmp(value, fallback string) string {
+func plural(count int, word string) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
+}
+
+func orElse(value, fallback string) string {
 	if value != "" {
 		return value
 	}
