@@ -1,0 +1,164 @@
+<script>
+  // What a pasted git URL is, mirroring git.NormalizeRepo so the hint names what the server will
+  // clone. The server stays the authority: it normalizes and validates again.
+  function classify(input) {
+    const value = input.trim()
+    if (!value) return { kind: '' }
+    if (/\s/.test(value) || value.startsWith('-')) return { kind: 'bad' }
+    if (/^https?:\/\/[^/]+\/.+/.test(value)) return { kind: 'https', repo: value, github: /^https:\/\/github\.com\//.test(value) }
+    if (/^ssh:\/\/[^/]+\/.+/.test(value) || /^[\w.-]+@[\w.-]+:[^/\s]/.test(value)) return { kind: 'ssh', repo: value }
+    if (value.includes('://') || /^[\/.~]/.test(value)) return { kind: 'bad' }
+    const parts = value.replace(/^\/+|\/+$/g, '').split('/')
+    if (parts.length === 2 && parts[0] && parts[1] && !parts[0].includes('.')) {
+      const repo = 'https://github.com/' + parts.join('/') + (parts[1].endsWith('.git') ? '' : '.git')
+      return { kind: 'expanded', repo, github: true }
+    }
+    if (parts.length >= 3 && parts[0].includes('.')) return { kind: 'expanded', repo: 'https://' + parts.join('/'), github: parts[0] === 'github.com' }
+    return { kind: 'bad' }
+  }
+
+  // Same rule as git.RepoName: last segment without .git, lowercased, other runs become a dash.
+  function repoName(repo) {
+    const trimmed = repo.replace(/\/+$/, '')
+    const base = trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf(':')) + 1).replace(/\.git$/, '')
+    return base.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '').replace(/^[0-9_-]+/, '')
+  }
+
+  function hintFor(info) {
+    switch (info.kind) {
+      case '':
+        return 'Paste an https or ssh URL, or owner/repo for GitHub.'
+      case 'bad':
+        return 'Not a git URL. Use https://host/owner/repo, git@host:owner/repo or owner/repo.'
+      case 'ssh':
+        return 'SSH: cloned with the service user\x27s ssh key.'
+      case 'expanded':
+        return 'Clones ' + info.repo + (info.github ? ', a private repository with tokens.github.' : '.')
+      default:
+        return info.github ? 'HTTPS: a private GitHub repository is read with tokens.github.' : 'HTTPS: the repository must be public; tokens.github is only sent to github.com.'
+    }
+  }
+
+  class {
+    MOUNT = true
+    GLOBAL = 'AddApp'
+
+    init() {
+      this.state.open = false
+      this.state.pending = false
+      this.state.error = ''
+      this.state.nameTouched = false
+    }
+
+    onMount() {
+      this.on('keydown', (event) => {
+        if (event.key === 'Escape' && this.state.open) this.close()
+      })
+    }
+
+    // The fields live under fez:keep, so they are cleared by hand rather than re-rendered.
+    open() {
+      for (const node of [this.state.repoInput, this.state.nameInput, this.state.branchInput, this.state.hostInput]) {
+        if (node) node.value = ''
+      }
+      this.state.nameTouched = false
+      this.state.error = ''
+      this.state.open = true
+      this.repoChanged()
+      requestAnimationFrame(() => this.state.repoInput?.focus())
+    }
+
+    close() {
+      if (this.state.pending) return
+      this.state.open = false
+    }
+
+    // Typing never re-renders: the hint and the suggested name are written straight to the DOM.
+    repoChanged() {
+      const info = classify(this.state.repoInput?.value || '')
+      const hint = this.state.hintNode
+      if (hint) {
+        hint.textContent = hintFor(info)
+        hint.classList.toggle('text-danger', info.kind === 'bad')
+      }
+      if (!this.state.nameTouched && this.state.nameInput) {
+        this.state.nameInput.value = info.repo ? repoName(info.repo) : ''
+      }
+    }
+
+    nameChanged() {
+      this.state.nameTouched = this.state.nameInput.value !== ''
+    }
+
+    async submit(event) {
+      event?.preventDefault()
+      if (this.state.pending) return
+      const body = {
+        repo: this.state.repoInput.value.trim(),
+        name: this.state.nameInput.value.trim(),
+        branch: this.state.branchInput.value.trim(),
+        host: this.state.hostInput.value.trim(),
+      }
+      if (!body.repo) {
+        this.state.repoInput.focus()
+        return
+      }
+      this.state.pending = true
+      this.state.error = ''
+      try {
+        const data = await Dboss.api('/api/apps/add', { method: 'POST', body: JSON.stringify(body) })
+        Dboss.applyApps(data.apps, data.updated_at)
+        Toast.show(`Added ${data.app.name}`)
+        this.state.pending = false
+        this.close()
+      } catch (error) {
+        this.state.pending = false
+        this.state.error = error.message
+      }
+    }
+  }
+</script>
+
+<div class="modal-backdrop" class:d-none={!state.open} onclick="if (event.target === this) fez.close()">
+  <form class="modal card" role="dialog" aria-modal="true" aria-labelledby="add-app-title" onsubmit="fez.submit(event)">
+    <div class="modal-head">
+      <strong id="add-app-title">Add app from git</strong>
+      <button class="btn btn-ghost btn-icon" type="button" onclick="fez.close()" aria-label="Close" disabled={state.pending}>
+        <svg class="icon"><use href="#i-x"></use></svg>
+      </button>
+    </div>
+    <div class="modal-body" fez:keep="add-app-fields">
+      <label class="config-field">
+        <span class="config-field-label">Git URL</span>
+        <input type="text" fez:this="repoInput" oninput="fez.repoChanged()" placeholder="https://github.com/owner/repo" autocomplete="off" spellcheck="false" />
+        <span class="config-field-desc" fez:this="hintNode"></span>
+      </label>
+      <label class="config-field">
+        <span class="config-field-label">Name</span>
+        <input type="text" fez:this="nameInput" oninput="fez.nameChanged()" placeholder="repository name" autocomplete="off" spellcheck="false" />
+        <span class="config-field-desc">The folder under apps. Lowercase letters, digits, - and _.</span>
+      </label>
+      <div class="modal-row">
+        <label class="config-field">
+          <span class="config-field-label">Branch</span>
+          <input type="text" fez:this="branchInput" placeholder="default branch" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="config-field">
+          <span class="config-field-label">Host</span>
+          <input type="text" fez:this="hostInput" placeholder="from the app's dboss.yaml" autocomplete="off" spellcheck="false" />
+        </label>
+      </div>
+      <span class="config-field-desc">A host replaces the app's own through a dboss.local.yaml, so the repository's domain does not go live here. The repository must carry a dboss.yaml.</span>
+    </div>
+    {#if state.error}
+      <div class="modal-error text-danger">{state.error}</div>
+    {/if}
+    <div class="modal-foot">
+      <button class="btn" type="button" onclick="fez.close()" disabled={state.pending}>Cancel</button>
+      <button class="btn btn-primary" type="submit" disabled={state.pending}>
+        <svg class="icon"><use href="#i-plus"></use></svg>
+        {state.pending ? 'Cloning...' : 'Add app'}
+      </button>
+    </div>
+  </form>
+</div>

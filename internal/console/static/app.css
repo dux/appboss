@@ -1838,6 +1838,74 @@ textarea.sql-editor {
   overflow: auto;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 16px;
+  overflow-y: auto;
+  background: rgb(24 36 51 / 32%);
+}
+
+.modal-backdrop.d-none {
+  display: none;
+}
+
+.modal {
+  width: min(560px, 100%);
+  margin: 0;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+}
+
+.modal-body input {
+  width: 100%;
+}
+
+.modal-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.modal-error {
+  padding: 0 20px 16px;
+  font-size: var(--text-size-small);
+  overflow-wrap: anywhere;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+@media (max-width: 575px) {
+  .modal-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* --- Config key reference -------------------------------------------------- */
 
 .keys-search {

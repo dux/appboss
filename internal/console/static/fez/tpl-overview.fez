@@ -24,10 +24,16 @@
       <svg class="icon"><use href="#i-refresh"></use></svg>
       Refresh
     </button>
-    <button class="btn btn-primary" type="button" onclick="Dboss.rescan()" disabled={globalState.busy}>
+    <button class={globalState.devSession ? 'btn btn-primary' : 'btn'} type="button" onclick="Dboss.rescan()" disabled={globalState.busy}>
       <svg class="icon"><use href="#i-scan"></use></svg>
       Rescan apps
     </button>
+    {#unless globalState.devSession}
+      <button class="btn btn-primary" type="button" onclick="AddApp.open()">
+        <svg class="icon"><use href="#i-plus"></use></svg>
+        Add app
+      </button>
+    {/unless}
   </div>
 </div>
 
@@ -72,7 +78,7 @@
     {:else}
       <div class="card empty-state">
         <strong>No services found</strong>
-        <span>Add an app folder to the global config, then rescan.</span>
+        <span>Add an app from a git URL, or put an app folder in the apps directory and rescan.</span>
       </div>
     {/each}
   {/if}

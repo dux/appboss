@@ -15,6 +15,15 @@ import (
 // jobName is the shape of every name the app file declares: processes, cron jobs and hooks.
 var jobName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
+// ValidAppName checks the folder name of an app dboss creates itself. Existing folders are not
+// held to it; it keeps a created name usable in URLs, cgroup paths and log databases.
+func ValidAppName(name string) error {
+	if !jobName.MatchString(name) {
+		return fmt.Errorf("invalid app name %q: use lowercase letters, digits, - and _, starting with a letter", name)
+	}
+	return nil
+}
+
 func validateCron(jobs map[string]CronJob) error {
 	for name, job := range jobs {
 		if !jobName.MatchString(name) {

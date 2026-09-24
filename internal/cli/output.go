@@ -221,6 +221,14 @@ func (c CLI) printHuman(method string, data any) error {
 		if len(result.RestartRequired) > 0 {
 			fmt.Fprintf(c.Out, "restart required: %s changed (systemctl restart dboss, or Ctrl-C and dboss start)\n", strings.Join(result.RestartRequired, ", "))
 		}
+	case ops.ActionAdd:
+		snapshot := data.(supervisor.Snapshot)
+		fmt.Fprintf(c.Out, "added %s (%s) in %s\n", snapshot.Name, snapshot.State, snapshot.Dir)
+		for _, web := range snapshot.WebProcesses {
+			if host := config.PrimaryHost(web.CanonicalHost, web.Hosts); host != "" {
+				fmt.Fprintf(c.Out, "  %s  https://%s\n", web.Name, host)
+			}
+		}
 	case ctl.LoginMethod:
 		links := data.(map[string]string)
 		fmt.Fprintf(c.Out, "local:  %s\n", links["url"])

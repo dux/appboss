@@ -1,4 +1,4 @@
-package console
+package config
 
 import (
 	"strings"
@@ -16,9 +16,9 @@ func decodeYAML(t *testing.T, contents string) map[string]any {
 	return out
 }
 
-func TestApplyFormPatchSetsNestedPaths(t *testing.T) {
+func TestPatchYAMLSetsNestedPaths(t *testing.T) {
 	base := "apps: ./apps\n\nproxy:\n  listen: \":80\"\n\n# keep me\npubsub:\n  path: /old\n"
-	out, err := applyFormPatch(base, map[string]any{"pubsub.path": "/new", "notify.url": "https://x"}, nil)
+	out, err := PatchYAML(base, map[string]any{"pubsub.path": "/new", "notify.url": "https://x"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +39,8 @@ func TestApplyFormPatchSetsNestedPaths(t *testing.T) {
 	}
 }
 
-func TestApplyFormPatchResetPrunesEmptyParents(t *testing.T) {
-	out, err := applyFormPatch("apps: ./apps\npubsub:\n  path: /x\n", nil, []string{"pubsub.path"})
+func TestPatchYAMLResetPrunesEmptyParents(t *testing.T) {
+	out, err := PatchYAML("apps: ./apps\npubsub:\n  path: /x\n", nil, []string{"pubsub.path"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +49,8 @@ func TestApplyFormPatchResetPrunesEmptyParents(t *testing.T) {
 	}
 }
 
-func TestApplyFormPatchResetKeepsPopulatedParents(t *testing.T) {
-	out, err := applyFormPatch("apps: ./apps\npubsub:\n  path: /x\n  replay: 10\n", nil, []string{"pubsub.path"})
+func TestPatchYAMLResetKeepsPopulatedParents(t *testing.T) {
+	out, err := PatchYAML("apps: ./apps\npubsub:\n  path: /x\n  replay: 10\n", nil, []string{"pubsub.path"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +64,8 @@ func TestApplyFormPatchResetKeepsPopulatedParents(t *testing.T) {
 	}
 }
 
-func TestApplyFormPatchWritesTypedValues(t *testing.T) {
-	out, err := applyFormPatch("apps: ./apps\n", map[string]any{
+func TestPatchYAMLWritesTypedValues(t *testing.T) {
+	out, err := PatchYAML("apps: ./apps\n", map[string]any{
 		"notify.events":  []any{"crash", "deploy"},
 		"notify.headers": map[string]any{"Authorization": "Bearer x"},
 		"postgres.dsn":   "postgres://app",
@@ -87,41 +87,8 @@ func TestApplyFormPatchWritesTypedValues(t *testing.T) {
 	}
 }
 
-func TestApplyFormPatchRejectsScalarParent(t *testing.T) {
-	if _, err := applyFormPatch("apps: ./apps\npostgres: oops\n", map[string]any{"postgres.dsn": "x"}, nil); err == nil {
+func TestPatchYAMLRejectsScalarParent(t *testing.T) {
+	if _, err := PatchYAML("apps: ./apps\npostgres: oops\n", map[string]any{"postgres.dsn": "x"}, nil); err == nil {
 		t.Fatal("expected an error when the parent is not a mapping")
-	}
-}
-
-func TestParseValuesKeepsEnvRefsLiteral(t *testing.T) {
-	values, err := parseValues("postgres:\n  dsn: $DATABASE_URL\nproxy:\n  cloudflare_only: true\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	postgres, _ := values["postgres"].(map[string]any)
-	if postgres["dsn"] != "$DATABASE_URL" {
-		t.Errorf("dsn = %v, want the literal $VAR", postgres["dsn"])
-	}
-	proxy, _ := values["proxy"].(map[string]any)
-	if proxy["cloudflare_only"] != true {
-		t.Errorf("cloudflare_only = %#v", proxy["cloudflare_only"])
-	}
-}
-
-func TestFilterRecipeValuesMovesBlanksToReset(t *testing.T) {
-	allowed := map[string]bool{"pubsub.path": true, "pubsub.replay": true, "pubsub.secret": true}
-	values, reset := filterRecipeValues(map[string]any{
-		"pubsub.path":   "  ",
-		"pubsub.replay": float64(5),
-		"notify.url":    "ignored",
-	}, []string{"pubsub.secret"}, allowed)
-	if len(values) != 1 || values["pubsub.replay"] != float64(5) {
-		t.Errorf("values = %#v", values)
-	}
-	if _, leaked := values["notify.url"]; leaked {
-		t.Error("a key outside the recipe leaked through")
-	}
-	if len(reset) != 2 || reset[0] != "pubsub.secret" || reset[1] != "pubsub.path" {
-		t.Errorf("reset = %v", reset)
 	}
 }

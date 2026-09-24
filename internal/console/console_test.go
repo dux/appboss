@@ -416,6 +416,23 @@ func TestConsoleActsOnOneProcess(t *testing.T) {
 	}
 }
 
+// A refused add answers 409 with the reason, so the dialog can show it and keep its fields.
+func TestConsoleAddAppReportsTheReason(t *testing.T) {
+	manager := &fakeManager{}
+	handler := newTestHandler(t, manager, nil)
+	cookie, session := sessionCookie(t, handler)
+	request := httptest.NewRequest(http.MethodPost, "http://dboss.lvh.me:8081/api/apps/add", strings.NewReader(`{"repo":"/srv/local/app","name":"shop"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://dboss.lvh.me:8081")
+	request.Header.Set("X-CSRF-Token", session.CSRF)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "local path is not a git URL") || len(manager.actions) != 0 {
+		t.Fatalf("add = %d %v %s", response.Code, manager.actions, response.Body.String())
+	}
+}
+
 func TestConsoleServesFavicon(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, _ := sessionCookie(t, handler)

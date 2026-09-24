@@ -22,6 +22,7 @@
         { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
+        { id: 'add', title: 'Add from git', summary: 'Installs a repository that carries its own dboss.yaml from its URL.' },
         { id: 'hooks', title: 'Deploy hooks', summary: 'Commands a signed HTTP ping triggers, plus one-off exec.' },
         { id: 'lifecycle', title: 'Lifecycle', summary: 'Commands run when an app is created, started and destroyed.' },
         { id: 'previews', title: 'GitHub PR previews', summary: 'One built-in host hook turns a branch into a short-lived app, with teardown on close.' },
@@ -162,6 +163,11 @@
         command: bundle exec rake cleanup
         timeout: 30m
         overlap: false
+    `,
+    add: `
+    dboss add https://github.com/acme/shop
+    dboss add acme/shop --name store --host store.box.example.com
+    dboss add git@gitlab.com:acme/api.git --branch production
     `,
     hooks: `
     hooks:
@@ -648,6 +654,32 @@
       </section>
     {/if}
 
+    {#if state.topic === 'add'}
+      <section>
+        <h2>Add from git</h2>
+        <p>A repository with its own <code>dboss.yaml</code> (or <code>config/dboss.yaml</code>) is a complete app. <strong>Add app</strong> on the overview, or <code>dboss add</code>, clones it into the apps folder, checks its config, loads it and starts it.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Installing an app on a new box with one URL: no ssh session, no manual clone and rescan.</li>
+          <li>Keeping a repository's production domain off a staging box: a host given here replaces the app's own.</li>
+          <li>Private GitHub repositories over https through <code>tokens.github</code>, which is never offered to another host.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-add"><db-config-keys paths="apps,tokens.github,procfile,hooks" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.add" lang="text" />
+        <h3>Details</h3>
+        <ul>
+          <li>The URL may be <code>https://host/owner/repo</code>, <code>ssh://...</code>, <code>git@host:owner/repo</code> or the GitHub shorthand <code>owner/repo</code>. An ssh remote uses the service user's key; local paths and other schemes are refused.</li>
+          <li>The name defaults to the repository name and must be a new folder under <code>apps</code>. An existing app is updated with a deploy, never by adding it again.</li>
+          <li>A host is written into a <code>dboss.local.yaml</code> next to the app's file, a full copy with the single web process's <code>hosts</code> set and its <code>canonical_host</code> dropped. It needs exactly one web process.</li>
+          <li>A host another app already serves is refused before the rescan, so a running app never loses its host.</li>
+          <li>When anything fails after the clone the folder is removed again, and the reason stays in the dialog. The action is audited as <code>add</code> with the URL.</li>
+          <li>Secrets are not in the repository: put <code>.env</code> or <code>dboss.local.yaml</code> in the app folder and restart when the first start needs them. With <code>hooks: &#123;deploy: true&#125;</code>, <code>dboss deploy git</code> updates the app afterwards.</li>
+        </ul>
+      </section>
+    {/if}
+
     {#if state.topic === 'previews'}
       <section>
         <h2>GitHub PR previews</h2>
@@ -838,6 +870,7 @@
         <div class="help-cmd"><code>kill</code><span>stop every app and clear every listener in ports</span></div>
         <div class="help-cmd"><code>login</code><span>print a one-time console URL that signs you in as cli@localhost</span></div>
         <h3>Apps</h3>
+        <div class="help-cmd"><code>add</code><span>clone a repository with a <code>dboss.yaml</code> into the apps folder and start it</span></div>
         <div class="help-cmd"><code>ls</code><span>list apps with state, ports, uptime, activity and memory</span></div>
         <div class="help-cmd"><code>run</code><span>start an app, rescanning first when it is not known yet</span></div>
         <div class="help-cmd"><code>stop</code><span>stop an app and keep it stopped until run or the next request</span></div>

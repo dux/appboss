@@ -21,6 +21,8 @@ type fakeRuntime struct {
 	restart    []string
 	startErr   error
 	destroyErr error
+	host       *config.Config
+	onRescan   func(*fakeRuntime)
 }
 
 func (f *fakeRuntime) Snapshots() []supervisor.Snapshot {
@@ -106,12 +108,20 @@ func (f *fakeRuntime) Exec(name string, argv []string, timeout time.Duration) (s
 
 func (f *fakeRuntime) Rescan() ([]error, error) {
 	f.actions = append(f.actions, "rescan")
+	if f.onRescan != nil {
+		f.onRescan(f)
+	}
 	return f.invalid, nil
 }
 
 func (f *fakeRuntime) RestartRequired() []string { return f.restart }
 func (f *fakeRuntime) Booted() bool              { return true }
-func (f *fakeRuntime) HostConfig() config.Config { return config.Default() }
+func (f *fakeRuntime) HostConfig() config.Config {
+	if f.host != nil {
+		return *f.host
+	}
+	return config.Default()
+}
 
 func (f *fakeRuntime) Logs(name, process string, lines int) (map[string][]string, error) {
 	f.actions = append(f.actions, "logs "+name)

@@ -156,3 +156,26 @@ func (h *Handler) rescan(w http.ResponseWriter, r *http.Request, session authSes
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+// addApp clones a repository into the apps folder and starts it; see ops.Service.add.
+func (h *Handler) addApp(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		Repo   string `json:"repo"`
+		Name   string `json:"name"`
+		Branch string `json:"branch"`
+		Host   string `json:"host"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.service.Do(ops.Request{Method: ops.ActionAdd, Repo: request.Repo, App: strings.TrimSpace(request.Name), Branch: strings.TrimSpace(request.Branch), Host: strings.TrimSpace(request.Host), Actor: session.Email})
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"app": result, "apps": h.service.Apps(), "updated_at": time.Now().UTC()})
+}

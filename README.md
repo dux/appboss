@@ -219,7 +219,7 @@ Every app-level key can be set once under `defaults:` in the host file and repea
 ```
 $ dboss config --keys tokens
 Tokens  (root dboss.yaml)
-  tokens.github  outbound: personal access token a pull hook and a github_pr preview use for a private repo; consumed from the process environment only  e.g. $GITHUB_TOKEN
+  tokens.github  outbound: personal access token a pull hook, a github_pr preview and dboss add use for a private GitHub repo; consumed from the process environment only  e.g. $GITHUB_TOKEN
   tokens.dboss   inbound: every /hooks ping and /metrics must present it; unset refuses hooks and hides /metrics                                    e.g. $DBOSS_TOKEN
 ```
 
@@ -236,6 +236,7 @@ Host session
   login         print one-time console URLs that sign you in as cli@localhost
 
 Apps
+  add           clone a repository with a dboss.yaml into the apps folder and start it
   ls            list apps with state, ports, uptime, last activity and memory
   run           start an app; rescans first when it is not known yet
   stop          stop an app and keep it stopped until run or the next request
@@ -435,6 +436,29 @@ cron:
 Jobs run in the app folder with the app environment, log to their own `cron-<job>` channel in the log store, and do not count as activity for idle stop.
 A stopped or idle app still fires its jobs, and there is no catch-up after a daemon restart.
 `dboss cron [app]` lists jobs, next run and last result; `dboss cron run [app] <job>` starts one now; the console card has a **Run** button.
+
+## Adding an app from git
+
+A repository that carries its own `dboss.yaml` (or `config/dboss.yaml`) is a complete app, so a host can install it from its URL: **Add app** on the console's overview, or
+
+```
+dboss add https://github.com/acme/shop [--name shop] [--branch main] [--host shop.box.example.com]
+```
+
+The URL may be `https://host/owner/repo`, `ssh://...`, `git@host:owner/repo` or the GitHub shorthand `owner/repo`, which becomes `https://github.com/owner/repo.git`.
+A private GitHub repository over https is cloned with `tokens.github`; the credential helper only answers for `https://github.com`, so a remote on another host never sees the token.
+An ssh remote uses the service user's own key and never prompts: an unknown host key is accepted once, a missing key fails.
+Local paths and other schemes are refused.
+
+The name defaults to the repository name (lowercased, other characters become `-`) and must be a new folder under `apps`; to update an app that is already there, deploy to it.
+Without `--branch` the remote's default branch is cloned.
+`--host` serves the app on that host instead of the hosts in its `dboss.yaml`: the checkout's file is copied to `dboss.local.yaml` next to it with the host set on the single web process (and its `canonical_host` dropped), so the repository's own domain never goes live on this box.
+It needs exactly one web process.
+
+dboss clones, validates the file against the host `defaults`, refuses a host another app already serves (a rescan would otherwise hand the host to whichever app sorts first), rescans and starts the app, so its `lifecycle.create` step runs.
+When anything fails after the clone, the folder is removed again and the reason is shown; the action is audited as `add` with the URL.
+Secrets are not in the repository: put `.env` or `dboss.local.yaml` in the folder and restart when the first start needs them.
+With `hooks: {deploy: true}` in the app file, `dboss deploy git` updates the app from then on.
 
 ## Deploying
 

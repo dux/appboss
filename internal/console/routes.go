@@ -63,6 +63,7 @@ func (h *Handler) routes() *http.ServeMux {
 	signedIn("GET /api/log/search", h.logSearch)
 	session("POST /api/action", h.action)
 	session("POST /api/rescan", h.rescan)
+	session("POST /api/apps/add", h.addApp)
 	session("POST /api/logout", h.logout)
 	signedIn("GET /api/config", h.configFiles)
 	signedIn("GET /api/config/file", h.configFile)

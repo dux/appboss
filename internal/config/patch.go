@@ -1,4 +1,4 @@
-package console
+package config
 
 import (
 	"fmt"
@@ -7,11 +7,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// applyFormPatch rewrites the dotted paths in values and removes the paths in reset, leaving
-// every other key and its comments untouched. The caller has already turned blank form fields
-// into reset entries, so this only sets what it is given. An unknown intermediate is an error
-// rather than a silent overwrite, and a mapping emptied by a reset is pruned.
-func applyFormPatch(contents string, values map[string]any, reset []string) (string, error) {
+// PatchYAML rewrites the dotted paths in values and removes the paths in reset, leaving
+// every other key and its comments untouched. It only sets what it is given, so the console form
+// turns blank fields into reset entries first. An unknown intermediate is an error rather than a
+// silent overwrite, and a mapping emptied by a reset is pruned.
+func PatchYAML(contents string, values map[string]any, reset []string) (string, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(contents), &root); err != nil {
 		return "", err

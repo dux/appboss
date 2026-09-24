@@ -183,7 +183,7 @@ func (h *Handler) configApply(w http.ResponseWriter, r *http.Request, session au
 		if err != nil {
 			return local, err
 		}
-		contents, err := applyFormPatch(local.Contents, values, reset)
+		contents, err := config.PatchYAML(local.Contents, values, reset)
 		if err != nil {
 			return local, err
 		}

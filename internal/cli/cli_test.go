@@ -331,6 +331,14 @@ func TestParseRemoteReadsFlagsAfterOperands(t *testing.T) {
 	if request, err = c.parseRemote("logs", opts, &workdir{}); err != nil || request.App != "demo" || request.Lines != 5 || !opts.follow {
 		t.Fatalf("logs = %+v follow=%v, %v", request, opts.follow, err)
 	}
+	opts, _ = commonArgs([]string{"acme/shop", "--name", "store", "--branch", "prod", "--host", "store.test"})
+	if request, err = c.parseRemote("add", opts, &workdir{}); err != nil || request.Method != ops.ActionAdd || request.Repo != "acme/shop" || request.App != "store" || request.Branch != "prod" || request.Host != "store.test" {
+		t.Fatalf("add = %+v, %v", request, err)
+	}
+	opts, _ = commonArgs([]string{"--name", "store"})
+	if _, err = c.parseRemote("add", opts, &workdir{}); err == nil {
+		t.Fatal("add without a URL must fail")
+	}
 }
 
 // A hook without a ping URL says which keys give it one.

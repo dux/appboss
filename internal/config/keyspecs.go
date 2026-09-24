@@ -27,7 +27,7 @@ var keySpecs = map[string]KeySpec{
 	"authcog_realm":   {Block: "host", Name: "AuthCog realm", Description: "AuthCog host the console and every app sign-in use", Example: "dboss.authcog.com"},
 
 	// --- Tokens ---
-	"tokens.github": {Block: "tokens", Name: "GitHub token", Description: "outbound: personal access token a pull hook and a github_pr preview use for a private repo; consumed from the process environment only", Example: "$GITHUB_TOKEN", Secret: true},
+	"tokens.github": {Block: "tokens", Name: "GitHub token", Description: "outbound: personal access token a pull hook, a github_pr preview and dboss add use for a private GitHub repo; consumed from the process environment only", Example: "$GITHUB_TOKEN", Secret: true},
 	"tokens.dboss":  {Block: "tokens", Name: "Dboss token", Description: "inbound: every /hooks ping and /metrics must present it; unset refuses hooks and hides /metrics", Example: "$DBOSS_TOKEN", Secret: true},
 
 	// --- Proxy ---

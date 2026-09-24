@@ -107,10 +107,11 @@ pages: ./public/error_pages
 # --- Tokens ------------------------------------------------------------------
 
 tokens:
-  # Outbound: the personal access token a `deploy: true` pull hook and a github_pr preview use for
-  # a private repository. The git process gets it through the environment only (a credential
-  # helper dboss injects reads it), never argv and never the repo's config. Empty leaves the pull
-  # anonymous. Needs git 2.31+ for the env-injected helper.
+  # Outbound: the personal access token a `deploy: true` pull hook, a github_pr preview and
+  # `dboss add` use for a private repository. The git process gets it through the environment only
+  # (a credential helper dboss injects reads it), never argv and never the repo's config, and the
+  # helper answers for https://github.com only, so a remote on another host never sees it. Empty
+  # leaves the pull anonymous. Needs git 2.31+ for the env-injected helper.
   github: $GITHUB_TOKEN
   # Inbound: the token every caller presents to dboss. A hook ping carries it as ?token=, as
   # Authorization: Bearer, as X-Gitlab-Token, or signs the raw body with it as GitHub's

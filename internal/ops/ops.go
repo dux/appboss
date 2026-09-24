@@ -57,6 +57,7 @@ const (
 	ActionPubsubSecret  = "pubsub-secret"
 	ActionPubsubRotate  = "pubsub-rotate"
 	ActionPubsubPublish = "pubsub-publish"
+	ActionAdd           = "add"
 )
 
 // auditActions are the methods that write an audit row when they run.
@@ -64,7 +65,7 @@ var auditActions = map[string]bool{
 	ActionStart: true, ActionStop: true, ActionRestart: true, ActionDestroy: true, ActionMaintenance: true,
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHostHookRun: true, ActionExec: true,
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
-	ActionPubsubRotate: true, ActionPubsubPublish: true,
+	ActionPubsubRotate: true, ActionPubsubPublish: true, ActionAdd: true,
 }
 
 // Runtime is the supervisor surface the service drives.
@@ -182,6 +183,11 @@ type Request struct {
 	// Params carries the request query parameters a hook ping arrived with, keyed by their QS_
 	// name. The built-in github_pr hook reads branch/repo/action/num from it.
 	Params map[string]string `json:"params,omitempty"`
+	// Repo, Branch and Host describe the app an add clones: the git URL, the branch (empty for
+	// the default one) and a host that replaces the app's own.
+	Repo   string `json:"repo,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	Host   string `json:"host,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -201,8 +207,8 @@ type Service struct {
 	pg       PG
 	pubsub   Pubsub
 	disk     Disk
-	// previews serializes the built-in github_pr deploys per app, so two pushes to one branch
-	// never race the same checkout while different branches deploy in parallel.
+	// previews serializes the built-in github_pr deploys and adds per app, so two pushes to one
+	// branch never race the same checkout while different apps deploy in parallel.
 	previewMu    sync.Mutex
 	previewLocks map[string]*sync.Mutex
 }
@@ -214,6 +220,9 @@ func New(runtime Runtime, store LogStore, postgres PG, realtime Pubsub, sizes Di
 // Do runs one action by name. Both transports call it, so the name-to-method mapping and the
 // audit row live here only.
 func (s *Service) Do(request Request) (any, error) {
+	if request.Method == ActionAdd {
+		request.App = addName(request)
+	}
 	result, err := s.dispatch(request)
 	s.auditRequest(request, err)
 	return result, err
@@ -279,6 +288,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.pubsubRotate(request.App, request.Process)
 	case ActionPubsubPublish:
 		return s.pubsubPublish(request.App, request.Process, request.Channel, request.Event, request.Data)
+	case ActionAdd:
+		return s.add(request)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -351,6 +362,15 @@ func auditDetail(request Request) string {
 		return request.Database + ": " + pg.QueryAuditDetail(request.SQL)
 	case ActionPubsubPublish:
 		return request.Channel
+	case ActionAdd:
+		detail := request.Repo
+		if request.Branch != "" {
+			detail += " branch=" + request.Branch
+		}
+		if request.Host != "" {
+			detail += " host=" + request.Host
+		}
+		return detail
 	default:
 		return ""
 	}

@@ -39,6 +39,7 @@ var results = map[string]func() any{
 	ops.ActionPubsubSecret:  func() any { return &ops.PubsubSecret{} },
 	ops.ActionPubsubRotate:  func() any { return &ops.PubsubSecret{} },
 	ops.ActionPubsubPublish: func() any { return &ops.PubsubPublished{} },
+	ops.ActionAdd:           func() any { return &supervisor.Snapshot{} },
 }
 
 // call sends request and decodes the answer into the action's result type.
@@ -130,7 +131,27 @@ func (c CLI) parseRemote(command string, opts *remoteOptions, here *workdir) (ct
 		return c.parsePG(opts.rest)
 	case "pubsub":
 		return c.parsePubsub(opts.rest, here)
+	case "add":
+		return c.parseAdd(opts.rest)
 	}
+	return request, nil
+}
+
+func (c CLI) parseAdd(args []string) (ctl.Request, error) {
+	request := ctl.Request{Method: ops.ActionAdd}
+	set := flag.NewFlagSet("add", flag.ContinueOnError)
+	set.SetOutput(c.Err)
+	name := set.String("name", "", "app name")
+	branch := set.String("branch", "", "branch to clone")
+	host := set.String("host", "", "host that replaces the app's own")
+	operands, err := parseSubcommandFlags(set, args)
+	if err != nil {
+		return request, err
+	}
+	if len(operands) != 1 {
+		return request, errors.New("usage: dboss add <git-url> [--name name] [--branch branch] [--host host]")
+	}
+	request.Repo, request.App, request.Branch, request.Host = operands[0], *name, *branch, *host
 	return request, nil
 }
 
