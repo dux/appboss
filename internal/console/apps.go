@@ -50,6 +50,21 @@ func (h *Handler) traffic(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"traffic": traffic, "updated_at": time.Now().UTC()})
 }
 
+// fleetTraffic returns the request series summed over every app, for the overview chart.
+func (h *Handler) fleetTraffic(w http.ResponseWriter, r *http.Request) {
+	span, ok := trafficRanges[r.URL.Query().Get("range")]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "range must be 1h, 24h, 7d or 30d")
+		return
+	}
+	series, err := h.service.FleetSeries(time.Now().Add(-span))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": series, "updated_at": time.Now().UTC()})
+}
+
 // writeSys returns the cached host inspection for the console's Sys tab.
 func (h *Handler) writeSys(w http.ResponseWriter, _ *http.Request) {
 	if h.sys == nil {

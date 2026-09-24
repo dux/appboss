@@ -82,6 +82,7 @@ func (h *Handler) routes() *http.ServeMux {
 	signedIn("GET /api/hooks", h.hooks)
 	session("POST /api/hooks/run", h.hookRun)
 	signedIn("GET /api/traffic", h.traffic)
+	signedIn("GET /api/traffic/fleet", h.fleetTraffic)
 	signedIn("GET /api/audit", h.audit)
 	signedIn("GET /api/sys", h.writeSys)
 	session("POST /api/sys/refresh", h.sysRefresh)

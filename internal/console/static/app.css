@@ -547,6 +547,102 @@ input[type="radio"] {
   padding: 18px 20px;
 }
 
+.stat-row-overview .stat-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stat-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.stat-link:hover {
+  border-color: var(--primary);
+  text-decoration: none;
+}
+
+.stat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-size-small);
+}
+
+.stat-split {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin-top: auto;
+  padding-top: 8px;
+  overflow: visible;
+}
+
+.spark-empty {
+  display: flex;
+  align-items: flex-end;
+  font-size: var(--text-size-small);
+}
+
+.spark-area { fill: var(--primary-soft); }
+.spark-line { fill: none; stroke: var(--primary); stroke-width: 1.5; stroke-linejoin: round; }
+.spark-error { fill: var(--danger); opacity: 0.55; }
+.spark-hit { fill: transparent; }
+.spark-hit:hover { fill: var(--primary-soft); }
+
+.audit-mini {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  font-size: var(--text-size-small);
+}
+
+.audit-mini-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 6px;
+  margin-inline: -6px;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.audit-mini-row:hover {
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.audit-mini-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.audit-mini-row[data-result="error"] .audit-mini-dot { background: var(--danger); }
+
+.audit-mini-action {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-mini-meta {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .stat-value {
   display: block;
   margin: 8px 0 2px;
@@ -2750,6 +2846,7 @@ select.log-control { max-width: 220px; }
   .navbar-inner { align-items: flex-start; flex-direction: column; padding: 12px 0; }
   .user-block { display: none; }
   .stat-row { grid-template-columns: 1fr; }
+  .stat-row-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .datagrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

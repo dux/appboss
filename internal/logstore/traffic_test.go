@@ -89,3 +89,41 @@ func TestTrafficNeverCreatesADatabase(t *testing.T) {
 		t.Fatalf("Traffic created %s: %v", filepath.Join(dir, "quiet"), err)
 	}
 }
+
+func TestSeriesSumsAppsIntoOneGrid(t *testing.T) {
+	store := New(t.TempDir(), 5*time.Millisecond, nil, "", time.Hour, 0)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	for app, statuses := range map[string][]int{"one": {200, 200, 500}, "two": {200, 404}} {
+		for _, status := range statuses {
+			if err := store.Record(app, 24*time.Hour, RequestEntry{Time: now.Add(-time.Minute), Method: "GET", Path: "/", Status: status}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for app, want := range map[string]int{"one": 3, "two": 2} {
+		waitFor(t, func() ([]RequestEntry, error) {
+			rows, err := store.SearchRequests(app, RequestFilter{})
+			if len(rows) < want {
+				return nil, err
+			}
+			return rows, err
+		})
+	}
+
+	series, err := store.Series([]string{"one", "two", "quiet"}, now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series) < 24 || len(series) > 26 {
+		t.Fatalf("series must cover every hour of the day, got %d", len(series))
+	}
+	var s2, s4, s5 int64
+	for _, bucket := range series {
+		s2, s4, s5 = s2+bucket.S2, s4+bucket.S4, s5+bucket.S5
+	}
+	if s2 != 3 || s4 != 1 || s5 != 1 {
+		t.Fatalf("series totals: s2=%d s4=%d s5=%d", s2, s4, s5)
+	}
+}

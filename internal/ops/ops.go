@@ -101,6 +101,7 @@ type LogStore interface {
 	Rates(app string) (logstore.Rates, error)
 	Window(app string, since time.Time) (logstore.Window, error)
 	Traffic(app string, since time.Time) (logstore.Traffic, error)
+	Series(apps []string, since time.Time) ([]logstore.TrafficBucket, error)
 	SearchLogs(app string, filter logstore.LogFilter) ([]logstore.LogEntry, error)
 	SearchRequests(app string, filter logstore.RequestFilter) ([]logstore.RequestEntry, error)
 	Channels(app string) ([]logstore.Channel, error)

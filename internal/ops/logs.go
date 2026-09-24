@@ -56,3 +56,16 @@ func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error
 	}
 	return s.store.Traffic(name, since)
 }
+
+// FleetSeries is the request count per bucket over every app, for the overview chart.
+func (s *Service) FleetSeries(since time.Time) ([]logstore.TrafficBucket, error) {
+	if s.store == nil {
+		return nil, errors.New("traffic is not available")
+	}
+	snapshots := s.runtime.Snapshots()
+	names := make([]string, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		names = append(names, snapshot.Name)
+	}
+	return s.store.Series(names, since)
+}

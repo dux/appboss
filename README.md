@@ -896,7 +896,7 @@ Everything lives under `./internal/console/static/` and is embedded in the binar
 Every page is a hash route on `/`, so reload, Back/Forward and a pasted link all reproduce the same view:
 
 * `fez/db-shell.fez` - navbar, the `ROUTES` list that drives it, the route outlet, API calls and the 5 second poll; exposed as `Dboss`.
-* `fez/tpl-overview.fez` - `#/overview`: stat cards and the service list.
+* `fez/tpl-overview.fez` - `#/overview`: memory and disk (`/api/sys`), a 24h fleet traffic chart (`/api/traffic/fleet`), the last audit rows and the service list.
 * `fez/tpl-logs.fez` - `#/logs`: the log viewer page, a thin wrapper around `db-log-view`.
 * `fez/tpl-traffic.fez` - `#/traffic`: per-app requests over time, error rate, latency quantiles and the top paths, status codes, countries, client IPs and methods from the request log.
 * `fez/tpl-audit.fez` - `#/audit`: operator actions with app, actor and action filters.

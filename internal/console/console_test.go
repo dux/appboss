@@ -305,6 +305,10 @@ func (fakeLogs) Traffic(app string, since time.Time) (logstore.Traffic, error) {
 	return logstore.Traffic{Since: since, Bucket: "hour", Totals: logstore.Window{Count: 42}, Paths: []logstore.TrafficPath{{Path: "/hello", Count: 42}}}, nil
 }
 
+func (fakeLogs) Series(apps []string, since time.Time) ([]logstore.TrafficBucket, error) {
+	return []logstore.TrafficBucket{{Time: since, S2: int64(10 * len(apps)), S5: 1}}, nil
+}
+
 func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
 	return []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}}, nil
 }
@@ -663,6 +667,21 @@ func TestConsoleServesTraffic(t *testing.T) {
 		t.Fatalf("unexpected traffic: %d %s", traffic.Code, traffic.Body.String())
 	}
 	for _, target := range []string{"/api/traffic?range=24h", "/api/traffic?app=sinatra&range=90d", "/api/traffic?app=sinatra"} {
+		if response := call(t, handler, cookie, session, http.MethodGet, target, ""); response.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", target, response.Code)
+		}
+	}
+}
+
+func TestConsoleServesFleetTraffic(t *testing.T) {
+	handler := newTestHandler(t, &fakeManager{}, nil)
+	cookie, session := sessionCookie(t, handler)
+
+	fleet := call(t, handler, cookie, session, http.MethodGet, "/api/traffic/fleet?range=24h", "")
+	if fleet.Code != http.StatusOK || !strings.Contains(fleet.Body.String(), `"s5":1`) {
+		t.Fatalf("unexpected fleet traffic: %d %s", fleet.Code, fleet.Body.String())
+	}
+	for _, target := range []string{"/api/traffic/fleet", "/api/traffic/fleet?range=90d"} {
 		if response := call(t, handler, cookie, session, http.MethodGet, target, ""); response.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status = %d, want 400", target, response.Code)
 		}

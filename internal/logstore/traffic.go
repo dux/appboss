@@ -64,9 +64,8 @@ func trafficBucket(span time.Duration) (string, time.Duration, int) {
 // Traffic aggregates the requests newer than since. Every query is bounded by the ts index, and
 // an app that never logged yields empty lists without creating a database.
 func (s *Store) Traffic(app string, since time.Time) (Traffic, error) {
-	now := time.Now().UTC()
 	since = since.UTC()
-	name, step, prefix := trafficBucket(now.Sub(since))
+	name, _, _ := trafficBucket(time.Now().UTC().Sub(since))
 	traffic := Traffic{Since: since, Bucket: name, Paths: []TrafficPath{}, Slowest: []TrafficPath{}, Statuses: []TrafficCount{}, Countries: []TrafficCount{}, IPs: []TrafficCount{}, Methods: []TrafficCount{}}
 
 	totals, err := s.Window(app, since)
@@ -75,26 +74,11 @@ func (s *Store) Traffic(app string, since time.Time) (Traffic, error) {
 	}
 	traffic.Totals = totals
 
-	counts := map[string]TrafficBucket{}
+	if traffic.Series, err = s.Series([]string{app}, since); err != nil {
+		return Traffic{}, err
+	}
 	err = s.read(app, func(db *sql.DB) error {
 		cutoff := stamp(since)
-		rows, err := db.Query(`SELECT substr(ts, 1, ?), sum(status < 300), sum(status >= 300 AND status < 400), sum(status >= 400 AND status < 500), sum(status >= 500) FROM requests WHERE ts >= ? GROUP BY 1`, prefix, cutoff)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var key string
-			var bucket TrafficBucket
-			if err := rows.Scan(&key, &bucket.S2, &bucket.S3, &bucket.S4, &bucket.S5); err != nil {
-				return err
-			}
-			counts[key] = bucket
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
 		const pathColumns = `path, count(*), sum(status >= 500), avg(duration_ms), max(duration_ms)`
 		if traffic.Paths, err = trafficPaths(db, `SELECT `+pathColumns+` FROM requests WHERE ts >= ? GROUP BY path ORDER BY 2 DESC, path LIMIT ?`, cutoff, trafficTop); err != nil {
 			return err
@@ -113,14 +97,48 @@ func (s *Store) Traffic(app string, since time.Time) (Traffic, error) {
 	if err != nil {
 		return Traffic{}, err
 	}
+	return traffic, nil
+}
 
-	// Every bucket of the range is present, so a gap in traffic reads as a gap in the chart.
+// Series counts the requests newer than since per bucket, summed over apps, so the overview can
+// chart the whole fleet with one bucket grid. Every bucket of the range is present, so a gap in
+// traffic reads as a gap in the chart.
+func (s *Store) Series(apps []string, since time.Time) ([]TrafficBucket, error) {
+	now := time.Now().UTC()
+	since = since.UTC()
+	_, step, prefix := trafficBucket(now.Sub(since))
+	counts := map[string]TrafficBucket{}
+	for _, app := range apps {
+		err := s.read(app, func(db *sql.DB) error {
+			rows, err := db.Query(`SELECT substr(ts, 1, ?), sum(status < 300), sum(status >= 300 AND status < 400), sum(status >= 400 AND status < 500), sum(status >= 500) FROM requests WHERE ts >= ? GROUP BY 1`, prefix, stamp(since))
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var key string
+				var bucket TrafficBucket
+				if err := rows.Scan(&key, &bucket.S2, &bucket.S3, &bucket.S4, &bucket.S5); err != nil {
+					return err
+				}
+				sum := counts[key]
+				sum.S2, sum.S3, sum.S4, sum.S5 = sum.S2+bucket.S2, sum.S3+bucket.S3, sum.S4+bucket.S4, sum.S5+bucket.S5
+				counts[key] = sum
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	series := []TrafficBucket{}
 	for at := since.Truncate(step); !at.After(now); at = at.Add(step) {
 		bucket := counts[at.Format(time.RFC3339)[:prefix]]
 		bucket.Time = at
-		traffic.Series = append(traffic.Series, bucket)
+		series = append(series, bucket)
 	}
-	return traffic, nil
+	return series, nil
 }
 
 func trafficPaths(db *sql.DB, query string, args ...any) ([]TrafficPath, error) {

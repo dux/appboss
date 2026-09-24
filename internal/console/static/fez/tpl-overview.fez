@@ -1,14 +1,118 @@
 <script>
+  // Chart geometry in viewBox units; the svg stretches it to the card width.
+  const CHART_W = 300
+  const CHART_H = 72
+
   class {
+    init() {
+      this.state.sys = null
+      this.state.chart = null
+      this.state.audit = null
+      this.state.auditError = ''
+    }
+
+    onMount() {
+      this.loadWidgets()
+      this.setInterval(() => this.loadWidgets(), 60000)
+    }
+
     beforeRender() {
       const apps = this.globalState.apps || []
       this.state.running = apps.filter((app) => app.state === 'running').length
-      this.state.attention = apps.filter((app) => ['crashed', 'starting', 'stopping'].includes(app.state)).length
       this.state.hourly = apps.reduce((total, app) => total + Number(app.request_rates?.last_hour || 0), 0)
+    }
+
+    refresh() {
+      Dboss.reload()
+      this.loadWidgets()
+    }
+
+    // Each widget loads on its own, so a host without sysinfo or a log store still shows the rest.
+    loadWidgets() {
+      Dboss.api('/api/sys').then((data) => { this.state.sys = data.snapshot }).catch(() => { this.state.sys = false })
+      Dboss.api('/api/traffic/fleet?range=24h').then((data) => { this.state.chart = this.shape(data.series || []) }).catch(() => { this.state.chart = false })
+      Dboss.api('/api/audit?limit=3')
+        .then((data) => { this.state.audit = data.rows || []; this.state.auditError = '' })
+        .catch((error) => { this.state.audit = []; this.state.auditError = error.message })
+    }
+
+    // shape turns the hourly buckets into svg paths once per load, so a render only reads them.
+    shape(series) {
+      const totals = series.map((bucket) => bucket.s2 + bucket.s3 + bucket.s4 + bucket.s5)
+      const peak = Math.max(0, ...totals)
+      const step = series.length > 1 ? CHART_W / (series.length - 1) : CHART_W
+      const y = (value) => (peak ? CHART_H - (value / peak) * (CHART_H - 4) : CHART_H).toFixed(1)
+      const line = (values) => values.map((value, index) => `${index ? 'L' : 'M'}${(index * step).toFixed(1)},${y(value)}`).join(' ')
+      const area = (values) => values.length ? `${line(values)} L${CHART_W},${CHART_H} L0,${CHART_H} Z` : ''
+      const errors = series.map((bucket) => bucket.s5)
+      return {
+        total: totals.reduce((sum, value) => sum + value, 0),
+        errors: errors.reduce((sum, value) => sum + value, 0),
+        peak,
+        line: line(totals),
+        area: area(totals),
+        errorArea: errors.some(Boolean) ? area(errors) : '',
+        hits: series.map((bucket, index) => ({
+          x: Math.max(0, index * step - step / 2).toFixed(1),
+          width: step.toFixed(1),
+          title: `${this.hourLabel(bucket.time)} - ${this.number(totals[index])} requests, ${this.number(bucket.s5)} 5xx`,
+        })),
+      }
+    }
+
+    hourLabel(value) {
+      return new Date(value).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
     }
 
     number(value) {
       return new Intl.NumberFormat().format(Number(value || 0))
+    }
+
+    bytes(value) {
+      let size = Number(value || 0)
+      if (!size) return '-'
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']
+      let index = 0
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024
+        index++
+      }
+      return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+    }
+
+    memory() {
+      const host = (this.state.sys && this.state.sys.host) || {}
+      const total = Number(host.mem_total || 0)
+      if (!total) return null
+      const used = Number(host.mem_used || 0)
+      return { percent: Math.min(100, Math.round((used / total) * 100)), used, total }
+    }
+
+    // The config dir's filesystem is the one the apps and the log store live on.
+    disk() {
+      const dirs = (this.state.sys && this.state.sys.dirs) || []
+      const dir = dirs.find((item) => item.name === 'config')
+      if (!dir || dir.error || !dir.total_bytes) return null
+      return { percent: Math.min(100, Math.round(Number(dir.percent || 0))), used: dir.used_bytes, total: dir.total_bytes }
+    }
+
+    level(percent) {
+      if (percent >= 90) return 'danger'
+      if (percent >= 75) return 'warn'
+      return 'ok'
+    }
+
+    meterStyle(percent) {
+      return `width: ${percent}%`
+    }
+
+    ago(value) {
+      const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
+      if (isNaN(seconds)) return '-'
+      if (seconds < 60) return `${seconds}s ago`
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+      return `${Math.floor(seconds / 86400)}d ago`
     }
   }
 </script>
@@ -20,7 +124,7 @@
   </div>
   <div class="page-actions">
     <span class="refresh-status">{globalState.status}</span>
-    <button class="btn" type="button" onclick="Dboss.reload()" disabled={globalState.busy}>
+    <button class="btn" type="button" onclick="fez.refresh()" disabled={globalState.busy}>
       <svg class="icon"><use href="#i-refresh"></use></svg>
       Refresh
     </button>
@@ -37,32 +141,75 @@
   </div>
 </div>
 
-<section class="stat-row" aria-label="Fleet summary">
+<section class="stat-row stat-row-overview" aria-label="Host summary">
   <article class="card stat-card">
-    <span class="subheader">Configured</span>
-    <strong class="stat-value">{globalState.loaded ? number(globalState.apps.length) : '-'}</strong>
-    <span class="text-muted">applications</span>
+    <span class="subheader">Memory</span>
+    {#if memory()}
+      <strong class="stat-value" class:text-danger={memory().percent >= 90}>{memory().percent}%</strong>
+      <span class="text-muted">{bytes(memory().used)} of {bytes(memory().total)}</span>
+      <span class="meter" data-level={level(memory().percent)}><span style={meterStyle(memory().percent)}></span></span>
+    {:else}
+      <strong class="stat-value">-</strong>
+      <span class="text-muted">{state.sys === null ? 'loading' : 'not reported'}</span>
+    {/if}
   </article>
   <article class="card stat-card">
-    <span class="subheader">Running</span>
-    <strong class="stat-value">{globalState.loaded ? number(state.running) : '-'}</strong>
-    <span class="text-muted">healthy now</span>
+    <span class="subheader">Disk</span>
+    {#if disk()}
+      <strong class="stat-value" class:text-danger={disk().percent >= 90}>{disk().percent}% full</strong>
+      <span class="text-muted">{bytes(disk().used)} of {bytes(disk().total)}</span>
+      <span class="meter" data-level={level(disk().percent)}><span style={meterStyle(disk().percent)}></span></span>
+    {:else}
+      <strong class="stat-value">-</strong>
+      <span class="text-muted">{state.sys === null ? 'loading' : 'not reported'}</span>
+    {/if}
   </article>
+  <a class="card stat-card stat-link" href="#/traffic">
+    <span class="stat-head">
+      <span class="subheader">Traffic</span>
+      <span class="text-muted">last 24h</span>
+    </span>
+    <span class="stat-split">
+      <strong class="stat-value">{state.chart ? number(state.chart.total) : '-'}</strong>
+      <span class="text-muted">{number(state.hourly)} this hour{state.chart && state.chart.errors ? `, ${number(state.chart.errors)} 5xx` : ''}</span>
+    </span>
+    {#if state.chart && state.chart.total}
+      <svg class="spark" viewBox="0 0 300 72" preserveAspectRatio="none" role="img" aria-label="Requests per hour over the last 24 hours">
+        <path class="spark-area" d={state.chart.area}></path>
+        <path class="spark-line" d={state.chart.line} vector-effect="non-scaling-stroke"></path>
+        {#if state.chart.errorArea}
+          <path class="spark-error" d={state.chart.errorArea}></path>
+        {/if}
+        {#each state.chart.hits as hit}
+          <rect class="spark-hit" x={hit.x} y="0" width={hit.width} height="72"><title>{hit.title}</title></rect>
+        {/each}
+      </svg>
+    {:else}
+      <span class="spark spark-empty text-muted">{state.chart === null ? 'Loading' : 'No requests in the last 24h'}</span>
+    {/if}
+  </a>
   <article class="card stat-card">
-    <span class="subheader">Attention</span>
-    <strong class="stat-value" class:text-danger={state.attention > 0}>{globalState.loaded ? number(state.attention) : '-'}</strong>
-    <span class="text-muted">crashed or changing</span>
-  </article>
-  <article class="card stat-card">
-    <span class="subheader">Traffic</span>
-    <strong class="stat-value">{globalState.loaded ? number(state.hourly) : '-'}</strong>
-    <span class="text-muted">requests this hour</span>
+    <span class="stat-head">
+      <span class="subheader">Recent activity</span>
+      <a href="#/audit">View all</a>
+    </span>
+    <div class="audit-mini">
+      {#each state.audit || [] as row}
+        <a class="audit-mini-row" href={`#/audit?row=${row.id}`} data-result={row.result} title={row.error || row.detail || row.action}>
+          <span class="audit-mini-dot" aria-hidden="true"></span>
+          <span class="audit-mini-action">{row.action}{row.app ? ` ${row.app}` : ''}</span>
+          <span class="audit-mini-meta">{row.actor} &middot; {ago(row.time)}</span>
+        </a>
+      {:else}
+        <span class="text-muted">{state.audit === null ? 'Loading' : state.auditError || 'No actions recorded yet'}</span>
+      {/each}
+    </div>
   </article>
 </section>
 
 <div class="section-head">
   <h2>Services</h2>
-  <span class="text-muted">{globalState.apps.length} {globalState.apps.length === 1 ? 'service' : 'services'}</span>
+  <span class="text-muted">{globalState.loaded ? `${number(state.running)} of ${number(globalState.apps.length)} running` : ''}</span>
 </div>
 
 <div class="app-grid" aria-live="polite">
