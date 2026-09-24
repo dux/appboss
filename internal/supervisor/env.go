@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"dboss/internal/apps"
+	"dboss/internal/events"
 )
 
 func resolveExecutable(name, dir, pathValue string) (string, error) {
@@ -33,8 +34,9 @@ func resolveExecutable(name, dir, pathValue string) (string, error) {
 
 // processEnv assembles one process environment in the documented priority order, lowest first:
 // the daemon environment and mise (spec.Env), then config env (extra, including a process
-// override), then .env and .env.local, then the values dboss injects.
-func processEnv(spec *apps.App, processName string, port int, socket string, extra map[string]string) map[string]string {
+// override), then .env and .env.local, then the values dboss injects. logDir is the host's log
+// root; the app's event Parquet files live under it.
+func processEnv(spec *apps.App, processName string, port int, socket, logDir string, extra map[string]string) map[string]string {
 	values := map[string]string{}
 	for key, value := range spec.Env {
 		values[key] = value
@@ -52,6 +54,9 @@ func processEnv(spec *apps.App, processName string, port int, socket string, ext
 	values["APP_NAME"] = spec.Name
 	values["PROC_TYPE"] = processName
 	values["DBOSS_SOCKET"] = socket
+	if logDir != "" {
+		values["DBOSS_EVENTS_DIR"] = filepath.Join(logDir, spec.Name, events.DirName)
+	}
 	return values
 }
 

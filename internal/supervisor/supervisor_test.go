@@ -30,10 +30,11 @@ func TestProcessEnvPriority(t *testing.T) {
 	spec.Config.Env = map[string]string{"A": "config", "B": "config", "D": "config"}
 	// extra stands in for Process(name).Env: app config env plus a process override.
 	extra := map[string]string{"A": "config", "B": "config", "D": "config", "E": "override"}
-	values := processEnv(spec, "web", 123, "/run/dboss.sock", extra)
+	values := processEnv(spec, "web", 123, "/run/dboss.sock", "/var/lib/dboss/log", extra)
 	want := map[string]string{
 		"A": "config", "B": "file", "C": "file", "D": "config", "E": "override",
 		"PATH": "/bin", "PORT": "123", "APP_NAME": "demo", "PROC_TYPE": "web", "DBOSS_SOCKET": "/run/dboss.sock",
+		"DBOSS_EVENTS_DIR": "/var/lib/dboss/log/demo/events",
 	}
 	for key, value := range want {
 		if values[key] != value {

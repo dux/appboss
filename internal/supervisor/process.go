@@ -54,7 +54,7 @@ func (a *appRuntime) spawn(name string, log *logWriter) (*process, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	defaults := a.spec.Config.Process(proc)
-	env := processEnv(a.spec, proc, port, a.cfg.Socket, defaults.Env)
+	env := processEnv(a.spec, proc, port, a.cfg.Socket, a.cfg.LogDir, defaults.Env)
 	env["PROC_INSTANCE"] = strconv.Itoa(index)
 	cmd, err := newCommand(a.spec.Dir, command, env)
 	if err != nil {

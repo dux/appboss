@@ -462,6 +462,11 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"authcog path collision", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    pubsub: /authcog\nauthcog: true\n", "collides with authcog"},
 		{"alerts error rate", "procfile:\n  web: ./server\nalerts:\n  error_rate: 101\n", "alerts.error_rate"},
 		{"alerts slow p95", "procfile:\n  web: ./server\nalerts:\n  slow_p95: -1s\n", "alerts.slow_p95"},
+		{"events retention", "procfile:\n  web: ./server\nevents:\n  retention: -1s\n", "events.retention"},
+		{"events view filter", "procfile:\n  web: ./server\nevents:\n  views:\n    two: \"a b\"\n", "events.views.two"},
+		{"events view name", "procfile:\n  web: ./server\nevents:\n  views:\n    Bad-Name: a\n", "events.views.Bad-Name"},
+		{"events funnel steps", "procfile:\n  web: ./server\nevents:\n  funnels:\n    f:\n      steps: [{name: a, filter: a}]\n", "needs 2 to 10 steps"},
+		{"events funnel by", "procfile:\n  web: ./server\nevents:\n  funnels:\n    f:\n      by: team\n      steps: [{filter: a}, {filter: b}]\n", "by is user"},
 	} {
 		_, err := ParseApp([]byte(test.data), "dboss.yaml", defaults)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -528,6 +533,25 @@ func TestAlertsOverrideKeyByKey(t *testing.T) {
 	want := Alerts{ErrorRate: 25, SlowP95: Duration(2 * time.Second)}
 	if app.Alerts != want || !app.Alerts.Enabled() {
 		t.Fatalf("alerts = %+v, want %+v", app.Alerts, want)
+	}
+}
+
+func TestEventsMergeViewsByName(t *testing.T) {
+	defaults := Default().Defaults
+	defaults.Events.Views = map[string]string{"host": "a", "shared": "b"}
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\nevents:\n  retention: 30d\n  views:\n    shared: c\n  funnels:\n    checkout:\n      steps:\n        - {name: Pricing, filter: \"page_view page:pricing\"}\n        - {name: Paid, filter: checkout_completed}\n"), "dboss.yaml", defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Events.Retention.Value() != 30*24*time.Hour || app.Events.Views["host"] != "a" || app.Events.Views["shared"] != "c" {
+		t.Fatalf("events = %+v", app.Events)
+	}
+	funnel := EventFunnelOf("checkout", app.Events.Funnels["checkout"])
+	if len(funnel.Steps) != 2 || funnel.Steps[0].Filter != "page_view page:pricing" {
+		t.Fatalf("funnel = %+v", funnel)
+	}
+	if Default().Defaults.Events.Retention.Value() != 365*24*time.Hour {
+		t.Fatal("events.retention defaults to a year")
 	}
 }
 

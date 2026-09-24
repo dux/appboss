@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"dboss/internal/ctl"
+	"dboss/internal/events"
 	"dboss/internal/logstore"
 	"dboss/internal/ops"
 	"dboss/internal/pg"
@@ -40,6 +41,12 @@ var results = map[string]func() any{
 	ops.ActionPubsubRotate:  func() any { return &ops.PubsubSecret{} },
 	ops.ActionPubsubPublish: func() any { return &ops.PubsubPublished{} },
 	ops.ActionAdd:           func() any { return &supervisor.Snapshot{} },
+	ops.ActionEvents:        func() any { return &events.Summary{} },
+	ops.ActionEventsLatest:  func() any { return &[]events.Event{} },
+	ops.ActionEventsFacets:  func() any { return &[]events.Facet{} },
+	ops.ActionEventsViews:   func() any { return &ops.EventViewsResult{} },
+	ops.ActionEventsFunnel:  func() any { return &events.QueryResult{} },
+	ops.ActionEventsQuery:   func() any { return &events.QueryResult{} },
 }
 
 // call sends request and decodes the answer into the action's result type.
@@ -133,6 +140,82 @@ func (c CLI) parseRemote(command string, opts *remoteOptions, here *workdir) (ct
 		return c.parsePubsub(opts.rest, here)
 	case "add":
 		return c.parseAdd(opts.rest)
+	case "events":
+		return c.parseEvents(opts.rest, here)
+	}
+	return request, nil
+}
+
+const eventsUsage = "usage: dboss events [app] [--filter f] [--since 7d] [--tail n | --facets key | --sql q] | views [app] | funnel [app] <name>"
+
+// parseEvents reads `events [app]` with one of its modes, `events views [app]` and
+// `events funnel [app] <name>`.
+func (c CLI) parseEvents(args []string, here *workdir) (ctl.Request, error) {
+	request := ctl.Request{Method: ops.ActionEvents}
+	sub := ""
+	if len(args) > 0 && (args[0] == "views" || args[0] == "funnel") {
+		sub, args = args[0], args[1:]
+	}
+	set := flag.NewFlagSet("events", flag.ContinueOnError)
+	set.SetOutput(c.Err)
+	filter := set.String("filter", "", "event filter")
+	since := set.String("since", "", "time range, like 24h or 7d")
+	tail := set.Int("tail", 0, "newest events")
+	facets := set.String("facets", "", "facet key")
+	sql := set.String("sql", "", "DuckDB SQL")
+	operands, err := parseSubcommandFlags(set, args)
+	if err != nil {
+		return request, err
+	}
+	request.Query = strings.TrimSpace(*filter)
+	if *since != "" {
+		request.Query = strings.TrimSpace(request.Query + " since=" + *since)
+	}
+	switch sub {
+	case "views":
+		request.Method = ops.ActionEventsViews
+		if len(operands) > 1 {
+			return request, errors.New(eventsUsage)
+		}
+		request.App, err = here.app(operands)
+		return request, err
+	case "funnel":
+		if len(operands) == 0 || len(operands) > 2 {
+			return request, errors.New(eventsUsage)
+		}
+		request.Method = ops.ActionEventsFunnel
+		request.Name = operands[len(operands)-1]
+		request.App, err = here.app(operands[:len(operands)-1])
+		return request, err
+	}
+	if len(operands) > 1 {
+		return request, errors.New(eventsUsage)
+	}
+	if request.App, err = here.app(operands); err != nil {
+		return request, fmt.Errorf("%s (%w)", eventsUsage, err)
+	}
+	modes := 0
+	for _, set := range []bool{*tail > 0, *facets != "", *sql != ""} {
+		if set {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return request, errors.New("pick one of --tail, --facets and --sql")
+	}
+	switch {
+	case *tail > 0:
+		request.Method, request.Lines = ops.ActionEventsLatest, *tail
+	case *facets != "":
+		request.Method, request.Key = ops.ActionEventsFacets, *facets
+		if request.Key == "tags" {
+			request.Key = ""
+		}
+	case *sql != "":
+		if request.Query != "" {
+			return request, errors.New("--sql runs as written; put the conditions in its WHERE")
+		}
+		request.Method, request.SQL = ops.ActionEventsQuery, *sql
 	}
 	return request, nil
 }

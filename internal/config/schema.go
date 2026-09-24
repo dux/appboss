@@ -38,6 +38,7 @@ var blocks = []Block{
 	{ID: "web", Title: "Web", Summary: "Proxy behaviour in front of the app.", Scope: ScopeBoth},
 	{ID: "auth", Title: "Sign-in", Summary: "AuthCog sign-in in front of the app, or run for the app.", Scope: ScopeBoth},
 	{ID: "alerts", Title: "Alerts", Summary: "Request log checks that post error-rate and slow events.", Scope: ScopeBoth},
+	{ID: "events", Title: "Events", Summary: "Analytics events from log/*.json.log: retention, saved views and funnels.", Scope: ScopeBoth},
 }
 
 func blockScope(id string) Scope {

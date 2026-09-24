@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"dboss/internal/apps"
 	"dboss/internal/config"
 	"dboss/internal/ctl"
+	"dboss/internal/events"
 	"dboss/internal/ops"
 	"dboss/internal/ports"
 	"dboss/internal/supervisor"
@@ -78,6 +80,12 @@ func (c CLI) doctor(args []string) error {
 		add("fail", "lsof is not on PATH; dboss needs it to clear the port range")
 	} else {
 		add("ok", "lsof found")
+	}
+	// duckdb is optional: events are stored and counted without it, only SQL and funnels need it.
+	if duck, err := events.FindDuckDB(context.Background()); err != nil {
+		add("info", err.Error())
+	} else {
+		add("ok", "duckdb "+duck.Version+" found (event SQL and funnels)")
 	}
 	for _, dir := range []struct{ name, path string }{{"dir/state", cfg.StateDir}, {"dir/log", cfg.LogDir}, {"dir", filepath.Dir(cfg.Socket)}} {
 		if err := writable(dir.path); err != nil {

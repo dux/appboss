@@ -97,4 +97,9 @@ var keySpecs = map[string]KeySpec{
 	// --- Alerts ---
 	"alerts.error_rate": {Block: "alerts", Name: "Error rate", Description: "percent of 5xx answers over the last 5 minutes that posts error-rate; 0 disables", Example: "5"},
 	"alerts.slow_p95":   {Block: "alerts", Name: "Slow p95", Description: "p95 request latency over the last 5 minutes that posts slow; 0 disables", Example: "2s"},
+
+	// --- Events ---
+	"events.retention": {Block: "events", Name: "Event retention", Description: "how long raw events from log/*.json.log are kept; daily counts and facets stay; 0 stops ingesting events", Example: "90d"},
+	"events.views":     {Block: "events", Name: "Saved views", Description: "named filters, shown in the console and written to events/views.sql as DuckDB views", Example: "{pro_checkouts: \"checkout_completed plan:pro\"}"},
+	"events.funnels":   {Block: "events", Name: "Funnels", Description: "named funnels: by (user, anon, tenant), window, breakdown and 2-10 steps of name and filter", Example: "{checkout: {by: user, window: 7d, steps: [...]}}"},
 }

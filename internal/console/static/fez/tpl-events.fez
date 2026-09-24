@@ -1,0 +1,1115 @@
+<script>
+  // One colour slot per charted event; the rest are summed into "other".
+  const TOP_EVENTS = 4
+  const RANGES = ['24h', '7d', '30d', '90d']
+  const EXAMPLES = [
+    "select event, count(*) as n from events where ts > now() - interval 7 day group by all order by n desc",
+    "select date, sum(count) as events, max(users) as users from events_daily group by all order by date",
+    "select data->>'$.plan' as plan, count(distinct user_id) as users from events where event like 'checkout%' group by all",
+  ]
+
+  class {
+    init() {
+      this.state.apps = []
+      this.state.app = Pjax.hqs('app') || ''
+      this.state.filter = Pjax.hqs('f') || ''
+      this.state.range = RANGES.includes(Pjax.hqs('range')) ? Pjax.hqs('range') : '30d'
+      this.state.tab = ['latest', 'views', 'sql'].includes(Dboss.readQs('tab')) ? Dboss.readQs('tab') : 'overview'
+      this.state.selectTab = (tab) => this.setTab(tab)
+      this.state.summary = null
+      this.state.columns = []
+      this.state.legend = []
+      this.state.eventRows = []
+      this.state.eventNames = []
+      this.state.peak = 0
+      this.state.latest = null
+      this.state.openRow = -1
+      this.state.catalog = null
+      this.state.result = null
+      this.state.sqlError = ''
+      this.state.running = false
+      this.state.funnelResult = null
+      this.state.funnelGroups = []
+      this.state.funnelError = ''
+      this.state.funnelTitle = ''
+      this.state.funnelRunning = false
+      this.state.steps = [{ id: 1 }, { id: 2 }]
+      this.state.stepSeq = 2
+      this.state.stepFill = null
+      this.state.suggest = []
+      this.state.suggestIndex = 0
+      this.state.suggestSeq = 0
+      this.state.pendingDelete = ''
+      this.state.saving = false
+      this.state.loading = false
+      this.state.error = ''
+      this.state.needsSelectSync = false
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    // The app and range selects and the filter input are fez:this refs, written after the render
+    // that needs it, so typing or picking never fights a re-render.
+    afterRender() {
+      if (this.state.needsSelectSync) {
+        this.state.needsSelectSync = false
+        if (this.state.appSelect) this.state.appSelect.value = this.state.app
+        if (this.state.rangeSelect) this.state.rangeSelect.value = this.state.range
+        if (this.state.filterNode && this.state.filterNode !== document.activeElement) this.state.filterNode.value = this.state.filter
+      }
+      const fill = this.state.stepFill
+      if (fill) {
+        this.state.stepFill = null
+        this.fillBuilder(fill)
+      }
+    }
+
+    async load() {
+      this.state.loading = true
+      try {
+        const fleet = await Dboss.api('/api/apps')
+        this.state.apps = (fleet.apps || []).map((app) => app.name).sort()
+        if (!this.state.apps.includes(this.state.app)) this.state.app = this.state.apps[0] || ''
+        Dboss.setQs('app', this.state.app)
+        this.state.needsSelectSync = true
+        if (this.state.app) {
+          await this.loadViews()
+          await this.loadTab()
+        }
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    async loadTab() {
+      if (!this.state.app) return
+      this.state.loading = true
+      try {
+        if (this.state.tab === 'overview') await this.loadSummary()
+        if (this.state.tab === 'latest') await this.loadLatest()
+        if (this.state.tab === 'views' || this.state.tab === 'sql') await this.loadViews()
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.loading = false
+      }
+    }
+
+    async loadSummary() {
+      const params = new URLSearchParams({ app: this.state.app, filter: this.effectiveFilter() })
+      const data = await Dboss.api(`/api/events?${params}`)
+      this.shape(data.summary)
+    }
+
+    async loadLatest() {
+      const params = new URLSearchParams({ app: this.state.app, filter: this.effectiveFilter(), limit: '100' })
+      const data = await Dboss.api(`/api/events/latest?${params}`)
+      this.state.openRow = -1
+      this.state.latest = data.events || []
+    }
+
+    async loadViews() {
+      const data = await Dboss.api(`/api/events/views?${new URLSearchParams({ app: this.state.app })}`)
+      this.state.catalog = this.normalizeCatalog(data.views)
+    }
+
+    normalizeCatalog(views) {
+      views = views || {}
+      return { views: views.views || [], funnels: views.funnels || [], shadowed: views.shadowed || [], status: views.status || {} }
+    }
+
+    pickApp(name) {
+      this.state.app = name
+      Dboss.setQs('app', name)
+      this.state.summary = null
+      this.state.latest = null
+      this.state.result = null
+      this.state.funnelResult = null
+      this.load()
+    }
+
+    pickRange(value) {
+      this.state.range = value
+      Dboss.setQs('range', value === '30d' ? '' : value)
+      this.loadTab()
+    }
+
+    setTab(tab) {
+      this.state.tab = tab
+      Dboss.setQs('tab', tab === 'overview' ? '' : tab)
+      this.closeSuggest()
+      this.loadTab()
+    }
+
+    // effectiveFilter adds the range select unless the filter names its own window.
+    effectiveFilter(filter = this.state.filter) {
+      if (/(^|\s)(since|from|to)=/.test(filter)) return filter
+      return `${filter} since=${this.state.range}`.trim()
+    }
+
+    applyFilter() {
+      const node = this.state.filterNode
+      this.state.filter = node ? node.value.trim() : ''
+      Dboss.setQs('f', this.state.filter)
+      this.closeSuggest()
+      this.loadTab()
+    }
+
+    setFilter(text) {
+      if (this.state.filterNode) this.state.filterNode.value = text
+      this.applyFilter()
+    }
+
+    addTerm(term) {
+      const node = this.state.filterNode
+      const current = node ? node.value.trim() : this.state.filter
+      if (current.split(/\s+/).includes(term)) return
+      this.setFilter(`${current} ${term}`.trim())
+    }
+
+    useEvent(index) {
+      const row = this.state.eventRows[index]
+      if (row) this.setFilter(row.event)
+    }
+
+    addTag(rowIndex, tagIndex) {
+      const row = this.state.latest[rowIndex]
+      const tag = row && row.tags[tagIndex]
+      if (tag) this.addTerm(tag.includes(':') ? tag : `#${tag}`)
+    }
+
+    // --- autocomplete ---
+
+    filterKeydown(event) {
+      const open = this.state.suggest.length > 0
+      if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault()
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        this.state.suggestIndex = (this.state.suggestIndex + step + this.state.suggest.length) % this.state.suggest.length
+        return
+      }
+      if (open && (event.key === 'Enter' || event.key === 'Tab')) {
+        event.preventDefault()
+        this.pick(this.state.suggestIndex)
+        return
+      }
+      if (event.key === 'Escape') {
+        this.closeSuggest()
+        return
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        this.applyFilter()
+      }
+    }
+
+    filterInput() {
+      clearTimeout(this.state.suggestTimer)
+      this.state.suggestTimer = setTimeout(() => this.suggestFor(), 200)
+    }
+
+    hideSuggest() {
+      clearTimeout(this.state.suggestTimer)
+      this.state.suggestTimer = setTimeout(() => this.closeSuggest(), 150)
+    }
+
+    closeSuggest() {
+      this.state.suggestSeq += 1
+      if (this.state.suggest.length) this.state.suggest = []
+    }
+
+    // token is the whitespace-delimited word under the caret.
+    token() {
+      const node = this.state.filterNode
+      const text = node.value
+      const at = node.selectionStart == null ? text.length : node.selectionStart
+      let start = at
+      while (start > 0 && !/\s/.test(text[start - 1])) start -= 1
+      let end = at
+      while (end < text.length && !/\s/.test(text[end])) end += 1
+      return { text, start, end, word: text.slice(start, end) }
+    }
+
+    async suggestFor() {
+      const node = this.state.filterNode
+      if (!node || !this.state.app || node !== document.activeElement) return
+      const { text, start, end, word } = this.token()
+      const negate = word.startsWith('-') ? '-' : ''
+      const raw = word.slice(negate.length)
+      const colon = raw.indexOf(':')
+      let key = null
+      let prefix = ''
+      let kind = ''
+      if (raw.startsWith('#')) {
+        key = '#'; prefix = raw.slice(1); kind = 'label'
+      } else if (raw.startsWith('data.') && !/[=<>]/.test(raw)) {
+        key = 'data.'; prefix = raw.slice(5); kind = 'data'
+      } else if (colon > 0 && /^[A-Za-z0-9_.-]+$/.test(raw.slice(0, colon))) {
+        key = raw.slice(0, colon); prefix = raw.slice(colon + 1); kind = 'tag'
+      } else if (/^[a-z0-9_]*$/.test(raw) && raw) {
+        // A bare word is an event: complete it from the names the summary has seen.
+        const items = this.state.eventNames.filter((name) => name.startsWith(raw) && name !== raw).slice(0, 12)
+        this.showSuggest(items.map((name) => ({ insert: negate + name, label: name, count: '', type: 'event', more: false })))
+        return
+      } else if (raw === '') {
+        key = ''; kind = 'key'
+      } else {
+        this.closeSuggest()
+        return
+      }
+      const rest = `${text.slice(0, start)} ${text.slice(end)}`.trim()
+      const seq = ++this.state.suggestSeq
+      try {
+        const params = new URLSearchParams({ app: this.state.app, filter: this.effectiveFilter(rest), key })
+        const data = await Dboss.api(`/api/events/facets?${params}`)
+        if (seq !== this.state.suggestSeq) return
+        const lower = prefix.toLowerCase()
+        const items = (data.facets || [])
+          .filter((facet) => facet.value.toLowerCase().startsWith(lower) && !/[\s,]/.test(facet.value))
+          .slice(0, 12)
+          .map((facet) => {
+            const value = { label: `#${facet.value}`, data: `data.${facet.value}`, tag: `${key}:${facet.value}`, key: `${facet.value}:` }[kind]
+            return { insert: negate + value, label: value, count: this.number(facet.count), type: facet.type || '', more: kind === 'key' }
+          })
+        this.showSuggest(items)
+      } catch {
+        if (seq === this.state.suggestSeq) this.closeSuggest()
+      }
+    }
+
+    showSuggest(items) {
+      this.state.suggest = items
+      this.state.suggestIndex = 0
+    }
+
+    pick(index) {
+      const item = this.state.suggest[index]
+      const node = this.state.filterNode
+      if (!item || !node) return
+      const { text, start, end } = this.token()
+      const tail = item.more ? '' : ' '
+      node.value = text.slice(0, start) + item.insert + tail + text.slice(end).replace(/^\s+/, '')
+      const caret = start + item.insert.length + tail.length
+      node.focus()
+      node.setSelectionRange(caret, caret)
+      this.closeSuggest()
+      if (item.more) this.suggestFor()
+    }
+
+    // --- overview ---
+
+    // shape derives the chart once per load: one column per UTC day, stacked by the busiest
+    // events, so a render only reads it.
+    shape(summary) {
+      const days = summary.days || []
+      const totals = {}
+      const rows = {}
+      for (const day of days) {
+        totals[day.event] = (totals[day.event] || 0) + day.count
+        const key = `${day.ns}/${day.event}`
+        rows[key] = rows[key] || { ns: day.ns, event: day.event, count: 0, value: 0 }
+        rows[key].count += day.count
+        rows[key].value += day.value_sum
+      }
+      const top = Object.keys(totals).sort((a, b) => totals[b] - totals[a]).slice(0, TOP_EVENTS)
+      const dates = []
+      const first = Date.parse(`${summary.from}T00:00:00Z`)
+      const last = Date.parse(`${summary.to}T00:00:00Z`)
+      for (let at = first; at <= last && dates.length < 400; at += 86400000) dates.push(new Date(at).toISOString().slice(0, 10))
+      const byDate = {}
+      for (const day of days) {
+        const slot = top.indexOf(day.event)
+        const series = slot < 0 ? TOP_EVENTS : slot
+        byDate[day.date] = byDate[day.date] || new Array(TOP_EVENTS + 1).fill(0)
+        byDate[day.date][series] += day.count
+      }
+      let peak = 0
+      for (const date of dates) peak = Math.max(peak, (byDate[date] || []).reduce((sum, n) => sum + n, 0))
+      this.state.columns = dates.map((date) => {
+        const counts = byDate[date] || new Array(TOP_EVENTS + 1).fill(0)
+        const total = counts.reduce((sum, n) => sum + n, 0)
+        return {
+          style: `height: ${peak ? Math.max(total ? 2 : 0, (total / peak) * 100) : 0}%`,
+          title: `${date} · ${this.number(total)} events`,
+          parts: counts.map((count, series) => ({ series, count })).filter((part) => part.count > 0).reverse().map((part) => ({ series: part.series, style: `flex-grow: ${part.count}` })),
+        }
+      })
+      const legend = top.map((name, series) => ({ name, series }))
+      if (Object.keys(totals).length > TOP_EVENTS) legend.push({ name: 'other', series: TOP_EVENTS })
+      this.state.legend = legend
+      this.state.peak = peak
+      this.state.eventRows = Object.values(rows).sort((a, b) => b.count - a.count)
+      this.state.eventNames = Object.keys(totals).sort()
+      this.state.summary = summary
+    }
+
+    share(count) {
+      const total = Number((this.state.summary && this.state.summary.count) || 0)
+      return `width: ${total ? Math.max(1, (count / total) * 100) : 0}%`
+    }
+
+    edgeLabel(last) {
+      const summary = this.state.summary
+      return summary ? (last ? summary.to : summary.from) : ''
+    }
+
+    // --- latest ---
+
+    toggleRow(index) {
+      this.state.openRow = this.state.openRow === index ? -1 : index
+    }
+
+    who(row) {
+      const person = row.user_id || row.anon_id || '-'
+      return row.tenant_id ? `${person} @${row.tenant_id}` : person
+    }
+
+    pretty(data) {
+      if (!data) return ''
+      try {
+        return JSON.stringify(JSON.parse(data), null, 2)
+      } catch {
+        return data
+      }
+    }
+
+    requestLink(id) {
+      return `/#/logs?${new URLSearchParams({ app: this.state.app, channel: 'request', range: 'all', q: id })}`
+    }
+
+    // --- views and funnels ---
+
+    duckdb() {
+      return this.state.catalog && this.state.catalog.status.duckdb
+    }
+
+    missing() {
+      const status = (this.state.catalog && this.state.catalog.status) || {}
+      return status.missing || 'SQL and funnels need the duckdb CLI 1.3 or newer on the PATH of the dboss service.'
+    }
+
+    loadView(index) {
+      const view = this.state.catalog.views[index]
+      if (!view) return
+      this.setTab('overview')
+      this.setFilter(view.filter)
+    }
+
+    startSave() {
+      this.state.saving = true
+    }
+
+    cancelSave() {
+      this.state.saving = false
+    }
+
+    async saveView() {
+      const name = this.state.viewNameNode ? this.state.viewNameNode.value.trim() : ''
+      const filter = this.state.filterNode ? this.state.filterNode.value.trim() : this.state.filter
+      if (!name) return
+      try {
+        const data = await Dboss.api('/api/events/views', { method: 'POST', body: JSON.stringify({ app: this.state.app, kind: 'view', entry: { name, filter } }) })
+        this.state.catalog = this.normalizeCatalog(data.views)
+        this.state.saving = false
+        Toast.show(`View ${name} saved`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    askDelete(kind, index) {
+      const entry = this.entry(kind, index)
+      if (entry) this.state.pendingDelete = `${kind}:${entry.name}`
+    }
+
+    cancelDelete() {
+      this.state.pendingDelete = ''
+    }
+
+    async confirmDelete(kind, index) {
+      const entry = this.entry(kind, index)
+      if (!entry) return
+      try {
+        await Dboss.api('/api/events/views/delete', { method: 'POST', body: JSON.stringify({ app: this.state.app, kind, name: entry.name }) })
+        this.state.pendingDelete = ''
+        Toast.show(`${kind === 'view' ? 'View' : 'Funnel'} ${entry.name} deleted`)
+        await this.loadViews()
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    entry(kind, index) {
+      const list = kind === 'view' ? this.state.catalog.views : this.state.catalog.funnels
+      return list[index]
+    }
+
+    deleting(kind, name) {
+      return this.state.pendingDelete === `${kind}:${name}`
+    }
+
+    // yamlFor is the dboss.yaml block of a console entry, so it can move into the app's config.
+    yamlFor(kind, entry) {
+      const quote = (text) => JSON.stringify(text || '')
+      if (kind === 'view') return `events:\n  views:\n    ${entry.name}: ${quote(entry.filter)}\n`
+      const lines = ['events:', '  funnels:', `    ${entry.name}:`, `      by: ${entry.by || 'user'}`, `      window: ${entry.window || '7d'}`]
+      if (entry.breakdown) lines.push(`      breakdown: ${entry.breakdown}`)
+      lines.push('      steps:')
+      for (const step of entry.steps || []) lines.push(`        - {name: ${quote(step.name)}, filter: ${quote(step.filter)}}`)
+      return `${lines.join('\n')}\n`
+    }
+
+    async copyYaml(kind, index) {
+      const entry = this.entry(kind, index)
+      if (!entry) return
+      try {
+        await navigator.clipboard.writeText(this.yamlFor(kind, entry))
+        Toast.show('YAML copied')
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    funnelLine(funnel) {
+      const steps = (funnel.steps || []).map((step) => step.name || step.filter).join(' → ')
+      return `by ${funnel.by || 'user'} within ${funnel.window || '7d'}${funnel.breakdown ? `, by ${funnel.breakdown}` : ''}: ${steps}`
+    }
+
+    // --- funnel builder ---
+
+    addStep() {
+      if (this.state.steps.length >= 10) return
+      this.state.stepSeq += 1
+      this.state.steps.push({ id: this.state.stepSeq })
+    }
+
+    removeStep(index) {
+      if (this.state.steps.length <= 2) return
+      this.state.steps.splice(index, 1)
+    }
+
+    builder() {
+      const value = (node) => (node ? node.value.trim() : '')
+      const steps = []
+      for (const step of this.state.steps) {
+        const name = this.find(`[data-step-name="${step.id}"]`)
+        const filter = this.find(`[data-step-filter="${step.id}"]`)
+        steps.push({ name: value(name), filter: value(filter) })
+      }
+      return {
+        name: value(this.state.fnName),
+        by: value(this.state.fnBy) || 'user',
+        window: value(this.state.fnWindow) || '7d',
+        breakdown: value(this.state.fnBreakdown),
+        steps,
+      }
+    }
+
+    editFunnel(index) {
+      const funnel = this.state.catalog.funnels[index]
+      if (!funnel) return
+      const steps = funnel.steps || []
+      this.state.steps = steps.map(() => ({ id: ++this.state.stepSeq }))
+      this.state.stepFill = funnel
+    }
+
+    fillBuilder(funnel) {
+      const set = (node, value) => { if (node) node.value = value || '' }
+      set(this.state.fnName, funnel.source === 'yaml' ? `${funnel.name}_copy` : funnel.name)
+      set(this.state.fnBy, funnel.by || 'user')
+      set(this.state.fnWindow, funnel.window || '7d')
+      set(this.state.fnBreakdown, funnel.breakdown)
+      this.state.steps.forEach((step, index) => {
+        const source = (funnel.steps || [])[index] || {}
+        set(this.find(`[data-step-name="${step.id}"]`), source.name)
+        set(this.find(`[data-step-filter="${step.id}"]`), source.filter)
+      })
+    }
+
+    async runFunnel(index) {
+      const saved = index === undefined ? null : this.state.catalog.funnels[index]
+      const body = saved
+        ? { app: this.state.app, name: saved.name, filter: `since=${this.state.range}` }
+        : { app: this.state.app, funnel: this.builder(), filter: `since=${this.state.range}` }
+      this.state.funnelRunning = true
+      this.state.funnelError = ''
+      try {
+        const data = await Dboss.api('/api/events/funnel', { method: 'POST', body: JSON.stringify(body) })
+        this.state.funnelTitle = saved ? saved.name : (body.funnel.name || 'draft')
+        this.state.funnelResult = data.result
+        this.state.funnelGroups = this.groupFunnel(data.result)
+      } catch (error) {
+        this.state.funnelResult = null
+        this.state.funnelGroups = []
+        this.state.funnelError = error.message
+      } finally {
+        this.state.funnelRunning = false
+      }
+    }
+
+    async saveFunnel() {
+      const funnel = this.builder()
+      try {
+        const data = await Dboss.api('/api/events/views', { method: 'POST', body: JSON.stringify({ app: this.state.app, kind: 'funnel', entry: funnel }) })
+        this.state.catalog = this.normalizeCatalog(data.views)
+        Toast.show(`Funnel ${funnel.name} saved`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    groupFunnel(result) {
+      const at = (name) => result.columns.indexOf(name)
+      const groups = new Map()
+      for (const row of result.rows || []) {
+        const breakdown = row[at('breakdown')]
+        const label = breakdown === null || breakdown === undefined ? 'All' : String(breakdown)
+        if (!groups.has(label)) groups.set(label, [])
+        const pct = Number(row[at('pct_of_first')] || 0)
+        groups.get(label).push({
+          name: row[at('name')] || `Step ${row[at('step')]}`,
+          actors: this.number(row[at('actors')]),
+          pct: `${pct}%`,
+          bar: `width: ${Math.max(pct ? 1 : 0, Math.min(100, pct))}%`,
+          previous: row[at('pct_of_previous')] === null ? '' : `${row[at('pct_of_previous')]}% of previous`,
+          median: this.seconds(row[at('median_seconds')]),
+        })
+      }
+      return [...groups].map(([label, steps]) => ({ label, steps }))
+    }
+
+    // --- SQL ---
+
+    async runSQL() {
+      const node = this.state.sqlNode
+      const sql = node ? node.value.trim() : ''
+      if (!sql || this.state.running) return
+      this.state.running = true
+      this.state.sqlError = ''
+      try {
+        const data = await Dboss.api('/api/events/query', { method: 'POST', body: JSON.stringify({ app: this.state.app, sql }) })
+        this.state.result = data.result
+      } catch (error) {
+        this.state.result = null
+        this.state.sqlError = error.message
+      } finally {
+        this.state.running = false
+      }
+    }
+
+    sqlKeydown(event) {
+      if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+      event.preventDefault()
+      this.runSQL()
+    }
+
+    loadExample(index) {
+      if (this.state.sqlNode) this.state.sqlNode.value = EXAMPLES[index]
+    }
+
+    examples() {
+      return EXAMPLES
+    }
+
+    savedNames() {
+      const catalog = this.state.catalog
+      if (!catalog) return ''
+      return [...catalog.views.map((view) => view.name), ...catalog.funnels.map((funnel) => `funnel_${funnel.name}`)].join(', ')
+    }
+
+    savedHint() {
+      const names = this.savedNames()
+      return names ? `, ${names}` : ''
+    }
+
+    rawNote() {
+      const from = this.state.summary && this.state.summary.raw_from
+      return from ? `raw events since ${from}` : 'no raw events yet'
+    }
+
+    cell(value) {
+      if (value === null || value === undefined) return 'NULL'
+      return typeof value === 'object' ? JSON.stringify(value) : value
+    }
+
+    // --- formatting ---
+
+    number(value) {
+      return new Intl.NumberFormat().format(Math.round(Number(value || 0)))
+    }
+
+    amount(value) {
+      return new Intl.NumberFormat([], { maximumFractionDigits: 2 }).format(Number(value || 0))
+    }
+
+    bytes(value) {
+      let amount = Number(value || 0)
+      if (amount < 1024) return `${amount} B`
+      const units = ['KB', 'MB', 'GB', 'TB']
+      let unit = units[0]
+      amount /= 1024
+      for (let index = 1; amount >= 1024 && index < units.length; index += 1) {
+        amount /= 1024
+        unit = units[index]
+      }
+      return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`
+    }
+
+    seconds(value) {
+      if (value === null || value === undefined) return ''
+      let left = Math.round(Number(value))
+      const parts = []
+      for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60]]) {
+        if (left >= size) {
+          parts.push(`${Math.floor(left / size)}${unit}`)
+          left %= size
+        }
+        if (parts.length === 2) break
+      }
+      if (parts.length < 2 && (left || !parts.length)) parts.push(`${left}s`)
+      return `median ${parts.join(' ')}`
+    }
+
+    stamp(value) {
+      const date = new Date(value)
+      return isNaN(date.getTime()) ? value : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Events</p>
+    <h1 class="page-title">Analytics events</h1>
+  </div>
+  <div class="page-actions traffic-filters">
+    <select fez:this="appSelect" aria-label="App" onchange="fez.pickApp(this.value)">
+      {#each state.apps as name}
+        <option value={name}>{name}</option>
+      {/each}
+    </select>
+    <select fez:this="rangeSelect" aria-label="Range" onchange="fez.pickRange(this.value)">
+      <option value="24h">Last 24 hours</option>
+      <option value="7d">Last 7 days</option>
+      <option value="30d">Last 30 days</option>
+      <option value="90d">Last 90 days</option>
+    </select>
+    <button class="btn" type="button" onclick="fez.loadTab()" disabled={state.loading}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      {state.loading ? 'Loading' : 'Refresh'}
+    </button>
+  </div>
+</div>
+
+<section class="card ev-filter-card">
+  <div class="ev-filter">
+    <div class="ev-filter-box">
+      <input class="ev-filter-input" fez:this="filterNode" fez:keep="ev-filter-input" type="text" spellcheck="false" autocomplete="off" aria-label="Filter" placeholder="checkout_completed plan:pro -#internal value>10 user=u_42" onkeydown="fez.filterKeydown(event)" oninput="fez.filterInput()" onfocus="fez.filterInput()" onblur="fez.hideSuggest()" />
+      {#if state.suggest.length}
+        <div class="ev-suggest" role="listbox">
+          {#each state.suggest as item}
+            <div class="ev-suggest-item" class:active={i === state.suggestIndex} role="option" onmousedown="event.preventDefault(); fez.pick({i})">
+              <span class="ev-suggest-label">{item.label}</span>
+              <span class="ev-suggest-meta">{item.type} {item.count}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <button class="btn btn-primary" type="button" onclick="fez.applyFilter()">
+      <svg class="icon"><use href="#i-search"></use></svg>
+      Apply
+    </button>
+  </div>
+  <p class="ev-filter-help text-muted">A word is the event (<code>a,b</code>, <code>checkout_*</code>) · <code>plan:pro</code> tag · <code>plan:</code> any value · <code>#beta</code> label · <code>user= anon= tenant= ns= country= req=</code> · <code>value&gt;10</code> · <code>data.key=v</code> · <code>"text"</code> in msg · <code>since=7d</code> · <code>-</code> negates</p>
+</section>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#if state.catalog && !state.catalog.status.enabled}
+  <div class="alert">Events are off for this app (<code>events.retention: 0</code>): nothing new is ingested; what is stored can still be read.</div>
+{/if}
+
+{#if !state.app}
+  <div class="card empty-state">
+    {#if state.loading}
+      <span class="spinner" aria-hidden="true"></span>
+      <strong>Loading apps</strong>
+    {:else}
+      <strong>No app to show</strong>
+      <span>Events appear once an app writes to log/&#60;ns&#62;.json.log.</span>
+    {/if}
+  </div>
+{:else}
+  <ui-tabs tabs="overview:Overview,latest:Latest,views:Views and funnels,sql:SQL" active={state.tab} :onselect="state.selectTab" />
+
+  {#if state.tab === 'overview'}
+    {#if !state.summary}
+      <div class="card empty-state">
+        <span class="spinner" aria-hidden="true"></span>
+        <strong>Counting events</strong>
+      </div>
+    {:else}
+      <section class="stat-row" aria-label="Events summary">
+        <article class="card stat-card">
+          <span class="subheader">Events</span>
+          <strong class="stat-value">{number(state.summary.count)}</strong>
+          <span class="text-muted">{state.summary.from} – {state.summary.to}</span>
+        </article>
+        <article class="card stat-card">
+          <span class="subheader">{state.summary.scanned ? 'Users' : 'Users (busiest day)'}</span>
+          <strong class="stat-value">{number(state.summary.users)}</strong>
+          <span class="text-muted">{number(state.summary.anons)} anonymous</span>
+        </article>
+        <article class="card stat-card">
+          <span class="subheader">Value</span>
+          <strong class="stat-value">{amount(state.summary.value_sum)}</strong>
+          <span class="text-muted">sum of value</span>
+        </article>
+        <article class="card stat-card">
+          <span class="subheader">On disk</span>
+          <strong class="stat-value">{bytes(state.summary.bytes)}</strong>
+          <span class="text-muted">{rawNote()}</span>
+        </article>
+      </section>
+
+      <div class="section-head">
+        <h2>Events per day</h2>
+        <div class="traffic-legend">
+          {#each state.legend as item}
+            <span class="ev-legend" data-series={item.series}>{item.name}</span>
+          {/each}
+        </div>
+      </div>
+      <section class="card traffic-chart-card">
+        {#if state.peak}
+          <div class="traffic-chart" role="img" aria-label="Events per day, stacked by event">
+            {#each state.columns as column}
+              <div class="traffic-slot" title={column.title}>
+                <div class="traffic-col" style={column.style}>
+                  {#each column.parts as part}
+                    <span class="ev-part" data-series={part.series} style={part.style}></span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+          <div class="traffic-axis">
+            <span>{edgeLabel(false)}</span>
+            <span>{edgeLabel(true)}</span>
+          </div>
+        {:else}
+          <div class="traffic-none">No events in this range.</div>
+        {/if}
+      </section>
+
+      <div class="section-head">
+        <h2>By event</h2>
+        <span class="text-muted">{state.summary.scanned ? 'Counted from the raw events' : 'Counted from the daily indexes'}</span>
+      </div>
+      <section class="card traffic-list ev-events">
+        <div class="sys-row sys-head">
+          <span class="subheader">Namespace</span>
+          <span class="subheader">Event</span>
+          <span class="subheader num">Count</span>
+          <span class="subheader num">Value</span>
+          <span class="subheader">Share</span>
+        </div>
+        {#each state.eventRows as row}
+          <div class="sys-row ev-click" onclick="fez.useEvent({i})" title="Filter by this event">
+            <span class="text-muted">{row.ns}</span>
+            <span class="service-name">{row.event}</span>
+            <span class="num">{number(row.count)}</span>
+            <span class="num">{amount(row.value)}</span>
+            <span class="meter"><span style={share(row.count)}></span></span>
+          </div>
+        {:else}
+          <div class="sys-row sys-empty text-muted">No events match. Apps write them to log/&#60;ns&#62;.json.log, one JSON object per line.</div>
+        {/each}
+      </section>
+    {/if}
+  {/if}
+
+  {#if state.tab === 'latest'}
+    <div class="section-head">
+      <h2>Latest events</h2>
+      <span class="text-muted">The newest 100 matching events, newest first</span>
+    </div>
+    <section class="card traffic-list ev-latest">
+      <div class="sys-row sys-head">
+        <span class="subheader">Time</span>
+        <span class="subheader">Namespace</span>
+        <span class="subheader">Event</span>
+        <span class="subheader">Who</span>
+        <span class="subheader">Tags</span>
+        <span class="subheader">Message</span>
+      </div>
+      {#if !state.latest}
+        <div class="sys-row sys-empty text-muted">Reading events…</div>
+      {:else}
+        {#each state.latest as row, r}
+          <div class="sys-row ev-click" class:active={state.openRow === r} onclick="fez.toggleRow({r})">
+            <span class="text-muted ev-time">{stamp(row.ts)}</span>
+            <span class="text-muted">{row.ns}</span>
+            <span class="service-name">{row.event}</span>
+            <span class="ev-who">{who(row)}</span>
+            <span class="ev-chips">
+              {#each row.tags as tag, t}
+                <button class="ev-chip" type="button" onclick="event.stopPropagation(); fez.addTag({r}, {t})" title="Add to the filter">{tag}</button>
+              {/each}
+            </span>
+            <span class="ev-msg">{row.msg || ''}</span>
+          </div>
+          {#if state.openRow === r}
+            <div class="ev-detail">
+              <div class="datagrid">
+                <div class="datagrid-item"><span class="subheader">Value</span><span class="datagrid-content">{row.value === undefined ? '-' : row.value}</span></div>
+                <div class="datagrid-item"><span class="subheader">Country</span><span class="datagrid-content">{row.country || '-'}</span></div>
+                <div class="datagrid-item"><span class="subheader">User / anon</span><span class="datagrid-content">{row.user_id || '-'} / {row.anon_id || '-'}</span></div>
+                <div class="datagrid-item">
+                  <span class="subheader">Request</span>
+                  <span class="datagrid-content">
+                    {#if row.request_id}
+                      <a href={requestLink(row.request_id)} target="_blank" rel="noreferrer">{row.request_id}</a>
+                    {:else}
+                      -
+                    {/if}
+                  </span>
+                </div>
+              </div>
+              {#if row.data}
+                <pre class="ev-json">{pretty(row.data)}</pre>
+              {/if}
+            </div>
+          {/if}
+        {:else}
+          <div class="sys-row sys-empty text-muted">No events match in this range.</div>
+        {/each}
+      {/if}
+    </section>
+  {/if}
+
+  {#if state.tab === 'views' && state.catalog}
+    <div class="section-head">
+      <h2>Files</h2>
+    </div>
+    <section class="card">
+      <div class="datagrid ev-status">
+        <div class="datagrid-item"><span class="subheader">Events directory</span><code class="datagrid-content">{state.catalog.status.dir}</code></div>
+        <div class="datagrid-item"><span class="subheader">views.sql</span><code class="datagrid-content">{state.catalog.status.views_sql}</code></div>
+        <div class="datagrid-item"><span class="subheader">DuckDB</span><span class="datagrid-content">{state.catalog.status.duckdb || 'not found'}</span></div>
+        <div class="datagrid-item"><span class="subheader">From a shell</span><code class="datagrid-content">duckdb -cmd ".read {state.catalog.status.views_sql}"</code></div>
+      </div>
+      {#if !duckdb()}
+        <p class="text-muted sql-note">{missing()}</p>
+      {/if}
+    </section>
+
+    <div class="section-head">
+      <h2>Saved views</h2>
+      <div class="card-actions">
+        {#if state.saving}
+          <input fez:this="viewNameNode" type="text" placeholder="pro_checkouts" aria-label="View name" onkeydown="if (event.key === 'Enter') fez.saveView()" />
+          <button class="btn btn-primary btn-sm" type="button" onclick="fez.saveView()">Save</button>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="fez.cancelSave()">Cancel</button>
+        {:else}
+          <button class="btn btn-sm" type="button" onclick="fez.startSave()" title="Save the filter above as a view">
+            <svg class="icon"><use href="#i-save"></use></svg>
+            Save current filter
+          </button>
+        {/if}
+      </div>
+    </div>
+    <section class="card traffic-list ev-saved">
+      {#each state.catalog.views as view}
+        <div class="sys-row">
+          <a class="service-name traffic-key" href="#" onclick="event.preventDefault(); fez.loadView({i})" title="Show this view">{view.name}</a>
+          <code class="ev-def">{view.filter}</code>
+          <span class="badge" class:badge-success={view.source === 'yaml'}>{view.source}</span>
+          <span class="ev-row-actions">
+            {#if view.source === 'console'}
+              <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.copyYaml('view', {i})" title="Copy as dboss.yaml"><svg class="icon"><use href="#i-copy"></use></svg></button>
+              {#if deleting('view', view.name)}
+                <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.confirmDelete('view', {i})">Delete</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="fez.cancelDelete()">Keep</button>
+              {:else}
+                <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.askDelete('view', {i})" title="Delete"><svg class="icon"><use href="#i-trash"></use></svg></button>
+              {/if}
+            {/if}
+          </span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No saved views. Save the current filter, or declare events.views in the app's dboss.yaml.</div>
+      {/each}
+    </section>
+
+    <div class="section-head">
+      <h2>Funnels</h2>
+    </div>
+    <section class="card traffic-list ev-saved">
+      {#each state.catalog.funnels as funnel}
+        <div class="sys-row">
+          <span class="service-name">{funnel.name}</span>
+          <span class="ev-def">{funnelLine(funnel)}</span>
+          <span class="badge" class:badge-success={funnel.source === 'yaml'}>{funnel.source}</span>
+          <span class="ev-row-actions">
+            <button class="btn btn-sm" type="button" onclick="fez.runFunnel({i})" disabled={!duckdb() || state.funnelRunning} title={duckdb() ? 'Run over the selected range' : missing()}><svg class="icon"><use href="#i-play"></use></svg>Run</button>
+            <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.editFunnel({i})" title="Load into the builder"><svg class="icon"><use href="#i-settings"></use></svg></button>
+            {#if funnel.source === 'console'}
+              <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.copyYaml('funnel', {i})" title="Copy as dboss.yaml"><svg class="icon"><use href="#i-copy"></use></svg></button>
+              {#if deleting('funnel', funnel.name)}
+                <button class="btn btn-sm btn-outline-danger" type="button" onclick="fez.confirmDelete('funnel', {i})">Delete</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="fez.cancelDelete()">Keep</button>
+              {:else}
+                <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.askDelete('funnel', {i})" title="Delete"><svg class="icon"><use href="#i-trash"></use></svg></button>
+              {/if}
+            {/if}
+          </span>
+        </div>
+      {:else}
+        <div class="sys-row sys-empty text-muted">No funnels yet. Build one below or declare events.funnels in the app's dboss.yaml.</div>
+      {/each}
+    </section>
+    {#if state.catalog.shadowed.length}
+      <p class="text-muted ev-note">Saved in the console but hidden by a dboss.yaml entry of the same name: {state.catalog.shadowed.join(', ')}</p>
+    {/if}
+
+    <div class="section-head">
+      <h2>Funnel builder</h2>
+      <span class="text-muted">Each step is a filter; an actor counts once they reach it after the step before, within the window of their first step</span>
+    </div>
+    <section class="card ev-builder">
+      <div class="ev-builder-meta" fez:keep="ev-funnel-meta">
+        <label>Name <input fez:this="fnName" type="text" placeholder="checkout" /></label>
+        <label>By
+          <select fez:this="fnBy">
+            <option value="user">user</option>
+            <option value="anon">anon</option>
+            <option value="tenant">tenant</option>
+          </select>
+        </label>
+        <label>Window <input fez:this="fnWindow" type="text" placeholder="7d" /></label>
+        <label>Breakdown <input fez:this="fnBreakdown" type="text" placeholder="plan, country or data.source" /></label>
+      </div>
+      {#each state.steps as step, s}
+        <div class="ev-step" key={step.id}>
+          <span class="ev-step-no">{s + 1}</span>
+          <span class="ev-step-fields" fez:keep="ev-step-{step.id}">
+            <input data-step-name={step.id} type="text" placeholder="Step name" aria-label="Step name" />
+            <input data-step-filter={step.id} type="text" spellcheck="false" placeholder="page_view page:pricing" aria-label="Step filter" />
+          </span>
+          <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.removeStep({s})" disabled={state.steps.length <= 2} title="Remove step"><svg class="icon"><use href="#i-x"></use></svg></button>
+        </div>
+      {/each}
+      <div class="sql-actions">
+        <button class="btn btn-sm" type="button" onclick="fez.addStep()" disabled={state.steps.length >= 10}><svg class="icon"><use href="#i-plus"></use></svg>Add step</button>
+        <button class="btn btn-primary btn-sm" type="button" onclick="fez.runFunnel()" disabled={!duckdb() || state.funnelRunning}><svg class="icon"><use href="#i-play"></use></svg>{state.funnelRunning ? 'Running' : 'Run'}</button>
+        <button class="btn btn-sm" type="button" onclick="fez.saveFunnel()"><svg class="icon"><use href="#i-save"></use></svg>Save funnel</button>
+        <span class="text-muted">{duckdb() ? 'Runs over the selected range.' : missing()}</span>
+      </div>
+    </section>
+
+    {#if state.funnelError}
+      <div class="alert alert-danger sql-error">{state.funnelError}</div>
+    {/if}
+    {#if state.funnelResult}
+      <div class="section-head">
+        <h2>{state.funnelTitle}</h2>
+        <span class="text-muted">{number(state.funnelResult.duration_ms)} ms</span>
+      </div>
+      {#each state.funnelGroups as group}
+        <section class="card ev-funnel">
+          {#if state.funnelGroups.length > 1}
+            <h3 class="ev-funnel-group">{group.label}</h3>
+          {/if}
+          {#each group.steps as step}
+            <div class="ev-funnel-step">
+              <span class="service-name">{step.name}</span>
+              <span class="ev-funnel-bar"><span style={step.bar}></span></span>
+              <span class="num">{step.actors}</span>
+              <span class="num">{step.pct}</span>
+              <span class="text-muted">{step.previous} {step.median}</span>
+            </div>
+          {/each}
+        </section>
+      {:else}
+        <div class="card empty-state"><span>No actor reached the first step in this range.</span></div>
+      {/each}
+    {/if}
+  {/if}
+
+  {#if state.tab === 'sql'}
+    {#if state.catalog && !duckdb()}
+      <div class="alert">{missing()}</div>
+    {/if}
+    <div class="section-head">
+      <h2>SQL</h2>
+      <span class="text-muted">DuckDB, read only to this app's events</span>
+    </div>
+    <section class="card sql-runner">
+      <div fez:keep="events-sql-editor">
+        <textarea class="sql-editor" spellcheck="false" placeholder="select event, count(*) from events group by all" fez:this="sqlNode" onkeydown="fez.sqlKeydown(event)"></textarea>
+      </div>
+      <div class="sql-actions">
+        <button class="btn btn-primary" type="button" onclick="fez.runSQL()" disabled={state.running || !duckdb()}>
+          <svg class="icon"><use href="#i-play"></use></svg>
+          {state.running ? 'Running' : 'Run'}
+        </button>
+        <span class="text-muted">Cmd/Ctrl+Enter runs. Every run is audited.</span>
+      </div>
+      <p class="text-muted ev-hint">Views: <code>events</code>, <code>events_daily</code>, <code>facets</code>, <code>data_keys</code>{savedHint()}. Try:
+        {#each examples() as example}
+          <a href="#" onclick="event.preventDefault(); fez.loadExample({i})">example {i + 1}</a>
+        {/each}
+      </p>
+    </section>
+
+    {#if state.sqlError}
+      <div class="alert alert-danger sql-error">{state.sqlError}</div>
+    {/if}
+
+    {#if state.result}
+      <div class="section-head">
+        <h2>Result</h2>
+        <span class="text-muted">{number(state.result.rows ? state.result.rows.length : 0)} rows · {number(state.result.duration_ms)} ms</span>
+      </div>
+      <section class="card">
+        {#if state.result.columns}
+          <div class="sql-result">
+            <table class="sql-table">
+              <thead>
+                <tr>
+                  {#each state.result.columns as column}
+                    <th>{column}</th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each state.result.rows as row}
+                  <tr>
+                    {#each row as value}
+                      <td class:sql-null={value === null}>{cell(value)}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+          {#if state.result.truncated}
+            <p class="text-muted sql-note">Showing the first {number(state.result.rows.length)} rows. Add a LIMIT or aggregate to see the rest.</p>
+          {/if}
+        {:else}
+          <p class="text-muted sql-note">The statement returned no rows.</p>
+        {/if}
+      </section>
+    {/if}
+  {/if}
+{/if}

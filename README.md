@@ -23,6 +23,7 @@ All of it is in the one binary: no sidecars, no agents, no extra database, no YA
 
 * **Routing built in.** Requests reach the right app by hostname, including wildcard and apex patterns, several web processes per app, canonical host redirects and static files served straight off disk.
 * **Logging built in.** Every process log line and every request lands in a per-app SQLite database with full-text search, read from the console or from `dboss logs`, so there is no log pipeline to run.
+* **Analytics built in.** An app writes one JSON event per line to `log/<name>.json.log`; dboss stores the events as Parquet, keeps daily counts and tag facets, and answers filters, saved views, funnels and DuckDB SQL from the console or `dboss events`, with no analytics service to run.
 * **Traffic built in.** Requests over time, error rate, latency quantiles and the top paths, status codes, countries and client IPs, per app.
 * **Effortless deploys.** `dboss deploy sync` pushes the tracked files over ssh and restarts the app, `dboss deploy git` has the box pull and restart with nothing but a token, or push to GitHub or GitLab and a signed webhook does the same, with no runner and no pipeline credentials on the box.
 * **Process supervision.** A procfile per app, workers alongside web processes, several copies of one process behind one host, restart policies with backoff, readiness and liveness checks, and rolling restarts that start the new release next to the old one, so a deploy never drops a request and a broken release never replaces a working one.
@@ -51,6 +52,7 @@ The configuration reference ships in the binary: `dboss config --reference`, als
 * Go 1.25 or newer to build.
 * Linux for production, macOS for development.
 * Nothing else at runtime: the binary embeds the console assets and the configuration reference.
+* Optional: the [duckdb](https://duckdb.org) CLI 1.3 or newer on `PATH` for event SQL and funnels. Events are stored, counted and filtered without it.
 
 ## Install
 
@@ -244,6 +246,7 @@ Apps
   destroy       stop and permanently remove an app with deletable: true
   status        full detail for one app: processes, restarts, resources, request rates
   logs          print or follow the process logs of an app
+  events        count, list and query the analytics events an app writes to log/*.json.log
   maintenance   answer every request with the maintenance page while the app keeps running
   cron          list an app's scheduled jobs, or run one now
   hooks         list an app's deploy hooks with their ping URL, or run one
@@ -380,6 +383,78 @@ The **Logs** route (the **Logs** button on an app card opens `#/logs?app=<name>`
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,
 expands a row to its raw fields and exports the current query as text.
 The current filters live in the hash query, so a view can be bookmarked, shared or reached with Back.
+
+## Events
+
+An app records analytics by appending one JSON object per line to `log/<ns>.json.log` under its folder.
+The file name is the namespace: `log/checkout.json.log` is `checkout`, `log/billing/invoice.json.log` is `billing.invoice`.
+Every other `*.log` stays a plain log in the SQLite store, so structured application logs (lograge and the like) must not use the `.json.log` suffix.
+
+```json
+{"msg": "Checkout completed", "tags": ["beta", "plan:pro"],
+ "data": {"event": "checkout_completed", "user_id": "u_42", "tenant_id": "s_7", "value": 49.9, "coupon": "X"}}
+```
+
+* `event` is required. A line without one, or one that is not JSON, becomes a `warn` row in the app's log viewer, on the file's channel, with the reason.
+* `event`, `ts` (RFC3339 or unix milliseconds, default the time dboss reads the line), `user_id`, `anon_id`, `tenant_id`, `request_id` and `value` move out of `data` (or the top level) into their own columns. What is left of `data` is kept as JSON.
+* `msg` is cut to 255 characters. `tags` is one list for labels (`beta`) and key:value pairs (`plan:pro`); up to 32 are kept, trimmed, deduplicated and sorted.
+* dboss adds `country` from the proxy's request row of `request_id`, and an `eid` from the line's position in the file.
+
+dboss tails these files like any app log (every 5 seconds, by byte offset, never deleting them) and writes each batch as Parquet under `dir/log/<app>/events/ns=<ns>/date=<YYYY-MM-DD>/`, one directory per namespace and UTC day.
+Every process gets that directory as `DBOSS_EVENTS_DIR`.
+At `maintenance_at` each closed day is compacted into one file, deduplicated by `eid` (a batch re-read after a crash) and sorted by tenant, event and time, and three small indexes are written next to it: daily counts (`_daily`), tag facets (`_facets`) and the keys found in `data` (`_keys`).
+`events.retention` (default `365d`) removes raw days; the indexes stay, so counts and facets outlive the events.
+`events.retention: 0` stops ingesting events and keeps what is stored.
+
+**Filters** are one line, used by the console, `dboss events --filter`, funnel steps and saved views:
+
+```
+checkout_completed plan:pro -#internal value>10 data.items>=3 user=u_42 since=7d "timeout"
+```
+
+A bare word is the event name (`checkout,signup` for either, `checkout_*` for a prefix); `plan:pro` a tag pair and `plan:` any value of the key; `#beta` a label; `user=`, `anon=`, `tenant=`, `ns=`, `country=` and `req=` the fixed columns; `value>10` the value; `data.key=v` or `data.n>=3` a key left in `data`; `"text"` a search in `msg`; `since=7d`, `from=2026-09-01` and `to=2026-09-30` the time range.
+Terms are ANDed and a leading `-` negates one.
+Counts, facets and the latest events are read straight from the files; a filter on nothing but events, namespaces and time is answered from the indexes.
+
+**Views and funnels** are named filters and ordered steps, declared in the app's `dboss.yaml` or saved from the console; a `dboss.yaml` entry wins over a console one with the same name.
+
+```yaml
+events:
+  retention: 90d
+  views:
+    pro_checkouts: "checkout_completed plan:pro"
+  funnels:
+    checkout:
+      by: user              # user, anon or tenant
+      window: 7d            # from the actor's first step
+      breakdown: plan       # optional: a field, data.<key> or a tag key
+      steps:
+        - {name: Pricing, filter: "page_view page:pricing"}
+        - {name: Started, filter: "checkout_started"}
+        - {name: Paid, filter: "checkout_completed value>0"}
+```
+
+A funnel counts the actors that reach each step in order within the window, with the share of the first and the previous step and the median time between steps.
+Funnels and SQL run in the `duckdb` CLI, which dboss starts per query with the app's events directory as the only place it may read (`allowed_directories`, external access off, configuration locked), a 30 second timeout and at most 500 rows back; every SQL run is an audited action.
+The views are `events`, `events_daily`, `facets`, `data_keys`, every saved view, and `funnel_<name>` for every funnel.
+dboss keeps the same statements in `events/views.sql`, so the app or a `duckdb` shell reads the same thing:
+
+```ruby
+db = DuckDB::Database.open.connect
+db.query(File.read(File.join(ENV["DBOSS_EVENTS_DIR"], "views.sql")))
+db.query("SELECT event, count(*) FROM events WHERE date >= current_date - 7 GROUP BY ALL")
+```
+
+The Parquet files are written once and replaced whole, so any number of readers can open them next to dboss without a lock.
+
+```
+dboss events [app] [--filter f] [--since 7d]    counts per namespace and event
+dboss events [app] --tail 20                    the newest events
+dboss events [app] --facets plan                values of a tag key; # labels, tags the keys, data. the data keys
+dboss events [app] --sql "SELECT ..."           DuckDB SQL over the views
+dboss events views [app]                        saved views and funnels, the files and views.sql
+dboss events funnel [app] checkout --since 30d  run a funnel
+```
 
 ## Temporary files
 
@@ -850,6 +925,7 @@ It links to the process logs and edits the host and app `dboss.yaml` files in pl
 The **Config** view has two modes: **YAML** edits the raw file, and **Form** offers a visual editor built from recipes (PubSub channels, Web, Health and runtime for an app; Notifications and the PostgreSQL connection for the host).
 Each field shows a friendly label, its key, the description from the key reference and the default as a placeholder; a blank field means "use the default", so the key is removed from the file.
 A form save is written to the server-only `dboss.local.yaml` next to the file (created from the base when missing), so a deploy never overwrites a value entered here.
+The **Events** tab reads an app's events: a filter bar with the filter language and autocomplete for tag values, labels and data keys, counts per day and event, the newest events with their tags and data, saved views and funnels (the `dboss.yaml` ones read-only, console ones saved, deleted or copied as YAML), a funnel builder and a DuckDB SQL box. SQL and saving or deleting a view are audited.
 The **Sys** tab is a read-only inspection of the box: hostname, OS and kernel, public IP, uptime, load, memory and disk use, the dboss runtime, chosen environment variables, and the installed toolchains (Go, Node, npm, Bun, Deno, Yarn, pnpm, Ruby, gem, Bundler, Python, pip, uv, PHP, Composer, Java, SQLite, lsof, rsync, curl, Docker, podman and more) with their paths and versions, each name linked to its project page.
 It never starts, stops or changes anything; the `sysinfo` module keeps the snapshot warm and **Re-inspect** re-probes on demand.
 The **dboss** field names the running build and **Latest release** the newest tag published on GitHub, linked to its release page and badged `up to date` or `update available`, so a box that needs `sudo dboss update` says so.
@@ -945,6 +1021,7 @@ internal/httpx/       request helpers shared by the console, proxy and pubsub
 internal/alerts/      error-rate and slow-request checks over the request log
 internal/logstore/    per-app SQLite log store: requests, channels, FTS search, tail offsets, prune
 internal/ingest/      seals stdout, tails app log files and the dboss daemon log into the store
+internal/events/      *.json.log events as Parquet: contract, compaction, indexes, filters, DuckDB runs
 internal/tmpclean/    daily sweep of each app's ./tmp (tmp_clean)
 internal/diskusage/   daily measurement of what each app occupies on disk
 internal/logx/        leveled logger for dboss's own output (log_level)

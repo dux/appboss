@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"dboss/internal/config"
+	"dboss/internal/events"
 	"dboss/internal/ops"
 	"dboss/internal/res"
 	"dboss/internal/supervisor"
@@ -408,5 +409,49 @@ func TestParseSubcommandFlagsReadsFlagsAfterTheOperand(t *testing.T) {
 	set.String("confirm", "", "")
 	if _, err := parseSubcommandFlags(set, []string{"db", "--nope"}); err == nil {
 		t.Fatal("an unknown flag should still be an error")
+	}
+}
+
+func TestParseEvents(t *testing.T) {
+	c := CLI{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	parse := func(args ...string) (ops.Request, error) {
+		opts, err := commonArgs(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.parseRemote("events", opts, &workdir{})
+	}
+	if request, err := parse("demo", "--filter", "plan:pro", "--since", "7d"); err != nil || request.Method != ops.ActionEvents || request.App != "demo" || request.Query != "plan:pro since=7d" {
+		t.Fatalf("summary = %+v, %v", request, err)
+	}
+	if request, err := parse("demo", "--tail", "20"); err != nil || request.Method != ops.ActionEventsLatest || request.Lines != 20 {
+		t.Fatalf("tail = %+v, %v", request, err)
+	}
+	if request, err := parse("demo", "--facets", "tags"); err != nil || request.Method != ops.ActionEventsFacets || request.Key != "" {
+		t.Fatalf("facets = %+v, %v", request, err)
+	}
+	if request, err := parse("demo", "--sql", "select 1"); err != nil || request.Method != ops.ActionEventsQuery || request.SQL != "select 1" {
+		t.Fatalf("sql = %+v, %v", request, err)
+	}
+	if request, err := parse("funnel", "demo", "checkout", "--since", "30d"); err != nil || request.Method != ops.ActionEventsFunnel || request.App != "demo" || request.Name != "checkout" || request.Query != "since=30d" {
+		t.Fatalf("funnel = %+v, %v", request, err)
+	}
+	if request, err := parse("views", "demo"); err != nil || request.Method != ops.ActionEventsViews || request.App != "demo" {
+		t.Fatalf("views = %+v, %v", request, err)
+	}
+	if _, err := parse("demo", "--tail", "5", "--sql", "select 1"); err == nil {
+		t.Fatal("two modes must fail")
+	}
+}
+
+func TestPrintEventsQuery(t *testing.T) {
+	var out bytes.Buffer
+	c := CLI{Out: &out, Err: &out}
+	result := events.QueryResult{Columns: []string{"event", "n"}, Rows: [][]any{{"checkout", 3}, {nil, map[string]any{"a": 1}}}, RowCount: 2}
+	if err := c.printHuman(ops.ActionEventsQuery, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "EVENT") || !strings.Contains(out.String(), "NULL") || !strings.Contains(out.String(), `{"a":1}`) || !strings.Contains(out.String(), "2 rows") {
+		t.Fatalf("output = %s", out.String())
 	}
 }

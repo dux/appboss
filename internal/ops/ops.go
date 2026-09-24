@@ -15,6 +15,7 @@ import (
 
 	"dboss/internal/config"
 	"dboss/internal/diskusage"
+	"dboss/internal/events"
 	"dboss/internal/logstore"
 	"dboss/internal/notify"
 	"dboss/internal/pg"
@@ -58,6 +59,14 @@ const (
 	ActionPubsubRotate  = "pubsub-rotate"
 	ActionPubsubPublish = "pubsub-publish"
 	ActionAdd           = "add"
+	ActionEvents        = "events"
+	ActionEventsLatest  = "events-latest"
+	ActionEventsFacets  = "events-facets"
+	ActionEventsViews   = "events-views"
+	ActionEventsFunnel  = "events-funnel"
+	ActionEventsQuery   = "events-query"
+	ActionEventsSave    = "events-save"
+	ActionEventsDelete  = "events-delete"
 )
 
 // auditActions are the methods that write an audit row when they run.
@@ -66,6 +75,7 @@ var auditActions = map[string]bool{
 	ActionRescan: true, ActionCronRun: true, ActionHookRun: true, ActionHostHookRun: true, ActionExec: true,
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true, ActionAdd: true,
+	ActionEventsQuery: true, ActionEventsSave: true, ActionEventsDelete: true,
 }
 
 // Runtime is the supervisor surface the service drives.
@@ -189,6 +199,11 @@ type Request struct {
 	Repo   string `json:"repo,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	Host   string `json:"host,omitempty"`
+	// Key, Kind and Name address the events surface: a facet key (plan, #, data.), a saved
+	// entry's kind (view or funnel) and its name.
+	Key  string `json:"key,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -208,6 +223,7 @@ type Service struct {
 	pg       PG
 	pubsub   Pubsub
 	disk     Disk
+	events   *events.Service
 	// previews serializes the built-in github_pr deploys and adds per app, so two pushes to one
 	// branch never race the same checkout while different apps deploy in parallel.
 	previewMu    sync.Mutex
@@ -291,6 +307,22 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return s.pubsubPublish(request.App, request.Process, request.Channel, request.Event, request.Data)
 	case ActionAdd:
 		return s.add(request)
+	case ActionEvents:
+		return s.EventSummary(request.App, request.Query)
+	case ActionEventsLatest:
+		return s.LatestEvents(request.App, request.Query, request.Lines)
+	case ActionEventsFacets:
+		return s.EventFacets(request.App, request.Query, request.Key)
+	case ActionEventsViews:
+		return s.EventViews(request.App)
+	case ActionEventsFunnel:
+		return s.RunFunnel(request.App, request.Name, request.Data, request.Query)
+	case ActionEventsQuery:
+		return s.eventsQuery(request.App, request.SQL)
+	case ActionEventsSave:
+		return nil, s.eventsSave(request.App, request.Kind, request.Data)
+	case ActionEventsDelete:
+		return nil, s.eventsDelete(request.App, request.Kind, request.Name)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -363,6 +395,12 @@ func auditDetail(request Request) string {
 		return request.Database + ": " + pg.QueryAuditDetail(request.SQL)
 	case ActionPubsubPublish:
 		return request.Channel
+	case ActionEventsQuery:
+		return pg.QueryAuditDetail(request.SQL)
+	case ActionEventsSave:
+		return request.Kind + " " + savedName(request.Data)
+	case ActionEventsDelete:
+		return request.Kind + " " + request.Name
 	case ActionAdd:
 		detail := request.Repo
 		if request.Branch != "" {

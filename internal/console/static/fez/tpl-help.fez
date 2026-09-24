@@ -21,6 +21,7 @@
         { id: 'static', title: 'Static & pages', summary: 'Serves assets from disk, and every page dboss answers with from one template you can replace.' },
         { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
+        { id: 'events', title: 'Events', summary: 'Analytics from JSON log lines: counts, filters, tag facets, funnels and SQL over Parquet.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
         { id: 'add', title: 'Add from git', summary: 'Installs a repository that carries its own dboss.yaml from its URL.' },
         { id: 'hooks', title: 'Deploy hooks', summary: 'Commands a signed HTTP ping triggers, plus one-off exec.' },
@@ -253,6 +254,32 @@
     # app file: this one only checks latency
     alerts:
       error_rate: 0
+    `,
+    eventsLine: `
+    {"msg": "Checkout completed", "tags": ["beta", "plan:pro"],
+     "data": {"event": "checkout_completed", "user_id": "u_42", "tenant_id": "s_7", "value": 49.9, "coupon": "X"}}
+    `,
+    eventsFilter: `
+    checkout_completed                  one event (a,b for either, checkout_* for a prefix)
+    plan:pro  plan:  #beta              a tag pair, any value of a key, a label
+    user=u_42  tenant=s_7  country=HR   fixed columns (also anon=, ns=, req=)
+    value>10  data.items>=3             the value, a key left in data
+    "timeout"  -#internal  since=7d     text in msg, a negated term, the time range
+    `,
+    events: `
+    events:
+      retention: 90d
+      views:
+        pro_checkouts: "checkout_completed plan:pro"
+      funnels:
+        checkout:
+          by: user
+          window: 7d
+          breakdown: plan
+          steps:
+            - {name: Pricing, filter: "page_view page:pricing"}
+            - {name: Started, filter: "checkout_started"}
+            - {name: Paid, filter: "checkout_completed value>0"}
     `,
     notify: `
     notify:
@@ -585,6 +612,35 @@
           <li>A path needs 5 requests in the range to show up under slowest paths, so one slow outlier does not top the list.</li>
           <li>Countries come from Cloudflare's <code>CF-IPCountry</code> header, and client IPs from <code>CF-Connecting-IP</code> behind <code>proxy.cloudflare</code>.</li>
           <li>Long-lived pubsub connections are not request rows, so they never skew the latency.</li>
+        </ul>
+      </section>
+    {/if}
+
+    {#if state.topic === 'events'}
+      <section>
+        <h2>Events</h2>
+        <p>An app records analytics by appending one JSON object per line to <code>log/&#60;ns&#62;.json.log</code>. dboss reads those lines like any app log, stores them as Parquet per app, namespace and day, and answers counts, filters, funnels and SQL from the Events tab or <code>dboss events</code>. There is no SDK and no analytics service to run.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Counting what users do (signups, checkouts, feature use) without sending data to a third party.</li>
+          <li>Slicing by tags, user, tenant, country or any key the app puts in <code>data</code>, with autocomplete for the values that exist.</li>
+          <li>Funnels: how many users go from pricing to checkout to paid, within a window, broken down by plan.</li>
+          <li>Reading the same files from the app itself: every process gets <code>DBOSS_EVENTS_DIR</code> and a ready <code>views.sql</code>.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-events"><db-config-keys paths="events.retention,events.views,events.funnels" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.eventsLine" lang="text" />
+        <db-preview-yaml :text="state.examples.eventsFilter" lang="text" />
+        <db-preview-yaml :text="state.examples.events" />
+        <h3>Details</h3>
+        <ul>
+          <li><code>event</code> is required. <code>event</code>, <code>ts</code>, <code>user_id</code>, <code>anon_id</code>, <code>tenant_id</code>, <code>request_id</code> and <code>value</code> move out of <code>data</code> into their own columns; the rest of <code>data</code> stays JSON. <code>msg</code> is cut to 255 characters, <code>tags</code> holds labels and key:value pairs.</li>
+          <li>A line without an event, or one that is not JSON, becomes a warning in the Logs tab on the file's channel. Every other <code>*.log</code> stays a plain log, so structured app logs must not use the <code>.json.log</code> suffix.</li>
+          <li>dboss adds <code>country</code> from the request row of <code>request_id</code>. Files live under <code>dir/log/&#60;app&#62;/events</code>, one directory per namespace and UTC day, compacted each night at <code>maintenance_at</code>.</li>
+          <li><code>events.retention</code> removes raw days; daily counts and tag facets stay, so the chart still covers older days. <code>0</code> stops ingesting.</li>
+          <li>Views and funnels come from the app's <code>dboss.yaml</code> (read-only here) or are saved in this tab; a <code>dboss.yaml</code> entry wins over a console one with the same name.</li>
+          <li>SQL and funnels run in the <code>duckdb</code> CLI 1.3 or newer, which must be on the service's PATH. Each run can read only the app's events directory, stops after 30 seconds and returns at most 500 rows. SQL runs are audited.</li>
         </ul>
       </section>
     {/if}

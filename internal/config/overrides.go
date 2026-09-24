@@ -41,6 +41,7 @@ type WebOverrides struct {
 	AllowIPs         List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
 	Headers          map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Alerts           *AlertsOverrides  `yaml:"alerts,omitempty" json:"alerts,omitempty"`
+	Events           *EventsOverrides  `yaml:"events,omitempty" json:"events,omitempty"`
 	Auth             List              `yaml:"auth,omitempty" json:"auth,omitempty"`
 	SessionTTL       *Duration         `yaml:"session_ttl,omitempty" json:"session_ttl,omitempty"`
 	AuthCog          *AuthCogPath      `yaml:"authcog,omitempty" json:"authcog,omitempty"`
@@ -62,6 +63,13 @@ type PubsubOverrides struct {
 type AlertsOverrides struct {
 	ErrorRate *int      `yaml:"error_rate,omitempty" json:"error_rate,omitempty"`
 	SlowP95   *Duration `yaml:"slow_p95,omitempty" json:"slow_p95,omitempty"`
+}
+
+// EventsOverrides is the events block as pointers; views and funnels merge by name.
+type EventsOverrides struct {
+	Retention *Duration              `yaml:"retention,omitempty" json:"retention,omitempty"`
+	Views     map[string]string      `yaml:"views,omitempty" json:"views,omitempty"`
+	Funnels   map[string]EventFunnel `yaml:"funnels,omitempty" json:"funnels,omitempty"`
 }
 
 // apply copies every non-nil field of overrides onto the field of the same name in target.

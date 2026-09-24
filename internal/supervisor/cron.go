@@ -230,7 +230,7 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		state.lastError = "skipped: previous run still going"
 		return nil
 	}
-	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.spec.Config.Env)
+	env := processEnv(a.spec, state.name, 0, a.cfg.Socket, a.cfg.LogDir, a.spec.Config.Env)
 	if token := a.host().Tokens.Github; state.pull && token != "" {
 		git.AuthEnv(env, token)
 	}

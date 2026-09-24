@@ -6,6 +6,7 @@
       { name: 'overview', label: 'Overview', icon: 'i-home' },
       { name: 'logs', label: 'Logs', icon: 'i-list' },
       { name: 'traffic', label: 'Traffic', icon: 'i-activity' },
+      { name: 'events', label: 'Events', icon: 'i-search' },
       { name: 'audit', label: 'Audit', icon: 'i-file-text' },
       { name: 'sys', label: 'Sys', icon: 'i-server' },
       { name: 'pg', label: 'PG SQL', icon: 'i-database', capability: 'pgAvailable' },

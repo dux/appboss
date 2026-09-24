@@ -137,6 +137,7 @@ var defaultProbes = []probe{
 	{"composer", []string{"--version"}, "https://getcomposer.org"},
 	{"java", []string{"-version"}, "https://openjdk.org"},
 	{"sqlite3", []string{"--version"}, "https://sqlite.org"},
+	{"duckdb", []string{"--version"}, "https://duckdb.org"},
 	{"psql", []string{"--version"}, "https://www.postgresql.org"},
 	{"redis-cli", []string{"--version"}, "https://redis.io"},
 	{"lsof", []string{"-v"}, "https://github.com/lsof-org/lsof"},

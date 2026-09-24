@@ -1,6 +1,7 @@
 // Package ingest turns logs into rows in the log store. It parses dboss's sealed process stdout
 // segments, tails the *.log files an app writes under its ./log directory, and copies dboss's own
-// daemon log. It is the only place that knows how to parse a log line.
+// daemon log. It is the only place that knows how to parse a log line. A *.json.log file is an
+// event namespace instead: its lines go to the events store as Parquet, not to the log rows.
 package ingest
 
 import (
@@ -8,8 +9,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"os"
@@ -20,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"dboss/internal/events"
 	"dboss/internal/logstore"
 	"dboss/internal/logx"
 	"dboss/internal/module"
@@ -44,6 +48,13 @@ type Store interface {
 	TailOffsets(app string) (map[string]logstore.TailOffset, error)
 	SaveTailOffset(app, path string, inode uint64, offset int64) error
 	RemoveTailOffsets(app string, paths []string) error
+	RequestCountries(app string, ids []string, since time.Time) (map[string]string, error)
+}
+
+// EventSink stores parsed events. events.Store is the production one; it returns only once the
+// rows are on disk, so the offset can advance after it.
+type EventSink interface {
+	Append(app, ns string, rows []events.Row) error
 }
 
 // Module seals and tails logs on a timer.
@@ -51,12 +62,15 @@ type Module struct {
 	sealer   Sealer
 	apps     Snapshotter
 	store    Store
+	events   EventSink
 	interval time.Duration
 	loop     module.Ticker
+	// warned keeps a bad namespace file from logging a warning every pass.
+	warned map[string]bool
 }
 
-func New(sealer Sealer, apps Snapshotter, store Store, interval time.Duration) *Module {
-	return &Module{sealer: sealer, apps: apps, store: store, interval: interval}
+func New(sealer Sealer, apps Snapshotter, store Store, events EventSink, interval time.Duration) *Module {
+	return &Module{sealer: sealer, apps: apps, store: store, events: events, interval: interval, warned: map[string]bool{}}
 }
 
 func (m *Module) Name() string { return "ingest" }
@@ -188,7 +202,13 @@ func (m *Module) tailFiles(snapshot supervisor.Snapshot) {
 		logx.Warnf("drop stale offsets %s: %v", snapshot.Name, err)
 	}
 	for path := range files {
-		if err := m.tailFile(snapshot, dir, path, tracked[path]); err != nil {
+		var err error
+		if events.IsEventLog(path) {
+			err = m.tailEvents(snapshot, dir, path, tracked[path])
+		} else {
+			err = m.tailFile(snapshot, dir, path, tracked[path])
+		}
+		if err != nil {
 			logx.Warnf("tail %s: %v", path, err)
 		}
 	}
@@ -429,3 +449,137 @@ func (s *DaemonSink) Write(p []byte) (int, error) {
 }
 
 var _ io.Writer = (*DaemonSink)(nil)
+
+// eventBatch bounds the lines one pass reads from an event file, so a large backlog is taken in
+// steps instead of in one allocation.
+const eventBatch = 50000
+
+// countryLookback is how far before an event its request is looked for.
+const countryLookback = 10 * time.Minute
+
+// tailEvents reads new whole lines from an event namespace file. Each line is one event: a valid
+// one goes to the events store with an eid derived from its position (file, inode, offset), so a
+// batch read twice after a crash dedupes on compaction; an invalid one becomes a warn row in the
+// app's log store under the file's channel. The offset advances only after both are committed.
+// With events off (events.retention: 0) the file is left alone, offset included, so turning them
+// back on picks the file up from where it was.
+func (m *Module) tailEvents(snapshot supervisor.Snapshot, dir, path string, previous logstore.TailOffset) error {
+	if snapshot.Web.Events.Retention.Value() <= 0 || m.events == nil {
+		return nil
+	}
+	name, err := filepath.Rel(dir, path)
+	if err != nil {
+		return err
+	}
+	ns, err := events.Namespace(name)
+	if err != nil {
+		if !m.warned[path] {
+			m.warned[path] = true
+			logx.Warnf("events %s: %v", snapshot.Name, err)
+		}
+		return nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	inode := inodeOf(info)
+	start := previous.Offset
+	if previous.Path == "" || previous.Inode != inode || info.Size() < start {
+		start = 0
+	}
+	if start >= info.Size() {
+		if previous.Path == "" || previous.Inode != inode {
+			return m.store.SaveTailOffset(snapshot.Name, path, inode, start)
+		}
+		return nil
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return err
+	}
+	reader := bufio.NewReaderSize(file, 64*1024)
+	now := time.Now()
+	var rows []events.Row
+	var bad []logstore.LogEntry
+	next := start
+	for lines := 0; lines < eventBatch; lines++ {
+		line, err := reader.ReadBytes('\n')
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			// A trailing partial line waits for the rest of it.
+			break
+		}
+		offset := next
+		next += int64(len(line))
+		if len(bytes.TrimSpace(line)) > 0 {
+			row, parseErr := events.Parse(line, now)
+			if parseErr != nil {
+				text := strings.TrimRight(string(line), "\r\n")
+				bad = append(bad, logstore.LogEntry{Time: now, Source: "file", Process: name, Stream: "combined", Level: "warn", Message: "event rejected: " + parseErr.Error(), Raw: text})
+			} else {
+				row.EID = eventID(path, inode, offset)
+				rows = append(rows, row)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	m.addCountries(snapshot.Name, rows)
+	if len(rows) > 0 {
+		if err := m.events.Append(snapshot.Name, ns, rows); err != nil {
+			return err
+		}
+	}
+	if len(bad) > 0 {
+		if err := m.store.AppendLogs(snapshot.Name, bad); err != nil {
+			return err
+		}
+	}
+	return m.store.SaveTailOffset(snapshot.Name, path, inode, next)
+}
+
+// addCountries fills country from the proxy's request row of each event's request_id. A failed
+// lookup leaves the countries empty rather than holding the events back.
+func (m *Module) addCountries(app string, rows []events.Row) {
+	var ids []string
+	var earliest time.Time
+	for _, row := range rows {
+		if row.RequestID == "" || row.Country != "" {
+			continue
+		}
+		ids = append(ids, row.RequestID)
+		if earliest.IsZero() || row.TS.Before(earliest) {
+			earliest = row.TS
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	countries, err := m.store.RequestCountries(app, ids, earliest.Add(-countryLookback))
+	if err != nil {
+		logx.Warnf("event countries %s: %v", app, err)
+		return
+	}
+	for i := range rows {
+		if country, ok := countries[rows[i].RequestID]; ok && rows[i].Country == "" {
+			rows[i].Country = country
+		}
+	}
+}
+
+// eventID is a line's identity: the same bytes at the same place in the same file always get the
+// same id, a rewritten file (new inode) gets new ones.
+func eventID(path string, inode uint64, offset int64) uint64 {
+	hash := fnv.New64a()
+	hash.Write([]byte(path))
+	var buffer [16]byte
+	binary.LittleEndian.PutUint64(buffer[:8], inode)
+	binary.LittleEndian.PutUint64(buffer[8:], uint64(offset))
+	hash.Write(buffer[:])
+	return hash.Sum64()
+}

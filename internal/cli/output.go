@@ -196,6 +196,8 @@ func (c CLI) printHuman(method string, data any) error {
 		if missing {
 			fmt.Fprintln(c.Out, "no ping URL: set tokens.dboss and management.host in the host dboss.yaml")
 		}
+	case ops.ActionEvents, ops.ActionEventsLatest, ops.ActionEventsFacets, ops.ActionEventsViews, ops.ActionEventsFunnel, ops.ActionEventsQuery:
+		return c.printEvents(method, data)
 	case ops.ActionAudit:
 		rows := data.([]logstore.AuditEntry)
 		if len(rows) == 0 {

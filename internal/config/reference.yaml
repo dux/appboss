@@ -614,6 +614,38 @@ alerts:
   slow_p95: 0
   #   2s
 
+# --- Events: analytics from log/*.json.log --------------------------------------------------
+# Every <ns>.json.log the app writes under ./log (log/billing/invoice.json.log is billing.invoice)
+# is an event namespace: one JSON object per line,
+#   {"msg": "...", "tags": ["beta", "plan:pro"], "data": {"event": "checkout", "user_id": "u_1", ...}}
+# dboss moves event, ts, user_id, anon_id, tenant_id, request_id and value out of data into their
+# own columns and stores the rows as Parquet under dir/log/<app>/events, one directory per
+# namespace and UTC day, compacted daily. DuckDB, or any Parquet reader, queries them there;
+# processes get the path as DBOSS_EVENTS_DIR. A line without an event lands in the app's log
+# viewer as a warning. Filters: a bare word is the event, plan:pro a tag pair, #beta a label,
+# user= anon= tenant= ns= country= req= the fixed columns, value>10, data.key=v, "text" in msg,
+# since=7d from= to=, a leading - negates, a,b is either.
+# Valid at the app top level and under host `defaults:`. An app with log_retention: 0 keeps no
+# log store and ingests no events either.
+events:
+  # How long raw events are kept. Daily counts, tag facets and data keys stay after them.
+  # 0 stops ingesting events and keeps what is stored.
+  retention: 365d
+  # Saved filters by name; each becomes a DuckDB view in events/views.sql.
+  views: {}
+  #   pro_checkouts: "checkout_completed plan:pro"
+  # Saved funnels by name. by is user, anon or tenant (default user); window runs from the
+  # first step (default 7d); breakdown groups by a field, data.<key> or a tag key.
+  funnels: {}
+  #   checkout:
+  #     by: user
+  #     window: 7d
+  #     breakdown: plan
+  #     steps:
+  #       - {name: Pricing, filter: "page_view page:pricing"}
+  #       - {name: Started, filter: "checkout_started"}
+  #       - {name: Paid, filter: "checkout_completed value>0"}
+
 # Procfile behavior:
 #   - Each command runs through /bin/sh -c, so &&, pipes, quotes and $VAR work. Start the
 #     line with `exec` to replace the shell with the real process.

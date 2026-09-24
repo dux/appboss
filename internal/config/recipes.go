@@ -74,6 +74,15 @@ var recipeSpecs = []recipeSpec{
 		},
 	},
 	{
+		id:          "events",
+		title:       "Events",
+		description: "Keep analytics events the app writes to log/*.json.log. Views and funnels are saved in the console's Events tab or in the YAML editor.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "events.retention"},
+		},
+	},
+	{
 		id:          "web",
 		title:       "Web",
 		description: "Static policy and the proxy behaviour in front of the app. Hosts, the static directory and the canonical host are declared on the web process in the YAML editor.",

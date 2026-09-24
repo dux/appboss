@@ -45,6 +45,7 @@ type Web struct {
 	AllowIPs         List              `yaml:"allow_ips" json:"allow_ips"`
 	Headers          map[string]string `yaml:"headers" json:"headers"`
 	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
+	Events           Events            `yaml:"events" json:"events"`
 	// Auth puts an AuthCog sign-in in front of the app: exact addresses, *@domain patterns and a
 	// bare * for any account; an empty list leaves the app open.
 	Auth List `yaml:"auth" json:"auth"`
@@ -118,6 +119,31 @@ const (
 
 // Enabled reports whether any check is on.
 func (a Alerts) Enabled() bool { return a.ErrorRate > 0 || a.SlowP95 > 0 }
+
+// Events is the app's analytics. Every <ns>.json.log under the app's ./log is an event namespace
+// dboss stores as Parquet instead of log rows. Retention bounds the raw events (0 stops ingest
+// and keeps what is stored); Views and Funnels are saved queries by name, next to the ones saved
+// from the console, and win over those on a name clash.
+type Events struct {
+	Retention Duration               `yaml:"retention" json:"retention"`
+	Views     map[string]string      `yaml:"views" json:"views"`
+	Funnels   map[string]EventFunnel `yaml:"funnels" json:"funnels"`
+}
+
+// EventFunnel is one saved funnel: by user, anon or tenant, a window from the first step, an
+// optional breakdown and 2-10 steps, each a filter.
+type EventFunnel struct {
+	By        string      `yaml:"by" json:"by"`
+	Window    Duration    `yaml:"window" json:"window"`
+	Breakdown string      `yaml:"breakdown" json:"breakdown"`
+	Steps     []EventStep `yaml:"steps" json:"steps"`
+}
+
+// EventStep is one funnel step.
+type EventStep struct {
+	Name   string `yaml:"name" json:"name"`
+	Filter string `yaml:"filter" json:"filter"`
+}
 
 // Pubsub serves realtime channels on the app's own hosts under Path. An empty Path disables it.
 // Secret is the bearer token HTTP publishers present; when empty dboss generates a per-app

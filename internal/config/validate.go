@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"dboss/internal/events"
 	"dboss/internal/notify"
 )
 
@@ -243,6 +244,9 @@ func validateWeb(w Web) error {
 	if err := validateAlerts(w.Alerts); err != nil {
 		return err
 	}
+	if err := validateEvents(w.Events); err != nil {
+		return err
+	}
 	if err := validateAuth(w); err != nil {
 		return err
 	}
@@ -280,6 +284,33 @@ func validateAlerts(a Alerts) error {
 		return keyErr("alerts.slow_p95", "cannot be negative")
 	}
 	return nil
+}
+
+func validateEvents(e Events) error {
+	if e.Retention < 0 {
+		return keyErr("events.retention", "cannot be negative")
+	}
+	for name, filter := range e.Views {
+		if err := events.ValidateView(events.View{Name: name, Filter: filter}); err != nil {
+			return keyErr("events.views."+name, "%v", err)
+		}
+	}
+	for name, funnel := range e.Funnels {
+		converted := EventFunnelOf(name, funnel)
+		if err := events.ValidateFunnel(&converted); err != nil {
+			return keyErr("events.funnels."+name, "%v", err)
+		}
+	}
+	return nil
+}
+
+// EventFunnelOf converts a configured funnel to the events package's shape.
+func EventFunnelOf(name string, funnel EventFunnel) events.Funnel {
+	steps := make([]events.Step, len(funnel.Steps))
+	for i, step := range funnel.Steps {
+		steps[i] = events.Step{Name: step.Name, Filter: step.Filter}
+	}
+	return events.Funnel{Name: name, By: funnel.By, Window: funnel.Window.Value(), Breakdown: funnel.Breakdown, Steps: steps, Source: events.SourceYAML}
 }
 
 func validatePubsub(p Pubsub, prefix string) error {

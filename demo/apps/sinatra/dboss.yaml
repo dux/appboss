@@ -20,6 +20,22 @@ idle_stop: 2m
 alerts:
   error_rate: 10
 
+# Analytics from log/shop.json.log (written by /shop): a saved view and a funnel, both also
+# shown in the console's Events tab.
+events:
+  retention: 30d
+  views:
+    paid: "checkout_completed value>0"
+  funnels:
+    checkout:
+      by: anon
+      window: 1d
+      breakdown: plan
+      steps:
+        - {name: Pricing, filter: "page_view page:pricing"}
+        - {name: Started, filter: "checkout_started"}
+        - {name: Paid, filter: "checkout_completed"}
+
 # Per-process overrides: the job worker stops fast and always comes back; web keeps the app values.
 processes:
   job:

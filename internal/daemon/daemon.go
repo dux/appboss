@@ -27,6 +27,7 @@ import (
 	"dboss/internal/ctl"
 	"dboss/internal/devtls"
 	"dboss/internal/diskusage"
+	"dboss/internal/events"
 	"dboss/internal/ingest"
 	"dboss/internal/logstore"
 	"dboss/internal/logx"
@@ -129,7 +130,10 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 	if retention := cfg.Defaults.StdoutRetention.Value(); retention > 0 {
 		log.SetOutput(io.MultiWriter(log.Writer(), ingest.NewDaemonSink(logs)))
 	}
-	ingester := ingest.New(manager, manager, logs, logIngestInterval)
+	eventStore := events.NewStore(cfg.LogDir)
+	eventService := events.NewService(eventStore, events.NewSavedStore(cfg.StateDir), eventApps{manager})
+	eventModule := events.NewModule(eventStore, eventService.Saved, eventService.Apps, cfg.MaintenanceAt, cfg.Defaults.Events.Retention.Value())
+	ingester := ingest.New(manager, manager, logs, eventStore, logIngestInterval)
 	sysInfo := sysinfo.New([]sysinfo.DirSpec{
 		{Name: "config", Path: cfg.Dir},
 		{Name: "apps", Path: cfg.Apps},
@@ -146,8 +150,9 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 	}
 	sizes := diskusage.New(manager, cfg.LogDir)
 	postgres := pg.New(cfg, notifier)
-	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, alerts.New(manager, logs, sysInfo.Inspector(), notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort, registry: registry}
+	d := &Daemon{cfg: cfg, manager: manager, modules: module.NewManager(logs, ingester, eventModule, alerts.New(manager, logs, sysInfo.Inspector(), notifier), tmpclean.New(manager), sizes, sysInfo, postgres, channels), notifier: notifier, echo: echo, managementPort: managementPort, registry: registry}
 	service := ops.New(manager, logs, postgres, channels, sizes, notifier)
+	service.SetEvents(eventService)
 	// One AuthCog flow for the console and every app gate: one signing key, one challenge map.
 	flow, err := authcog.New(cfg.StateDir)
 	if err != nil {
