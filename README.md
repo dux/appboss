@@ -309,7 +309,7 @@ Dev sessions in several app folders run side by side.
 Each one claims the next free ports for its console, processes and proxy from a per-user registry in the user config directory, so no two sessions share a port and none clears another's listeners.
 A folder gets the same ports back on its next start while they are free, so its URLs stay put; its own record is `.dboss/state/ports.json`.
 A dev start only clears what an earlier run of the same folder left on those ports, and `dboss kill` inside the folder clears only them.
-The last row is the console: a dev session prints its plain loopback address, since it needs no sign-in, and a host session prints a sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
+The first row is the console: a dev session prints its plain loopback address, since it needs no sign-in, and a host session prints a sign-in link that lives for an hour and can be clicked more than once, unlike the single-use link `dboss login` prints.
 Under systemd none of this appears and no link is minted: the banner, like the output echo and the privileged-port fallback, only happens when stdout is a terminal.
 
 A hand-run session also warns once when the runtime folder would be committed:

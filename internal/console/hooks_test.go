@@ -128,3 +128,46 @@ func TestHookAPIRequiresSession(t *testing.T) {
 		t.Fatal("hooks API answered without a session")
 	}
 }
+
+func TestHookStatusNeedsTheTokenAndHidesTheURL(t *testing.T) {
+	manager := &fakeManager{
+		hookSecrets: map[string]string{"sinatra/deploy": "tok3n"},
+		hooks: map[string][]supervisor.HookInfo{"sinatra": {{
+			HookSnapshot: supervisor.HookSnapshot{Name: "deploy", LastExit: 1, Restarting: true},
+			URL:          "https://dboss.lvh.me/hooks/sinatra/deploy?token=tok3n",
+			Output:       "fatal: Not possible to fast-forward",
+		}}},
+	}
+	handler := newTestHandler(t, manager, nil)
+	status := func(path, token string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "http://dboss.lvh.me:8081"+path, nil)
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := status("/hooks/sinatra/deploy", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d", response.Code)
+	}
+	if response := status("/hooks/sinatra/missing", "tok3n"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown hook: status = %d", response.Code)
+	}
+	response := status("/hooks/sinatra/deploy", "tok3n")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{`"restarting":true`, `"last_exit":1`, "Not possible to fast-forward"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status body misses %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "tok3n") {
+		t.Fatalf("status leaked the ping URL: %s", body)
+	}
+	if len(manager.actions) != 0 {
+		t.Fatalf("status ran something: %v", manager.actions)
+	}
+}

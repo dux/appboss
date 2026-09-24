@@ -61,7 +61,7 @@ type response struct {
 	snapshot    Snapshot
 	logs        map[string][]string
 	sealed      []string
-	hooks       []HookSnapshot
+	hooks       []HookInfo
 	app         *apps.App
 	err         error
 	idleStopped bool
@@ -236,7 +236,7 @@ func (a *appRuntime) handle(req request) response {
 	case requestHookRun:
 		return response{err: a.runHook(req.hook, time.Now())}
 	case requestHooks:
-		return response{hooks: a.hookSnapshot()}
+		return response{hooks: a.hookInfos()}
 	case requestExecInfo:
 		return response{app: a.spec}
 	}

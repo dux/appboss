@@ -57,6 +57,41 @@ func (h *Handler) handleHook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "app": app, "hook": hookName})
 }
 
+// handleHookStatus answers GET /hooks/<app>/<hook> with the hook's last result, whether it is
+// still running or restarting the app, and its output tail. It takes the same token as the ping,
+// so `dboss deploy git` can wait for the deploy it started. The ping URL is left out: it
+// carries the token.
+func (h *Handler) handleHookStatus(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/hooks/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	app, hookName := parts[0], parts[1]
+	secret, err := h.service.HookToken(app, hookName)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !hookAuthorized(r, secret, nil) {
+		http.Error(w, "forbidden", http.StatusUnauthorized)
+		return
+	}
+	hooks, err := h.service.Hooks(app)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	for _, info := range hooks {
+		if info.Name == hookName {
+			info.URL = ""
+			writeJSON(w, http.StatusOK, info)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
 // handleHostHook runs a host-level hook (the github_pr built-in). It answers 202 at once and
 // deploys in the background, since a checkout can take minutes.
 func (h *Handler) handleHostHook(w http.ResponseWriter, r *http.Request, name string, body []byte) {

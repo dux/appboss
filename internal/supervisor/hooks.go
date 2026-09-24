@@ -27,8 +27,9 @@ func (m *Manager) Hooks(name string) ([]HookInfo, error) {
 	}
 	host := m.HostConfig()
 	result := make([]HookInfo, 0, len(response.hooks))
-	for _, snapshot := range response.hooks {
-		result = append(result, HookInfo{HookSnapshot: snapshot, URL: hookLink(host.ConsoleURL(), host.Tokens.Dboss, name, snapshot.Name)})
+	for _, info := range response.hooks {
+		info.URL = hookLink(host.ConsoleURL(), host.Tokens.Dboss, name, info.Name)
+		result = append(result, info)
 	}
 	return result, nil
 }
@@ -57,11 +58,12 @@ func (m *Manager) HostHookToken(name string) (string, error) {
 	return host.Tokens.Dboss, nil
 }
 
-// HookInfo is one hook with its ready-made ping URL, returned by the dedicated hooks view and
-// the CLI. It never ships inside a regular app snapshot.
+// HookInfo is one hook with its ready-made ping URL and the output tail of its last run,
+// returned by the dedicated hooks view and the CLI. It never ships inside a regular app snapshot.
 type HookInfo struct {
 	HookSnapshot
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Output string `json:"output,omitempty"`
 }
 
 // hookLink is the ping URL of one hook with the token in the query, or empty when the console

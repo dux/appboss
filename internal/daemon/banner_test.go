@@ -103,22 +103,22 @@ func TestBannerRowsEveryProcessAndAligns(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("want a row per process plus the console, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
-	// Apps are sorted, and a web process comes before the app's workers.
-	for i, want := range []string{"bun/web", "sinatra/web", "sinatra/job", "dboss/console"} {
+	// The console leads, then apps sorted, and a web process comes before the app's workers.
+	for i, want := range []string{"dboss/console", "bun/web", "sinatra/web", "sinatra/job"} {
 		if !strings.Contains(lines[i], want) {
 			t.Fatalf("line %d = %q, want %s", i, lines[i], want)
 		}
 	}
-	if !strings.Contains(lines[2], "worker") {
-		t.Fatalf("worker row missing its marker: %q", lines[2])
+	if !strings.Contains(lines[3], "worker") {
+		t.Fatalf("worker row missing its marker: %q", lines[3])
 	}
-	if strings.HasSuffix(lines[2], " ") {
-		t.Fatalf("a row without a note keeps trailing spaces: %q", lines[2])
+	if strings.HasSuffix(lines[3], " ") {
+		t.Fatalf("a row without a note keeps trailing spaces: %q", lines[3])
 	}
 	// The escape codes in a key have no width, so the address column has to line up on the
 	// visible text instead.
-	first := strings.Index(stripANSI(lines[0]), "http://")
-	second := strings.Index(stripANSI(lines[1]), "http://")
+	first := strings.Index(stripANSI(lines[1]), "http://")
+	second := strings.Index(stripANSI(lines[2]), "http://")
 	if first != second {
 		t.Fatalf("addresses not aligned: %d vs %d\n%s", first, second, strings.Join(lines, "\n"))
 	}

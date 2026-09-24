@@ -3,10 +3,12 @@ package supervisor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -17,6 +19,9 @@ import (
 	"dboss/internal/notify"
 	"dboss/internal/schedule"
 )
+
+// hookOutputTail bounds the output a hook keeps from its last run for the status route.
+const hookOutputTail = 8 << 10
 
 // cronTick is how often the manager asks each app for due jobs. It bounds how late an "every"
 // interval or cron expression can fire.
@@ -48,6 +53,9 @@ type HookSnapshot struct {
 	LastExit  int       `json:"last_exit"`
 	LastError string    `json:"last_error,omitempty"`
 	Running   bool      `json:"running"`
+	// Restarting covers the app restart that follows a clean exit of a restart: true hook, so a
+	// caller waiting for the deploy never sees the hook idle between the command and the restart.
+	Restarting bool `json:"restarting,omitempty"`
 }
 
 // jobState is one one-shot command: a scheduled cron job (schedule set) or a hook (restart set).
@@ -70,6 +78,9 @@ type jobState struct {
 	lastExit  int
 	lastError string
 	log       *logWriter
+	// Hooks only: the output tail of the last run and the restart still going after it.
+	output     *outputTail
+	restarting bool
 }
 
 // jobRun is one execution of a job. It owns its command and wait channel; the log writer is
@@ -233,7 +244,15 @@ func (a *appRuntime) startJob(state *jobState, now time.Time, manual bool) error
 		state.lastError = err.Error()
 		return err
 	}
-	cmd.Stdout, cmd.Stderr = writer, writer
+	var out io.Writer = writer
+	if state.kind == "hook" {
+		if state.output == nil {
+			state.output = &outputTail{}
+		}
+		state.output.Reset()
+		out = io.MultiWriter(writer, state.output)
+	}
+	cmd.Stdout, cmd.Stderr = out, out
 	_, _ = writer.Write(jobLine(state.kind, state.name, "start", 0, 0, nil))
 	if err := cmd.Start(); err != nil {
 		state.lastError = err.Error()
@@ -288,8 +307,22 @@ func (a *appRuntime) jobExited(run *jobRun, exitCode int, err error) {
 		a.emit(notify.Deploy, fmt.Sprintf("deploy hook %s succeeded", state.name))
 		if a.restart != nil {
 			name := a.spec.Name
-			go func() { _ = a.restart(name) }()
+			state.restarting = true
+			go func() {
+				err := a.restart(name)
+				a.sendEvent(processEvent{kind: "hook-restarted", job: run, err: err})
+			}()
 		}
+	}
+}
+
+// hookRestarted closes the restart a deploy hook started; a failed restart becomes the hook's
+// last error, since the deploy did not land.
+func (a *appRuntime) hookRestarted(run *jobRun, err error) {
+	state := run.state
+	state.restarting = false
+	if err != nil {
+		state.lastError = "restart: " + err.Error()
 	}
 }
 
@@ -397,18 +430,62 @@ func (a *appRuntime) hookSnapshot() []HookSnapshot {
 	for _, name := range names {
 		state := a.hooks[name]
 		result = append(result, HookSnapshot{
-			Name:      name,
-			Command:   state.command.Line,
-			Restart:   state.restart,
-			Disabled:  state.disabled,
-			LastStart: state.lastStart,
-			LastEnd:   state.lastEnd,
-			LastExit:  state.lastExit,
-			LastError: state.lastError,
-			Running:   len(state.runs) > 0,
+			Name:       name,
+			Command:    state.command.Line,
+			Restart:    state.restart,
+			Disabled:   state.disabled,
+			LastStart:  state.lastStart,
+			LastEnd:    state.lastEnd,
+			LastExit:   state.lastExit,
+			LastError:  state.lastError,
+			Running:    len(state.runs) > 0,
+			Restarting: state.restarting,
 		})
 	}
 	return result
+}
+
+// hookInfos is the hook snapshot plus each hook's output tail, for the dedicated hooks view.
+func (a *appRuntime) hookInfos() []HookInfo {
+	snapshots := a.hookSnapshot()
+	result := make([]HookInfo, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		info := HookInfo{HookSnapshot: snapshot}
+		if output := a.hooks[snapshot.Name].output; output != nil {
+			info.Output = output.String()
+		}
+		result = append(result, info)
+	}
+	return result
+}
+
+// outputTail keeps the last hookOutputTail bytes written to it. The command's copy goroutine
+// writes while the app goroutine reads, hence the lock.
+type outputTail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (t *outputTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if extra := len(t.buf) - hookOutputTail; extra > 0 {
+		t.buf = append(t.buf[:0], t.buf[extra:]...)
+	}
+	return len(p), nil
+}
+
+func (t *outputTail) Reset() {
+	t.mu.Lock()
+	t.buf = t.buf[:0]
+	t.mu.Unlock()
+}
+
+func (t *outputTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 // jobLine is the JSON marker written on start and exit so runs show up in the log store.

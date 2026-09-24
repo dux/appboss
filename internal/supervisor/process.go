@@ -125,6 +125,8 @@ func (a *appRuntime) handleEvent(event processEvent) {
 			a.jobExited(event.job, event.exitCode, event.err)
 		case "job-timeout":
 			a.jobTimeout(event.job)
+		case "hook-restarted":
+			a.hookRestarted(event.job, event.err)
 		}
 		return
 	}

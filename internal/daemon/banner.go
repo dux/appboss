@@ -74,6 +74,11 @@ func bannerIntro(cfg config.Config) string {
 // output line up. Web processes carry a clickable URL and workers say so.
 func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme, port string, secure devHTTPS, echo *supervisor.Echo) []string {
 	rows := make([]bannerRow, 0, len(snapshots))
+	if console != "" {
+		// A sign-in link carries a token, so it is far longer than any hostname. Keeping it out
+		// of the column width stops one row from stretching every other one.
+		rows = append(rows, newRow("dboss", "console", console, consoleNote, false))
+	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
 	secureURL := ""
 	for _, app := range snapshots {
@@ -94,11 +99,6 @@ func banner(snapshots []supervisor.Snapshot, console, consoleNote string, scheme
 	}
 	if secure.note != "" && secureURL != "" {
 		rows = append(rows, newRow("dboss", "https", secureURL, secure.note, true))
-	}
-	if console != "" {
-		// A sign-in link carries a token, so it is far longer than any hostname. Keeping it out
-		// of the column width stops one row from stretching every other one.
-		rows = append(rows, newRow("dboss", "console", console, consoleNote, false))
 	}
 	// Register every name before rendering any key, so all rows pad to the widest one.
 	for _, row := range rows {

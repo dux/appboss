@@ -31,6 +31,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/", h.handleHook)
+	mux.HandleFunc("GET /hooks/", h.handleHookStatus)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { h.healthz(w) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { h.readyz(w) })
 	mux.HandleFunc("GET /metrics", h.metrics)

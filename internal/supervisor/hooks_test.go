@@ -3,6 +3,7 @@ package supervisor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,12 +123,52 @@ func TestHookWithRestartStartsTheApp(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshot, _ := manager.Snapshot("demo")
+		started := false
 		for _, process := range snapshot.Processes {
-			if process.Name == "web" && process.PID != 0 {
-				return
+			started = started || process.Name == "web" && process.PID != 0
+		}
+		// The hook reads restarting until the restart has returned, so a started web process
+		// and a hook that is done must be seen together eventually.
+		if started && !snapshot.Hooks[0].Restarting {
+			if snapshot.Hooks[0].LastError != "" {
+				t.Fatalf("restart hook error: %s", snapshot.Hooks[0].LastError)
 			}
+			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("web process was not started after the restart hook")
+}
+
+func TestHookKeepsTheOutputOfItsLastRun(t *testing.T) {
+	cfg := hookConfig(t, [2]int{32880, 32900}, "procfile:\n  web: /usr/bin/true\nautostart: false\nhooks:\n  deploy:\n    command: /bin/echo not possible to fast-forward\n")
+	manager, _, err := New(cfg, ports.New(cfg.Ports), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.RunHook("demo", "deploy"); err != nil {
+		t.Fatal(err)
+	}
+	waitForHookEnd(t, manager, "demo", "deploy")
+	infos, err := manager.Hooks("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Output != "not possible to fast-forward\n" {
+		t.Fatalf("hook output = %+v", infos)
+	}
+}
+
+func TestOutputTailKeepsTheEnd(t *testing.T) {
+	var tail outputTail
+	_, _ = tail.Write([]byte(strings.Repeat("a", hookOutputTail)))
+	_, _ = tail.Write([]byte("end"))
+	if got := tail.String(); len(got) != hookOutputTail || !strings.HasSuffix(got, "aend") {
+		t.Fatalf("tail = %d bytes ending %q", len(got), got[len(got)-4:])
+	}
+	tail.Reset()
+	if tail.String() != "" {
+		t.Fatal("reset kept output")
+	}
 }
