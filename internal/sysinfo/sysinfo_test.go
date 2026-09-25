@@ -89,7 +89,7 @@ func TestRefreshCachesLatestRelease(t *testing.T) {
 	})
 
 	snapshot := inspector.Refresh(context.Background())
-	if snapshot.Runtime.DbossLatest != "v84" || snapshot.Runtime.DbossLatestURL == "" {
+	if snapshot.Runtime.DbossLatest != "v0.8.4" || snapshot.Runtime.DbossLatestURL == "" {
 		t.Fatalf("unexpected runtime: %+v", snapshot.Runtime)
 	}
 	inspector.Refresh(context.Background())

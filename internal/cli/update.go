@@ -60,8 +60,9 @@ func (c CLI) update(args []string) error {
 		}
 	}
 
+	// The displayed version is dotted (v0.8.4); compare the raw injected count instead.
 	latest, haveLatest := release.Number(tag)
-	running, haveRunning := release.Number(current)
+	running, haveRunning := release.Number(version.Version)
 	comparable := haveLatest && haveRunning
 	newer := comparable && latest > running
 	install := !*check && (!comparable || newer || *force)

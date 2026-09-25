@@ -85,8 +85,9 @@ type Host struct {
 	SwapFree  int64   `json:"swap_free,omitempty"`
 }
 
-// Runtime is the running dboss process itself. DbossLatest is the newest tag published on
-// GitHub and is empty while the lookup has no answer, so an offline box just shows nothing.
+// Runtime is the running dboss process itself. DbossLatest is the newest tag published on GitHub,
+// rendered like the running version (v84 -> v0.8.4), and is empty while the lookup has no answer,
+// so an offline box just shows nothing.
 type Runtime struct {
 	Dboss          string            `json:"dboss"`
 	DbossLatest    string            `json:"dboss_latest,omitempty"`
@@ -300,7 +301,7 @@ func collectRuntime(latest string) Runtime {
 	}
 	info := Runtime{
 		Dboss:       version.String(),
-		DbossLatest: latest,
+		DbossLatest: version.Format(latest),
 		GoVersion:   runtime.Version(),
 		PID:         os.Getpid(),
 		Goroutines:  runtime.NumGoroutine(),

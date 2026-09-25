@@ -108,7 +108,7 @@ func TestUpdateReportsLatest(t *testing.T) {
 	if err := (CLI{Out: &out, Err: &errOut}).update(nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if !strings.Contains(out.String(), "dboss v84 is the latest release") || strings.Contains(out.String(), "downloading") {
+	if !strings.Contains(out.String(), "dboss v0.8.4 is the latest release") || strings.Contains(out.String(), "downloading") {
 		t.Fatalf("a current binary was not left alone: %q", out.String())
 	}
 }
@@ -121,7 +121,7 @@ func TestUpdateCheckNeverWrites(t *testing.T) {
 	if err := (CLI{Out: &out, Err: &errOut}).update([]string{"--check"}); err != nil {
 		t.Fatalf("update --check: %v", err)
 	}
-	if !strings.Contains(out.String(), "latest release is v84, you are on v81") || strings.Contains(out.String(), "downloading") {
+	if !strings.Contains(out.String(), "latest release is v84, you are on v0.8.1") || strings.Contains(out.String(), "downloading") {
 		t.Fatalf("--check did more than report: %q", out.String())
 	}
 
@@ -133,7 +133,7 @@ func TestUpdateCheckNeverWrites(t *testing.T) {
 	if err := json.Unmarshal([]byte(out.String()), &result); err != nil {
 		t.Fatalf("--json is not JSON: %v %q", err, out.String())
 	}
-	if result.Current != "v81" || result.Latest != "v84" || result.Updated {
+	if result.Current != "v0.8.1" || result.Latest != "v84" || result.Updated {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }

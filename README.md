@@ -124,14 +124,14 @@ The running daemon keeps the old binary in memory until it is restarted, which i
 
 ### Versions
 
-The version is the number of commits in `main` when the binary was built, printed as `v<count>`:
+The version is the number of commits in `main` when the binary was built, rendered as `v<a>.<b>.<c>` where `b` and `c` are the last two digits and `a` is everything before them:
 
 ```sh
 $ dboss version
-v81
+v0.8.1
 ```
 
-There is nothing else to it - no `major.minor.patch`, and the release tag carries the same number, so `dboss update` compares two integers.
+The release tag still carries the whole count (`v81`), and `dboss update` compares that integer, so there is no separate major/minor/patch to maintain.
 `make build` and `.github/workflows/release.yml` both inject it; a binary built straight from source with `go build` reports `dev`, and `dboss update` refuses to replace one without `--force`.
 
 Releases are built by `.github/workflows/release.yml` on every `v*` tag push; building from source is still the option below and needs Go 1.25+.
