@@ -95,6 +95,7 @@ var recipeSpecs = []recipeSpec{
 			{path: "health_endpoint"},
 			{path: "max_body"},
 			{path: "allow_ips"},
+			{path: "deny"},
 			{path: "headers"},
 			{path: "basic_auth"},
 			{path: "pages"},

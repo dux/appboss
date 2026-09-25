@@ -2,10 +2,10 @@
   class {
     init() {
       this.state.rows = []
-      this.state.app = Pjax.hqs('app') || ''
-      this.state.actor = Pjax.hqs('actor') || ''
-      this.state.action = Pjax.hqs('action') || ''
-      this.state.row = Number(Pjax.hqs('row') || 0)
+      this.state.app = Fez.hqs('app') || ''
+      this.state.actor = Fez.hqs('actor') || ''
+      this.state.action = Fez.hqs('action') || ''
+      this.state.row = Number(Fez.hqs('row') || 0)
       this.state.open = {}
       this.state.loading = false
       this.state.error = ''

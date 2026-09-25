@@ -4,7 +4,7 @@
       this.state.snapshot = null
       this.state.backups = []
       this.state.rotations = {}
-      this.state.db = Pjax.hqs('db') || ''
+      this.state.db = Fez.hqs('db') || ''
       this.state.selected = null
       this.state.loading = false
       this.state.busy = false
@@ -93,7 +93,7 @@
       this.state.message = ''
       this.state.messageError = false
       this.clearResult()
-      Pjax.hqs('db', name)
+      Fez.hqs('db', name)
     }
 
     closeDatabase() {
@@ -101,7 +101,7 @@
       this.state.selected = null
       this.clearResult()
       Dboss.setQs('tab', '')
-      Pjax.hqs('db', null)
+      Fez.hqs('db', null)
     }
 
     setTab(tab) {

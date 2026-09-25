@@ -257,8 +257,8 @@ defaults:
   # per-process web keys (hosts, static, pubsub, health, canonical_host) live on the procfile
   # entry instead.
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
-  # Order per request: canonical redirect -> allow_ips -> auth -> basic_auth -> maintenance -> static
-  # -> max_body/body buffer -> wake or forward -> headers.
+  # Order per request: canonical redirect -> allow_ips -> deny -> auth -> basic_auth -> maintenance
+  # -> static -> max_body/body buffer -> wake or forward -> headers.
 
   # File extensions served from the web process's static directory, lowercase and without the dot;
   # the match ignores case. Anything else under the directory (an .html page, a dotfile, a file
@@ -291,6 +291,14 @@ defaults:
   # is CF-Connecting-IP, not the Cloudflare edge address.
   allow_ips: []
   #   - 10.0.0.0/8
+
+  # Path patterns answered with 403 before the app is contacted, matched against the path without
+  # its query string and ignoring case. *.php refuses any path ending in .php, /admin/* refuses
+  # /admin and everything under it, and a plain /path is exact. Empty refuses nothing.
+  deny: []
+  #   - "*.php"
+  #   - /admin/*
+  #   - /server-status
 
   # Response headers added to every app and static response. An empty value removes the
   # header, which is how an app drops X-Powered-By. Redirects, auth challenges and error

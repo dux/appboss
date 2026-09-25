@@ -30,7 +30,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, app supervisor.S
 // initFilters assembles the pipeline: built-ins, then extra module filters, then the forward
 // stage that ends every request.
 func (h *Handler) initFilters(extra ...Filter) {
-	h.filters = append(h.filters[:0], h.canonical, h.allow, h.publicHealth, h.authCog, h.signIn, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
+	h.filters = append(h.filters[:0], h.canonical, h.allow, h.block, h.publicHealth, h.authCog, h.signIn, h.authorize, h.maintain, h.staticFiles, h.bufferBody)
 	h.filters = append(h.filters, extra...)
 	h.filters = append(h.filters, func(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, _ func()) {
 		h.forward(w, r, app)
@@ -49,6 +49,18 @@ func (h *Handler) canonical(w http.ResponseWriter, r *http.Request, app supervis
 func (h *Handler) allow(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
 	if !allowed(clientIP(r, h.cfg.Proxy.Cloudflare), app.Web.AllowPrefixes()) {
 		h.forbidden(w, r, app)
+		return
+	}
+	next()
+}
+
+// block answers 403 for a path the app's deny list covers, before auth or the app is contacted.
+func (h *Handler) block(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, next func()) {
+	if denied(r.URL.Path, app.Web.Deny) {
+		if h.recorder != nil {
+			_ = h.recorder.RecordBlocked(r.URL.Path)
+		}
+		h.blocked(w, r, app)
 		return
 	}
 	next()

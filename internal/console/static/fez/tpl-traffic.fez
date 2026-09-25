@@ -2,8 +2,8 @@
   class {
     init() {
       this.state.apps = []
-      this.state.app = Pjax.hqs('app') || ''
-      this.state.range = Pjax.hqs('range') || '24h'
+      this.state.app = Fez.hqs('app') || ''
+      this.state.range = Fez.hqs('range') || '24h'
       this.state.traffic = null
       this.state.totals = {}
       this.state.columns = []

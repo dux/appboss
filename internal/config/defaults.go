@@ -43,9 +43,12 @@ type Web struct {
 	MaxBody          Size              `yaml:"max_body" json:"max_body"`
 	BasicAuth        map[string]string `yaml:"basic_auth" json:"-"`
 	AllowIPs         List              `yaml:"allow_ips" json:"allow_ips"`
-	Headers          map[string]string `yaml:"headers" json:"headers"`
-	Alerts           Alerts            `yaml:"alerts" json:"alerts"`
-	Events           Events            `yaml:"events" json:"events"`
+	// Deny refuses a request path with 403 before the app is contacted: *.ext matches a suffix
+	// and /path/* a subtree.
+	Deny    List              `yaml:"deny" json:"deny"`
+	Headers map[string]string `yaml:"headers" json:"headers"`
+	Alerts  Alerts            `yaml:"alerts" json:"alerts"`
+	Events  Events            `yaml:"events" json:"events"`
 	// Auth puts an AuthCog sign-in in front of the app: exact addresses, *@domain patterns and a
 	// bare * for any account; an empty list leaves the app open.
 	Auth List `yaml:"auth" json:"auth"`

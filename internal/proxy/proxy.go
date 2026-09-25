@@ -47,9 +47,11 @@ const (
 	upstreamIdleConnsPerApp = 32
 )
 
-// Recorder receives one row per proxied request. logstore.Store is the production one.
+// Recorder receives one row per proxied request and the deny counter for a blocked path.
+// logstore.Store is the production one.
 type Recorder interface {
 	Record(app string, retention time.Duration, entry logstore.RequestEntry) error
+	RecordBlocked(path string) error
 }
 
 // PublishAuthorizer lets a module vouch for a request that basic_auth would otherwise reject, so
@@ -120,6 +122,31 @@ func redirectCanonical(w http.ResponseWriter, r *http.Request, canonical string)
 
 func allowed(ip string, prefixes []netip.Prefix) bool {
 	return len(prefixes) == 0 || inPrefixes(ip, prefixes)
+}
+
+// denied reports whether a request path matches any deny pattern, ignoring case. A *.ext pattern
+// matches a path suffix, /path/* the path and its whole subtree, and a plain /path is exact.
+func denied(requestPath string, patterns []string) bool {
+	path := strings.ToLower(requestPath)
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(pattern)
+		if suffix, ok := strings.CutPrefix(pattern, "*"); ok {
+			if strings.HasSuffix(path, suffix) {
+				return true
+			}
+			continue
+		}
+		if base, ok := strings.CutSuffix(pattern, "/*"); ok {
+			if path == base || strings.HasPrefix(path, base+"/") {
+				return true
+			}
+			continue
+		}
+		if path == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // authorized checks basic_auth. The user lookup is a plain map hit because the user list is not
@@ -452,8 +479,17 @@ func (h *Handler) pageDirs(app supervisor.Snapshot) []string {
 }
 
 func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot) {
+	h.refused(w, r, app, pages.Forbidden)
+}
+
+func (h *Handler) blocked(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot) {
+	h.refused(w, r, app, pages.Blocked)
+}
+
+// refused answers 403 with the named page for an HTML request and a bare status otherwise.
+func (h *Handler) refused(w http.ResponseWriter, r *http.Request, app supervisor.Snapshot, name pages.Name) {
 	if wantsHTML(r) {
-		pages.Page{Name: pages.Forbidden, App: app.Name}.Write(w, h.pageDirs(app)...)
+		pages.Page{Name: name, App: app.Name}.Write(w, h.pageDirs(app)...)
 		return
 	}
 	w.WriteHeader(http.StatusForbidden)

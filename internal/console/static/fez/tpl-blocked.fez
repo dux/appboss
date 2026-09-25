@@ -1,0 +1,91 @@
+<script>
+  class {
+    init() {
+      this.state.rows = []
+      this.state.total = 0
+      this.state.loaded = false
+      this.state.busy = false
+      this.state.error = ''
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    async load() {
+      this.state.busy = true
+      try {
+        const data = await Dboss.api('/api/log/blocked')
+        const rows = data.rows || []
+        const total = rows.reduce((sum, row) => sum + Number(row.count || 0), 0)
+        this.state.total = total
+        this.state.rows = rows.map((row) => {
+          const pct = total ? (Number(row.count || 0) / total) * 100 : 0
+          return { ...row, path: row.path || '/', pct: Math.max(pct, 0.5), pctLabel: `${pct.toFixed(1)}%` }
+        })
+        this.state.loaded = true
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle"><a href="#/logs">&larr; Logs</a></p>
+    <h1 class="page-title">Blocked requests</h1>
+  </div>
+  <div class="page-actions">
+    <span class="refresh-status">{state.rows.length} paths · {state.total} requests</span>
+    <button class="btn" type="button" onclick="fez.load()" disabled={state.busy}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      Refresh
+    </button>
+  </div>
+</div>
+
+{#if state.error}
+  <div class="config-message error" role="status">{state.error}</div>
+{/if}
+
+<section class="log-view log-view-single">
+  <div class="log-main">
+    <div class="log-scroll">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th class="num">Requests</th>
+            <th>Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each state.rows as row}
+            <tr>
+              <td class="log-path">{row.path}</td>
+              <td class="num">{row.count}</td>
+              <td class="log-blocked-share">
+                <span class="log-blocked-meter"><span class="log-blocked-bar" style="width:{row.pct}%"></span></span>
+                <span class="text-muted">{row.pctLabel}</span>
+              </td>
+            </tr>
+          {:else}
+            <tr>
+              <td colspan="3" class="text-muted log-empty">{state.loaded ? 'No blocked requests' : 'Loading...'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+    <div class="log-footer">
+      <span class="text-muted">Biggest deny paths first, capped at 200; counted once across every app and over time.</span>
+      {#if state.busy}
+        <span class="spinner" aria-hidden="true"></span>
+      {/if}
+    </div>
+  </div>
+</section>

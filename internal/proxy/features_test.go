@@ -7,12 +7,24 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"dboss/internal/config"
+	"dboss/internal/logstore"
 	"dboss/internal/supervisor"
 )
+
+// fakeRecorder captures the deny counter a blocked request reports.
+type fakeRecorder struct{ blocked []string }
+
+func (f *fakeRecorder) Record(string, time.Duration, logstore.RequestEntry) error { return nil }
+
+func (f *fakeRecorder) RecordBlocked(path string) error {
+	f.blocked = append(f.blocked, path)
+	return nil
+}
 
 // featureHandler has no manager: every step before forwarding must answer on its own.
 func featureHandler() *Handler {
@@ -162,6 +174,50 @@ func TestAllowIPsUsesClientIPHeader(t *testing.T) {
 	request.Header.Del("Accept")
 	if response := serveFeature(t, handler, snapshot, request); response.Code != http.StatusForbidden || response.Body.Len() != 0 {
 		t.Fatalf("non-html client should get an empty 403: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestDenyBlocksPaths(t *testing.T) {
+	snapshot := featureSnapshot(t, "deny: [\"*.php\", /admin/*, /server-status]\n")
+	get := func(path string, html bool) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "http://demo.test"+path, nil)
+		request.Host = "demo.test"
+		if html {
+			request.Header.Set("Accept", "text/html")
+		}
+		return serveFeature(t, featureHandler(), snapshot, request)
+	}
+	for _, path := range []string{"/index.php", "/deep/nested/shell.PHP", "/admin", "/admin/users", "/server-status"} {
+		response := get(path, true)
+		if response.Code != http.StatusForbidden {
+			t.Errorf("%s should be blocked, got %d", path, response.Code)
+		}
+	}
+	if response := get("/index.php", true); !strings.Contains(response.Body.String(), "This page is not available") {
+		t.Errorf("blocked page body = %q", response.Body.String())
+	}
+	if response := get("/index.php", false); response.Code != http.StatusForbidden || response.Body.Len() != 0 {
+		t.Errorf("non-html client should get an empty 403: %d %q", response.Code, response.Body.String())
+	}
+	for _, path := range []string{"/index.html", "/server-status-page", "/administrator"} {
+		if response := get(path, true); response.Code == http.StatusForbidden {
+			t.Errorf("%s should not be blocked", path)
+		}
+	}
+}
+
+func TestDenyRecordsBlockedPath(t *testing.T) {
+	handler := featureHandler()
+	recorder := &fakeRecorder{}
+	handler.recorder = recorder
+	snapshot := featureSnapshot(t, "deny: [\"*.php\"]\n")
+	request := httptest.NewRequest(http.MethodGet, "http://demo.test/deep/x.php?q=1", nil)
+	request.Host = "demo.test"
+	if response := serveFeature(t, handler, snapshot, request); response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if len(recorder.blocked) != 1 || recorder.blocked[0] != "/deep/x.php" {
+		t.Fatalf("blocked = %v", recorder.blocked)
 	}
 }
 

@@ -11,6 +11,9 @@ import (
 const (
 	maxBufferedRequests = 8192
 	maxBufferedLogs     = 32768
+	// maxBlockedPath bounds the stored deny path, so a scanner cannot grow the counter table with
+	// arbitrarily long distinct paths. Longer paths share the truncated key.
+	maxBlockedPath = 512
 )
 
 // RequestEntry is one proxied request. Process is the service that answered it; Country is the

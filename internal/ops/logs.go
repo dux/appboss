@@ -49,6 +49,21 @@ func (s *Service) LogTree() ([]logstore.AppTree, error) {
 	return s.store.Tree(names)
 }
 
+// Blocked lists the deny counters from the reserved host database. A store without the capability
+// (a test double) answers empty.
+func (s *Service) Blocked() ([]logstore.BlockedStat, error) {
+	if s.store == nil {
+		return nil, errNoLogStore
+	}
+	reader, ok := s.store.(interface {
+		Blocked() ([]logstore.BlockedStat, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.Blocked()
+}
+
 // Traffic returns the aggregated request log of one app for requests newer than since.
 func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error) {
 	if s.store == nil {

@@ -28,6 +28,21 @@ func TestEveryConsoleRouteHasTemplate(t *testing.T) {
 	}
 }
 
+// The Logs page links to the global blocked-requests page (#/blocked), which db-shell fetches as
+// tpl-blocked.fez on demand. A rename on either side would break the link silently.
+func TestBlockedPageIsLinked(t *testing.T) {
+	logs, err := assets.ReadFile("static/fez/tpl-logs.fez")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logs), `href="#/blocked"`) {
+		t.Error("tpl-logs.fez must link to #/blocked")
+	}
+	if _, err := assets.ReadFile("static/fez/tpl-blocked.fez"); err != nil {
+		t.Fatalf("tpl-blocked.fez is not embedded: %v", err)
+	}
+}
+
 // db-config-form is preloaded in index.html while tpl-config is fetched per route, so the form
 // is always compiled before the page that uses it.
 func TestConfigFormComponentIsLoaded(t *testing.T) {
@@ -62,6 +77,8 @@ func TestButtonComponentIsLoaded(t *testing.T) {
 // a component root and feed it back into props, which re-enters any component that writes its own
 // root - ui-btn does - and they have no Fez(node).setAttribute, the channel the app cards use to
 // show an action as pending. Re-vendoring an older bundle froze the cards until a page reload.
+// The hash routes call Fez.hpath / Fez.hqs, which delegate to Fez.pjax; builds that only set
+// window.Pjax lack those shortcuts.
 func TestVendoredFezIsCurrent(t *testing.T) {
 	bundle, err := assets.ReadFile("static/fez.min.js")
 	if err != nil {
@@ -70,8 +87,10 @@ func TestVendoredFezIsCurrent(t *testing.T) {
 	if strings.Contains(string(bundle), "onPropsChange") {
 		t.Error("fez.min.js still carries onPropsChange: vendor 0.10.0 or newer")
 	}
-	if !strings.Contains(string(bundle), "hpath") {
-		t.Error("fez.min.js has no Pjax.hpath: the console's hash routes need it")
+	for _, name := range []string{"hpath", "hqs"} {
+		if !strings.Contains(string(bundle), ".pjax."+name+"(") {
+			t.Errorf("fez.min.js has no Fez.%s: the console's hash routes need it", name)
+		}
 	}
 }
 

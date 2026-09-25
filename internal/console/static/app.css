@@ -2726,6 +2726,11 @@ textarea.sql-editor {
   min-height: 560px;
 }
 
+/* The blocked-requests page has no app/channel nav, so it is a single column. */
+.log-view-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .log-nav {
   overflow: auto;
   padding: 8px;
@@ -2970,6 +2975,28 @@ select.log-control { max-width: 220px; }
 }
 
 .log-empty { padding: 24px; text-align: center; }
+
+.log-blocked-share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.log-blocked-meter {
+  flex: 1 1 auto;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--primary-soft);
+}
+
+.log-blocked-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--danger);
+}
 
 @keyframes spin {
   to { transform: rotate(360deg); }

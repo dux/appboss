@@ -7,6 +7,12 @@
     <p class="page-pretitle">Observability</p>
     <h1 class="page-title">Logs</h1>
   </div>
+  <div class="page-actions">
+    <a class="btn" href="#/blocked" title="Denied paths across every app">
+      <svg class="icon"><use href="#i-alert"></use></svg>
+      Blocked requests
+    </a>
+  </div>
 </div>
 
 <db-log-view page />

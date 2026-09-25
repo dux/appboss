@@ -4,8 +4,8 @@
       this.state.apps = []
       this.state.guide = ''
       this.state.credential = null
-      this.state.publishApp = Pjax.hqs('app') || ''
-      this.state.publishProcess = Pjax.hqs('process') || ''
+      this.state.publishApp = Fez.hqs('app') || ''
+      this.state.publishProcess = Fez.hqs('process') || ''
       this.state.loading = false
       this.state.busy = false
       this.state.error = ''

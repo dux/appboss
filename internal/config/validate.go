@@ -218,6 +218,9 @@ func validateWeb(w Web) error {
 	if _, err := parsePrefixes(w.AllowIPs); err != nil {
 		return err
 	}
+	if err := validateDeny(w.Deny); err != nil {
+		return err
+	}
 	for user, password := range w.BasicAuth {
 		if user == "" || strings.ContainsAny(user, ": ") {
 			return keyErr("basic_auth", "invalid user %q", user)
@@ -251,6 +254,33 @@ func validateWeb(w Web) error {
 		return err
 	}
 	return validateAuthCog(w)
+}
+
+// validateDeny checks the denylist patterns: *.ext for a suffix match, or a /path, where a trailing
+// /* also covers the subtree.
+func validateDeny(patterns []string) error {
+	for _, pattern := range patterns {
+		if pattern == "" || strings.ContainsAny(pattern, " \t") {
+			return keyErr("deny", "invalid pattern %q", pattern)
+		}
+		if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
+			if suffix == "" || strings.ContainsAny(suffix, "*/") {
+				return keyErr("deny", "%q must be a *.extension", pattern)
+			}
+			continue
+		}
+		if !strings.HasPrefix(pattern, "/") {
+			return keyErr("deny", "%q must start with / or *.", pattern)
+		}
+		base := strings.TrimSuffix(pattern, "/*")
+		if strings.Contains(base, "*") {
+			return keyErr("deny", "%q may only use a trailing /* wildcard", pattern)
+		}
+		if base == "" || base == "/" {
+			return keyErr("deny", "%q is too broad, name a path", pattern)
+		}
+	}
+	return nil
 }
 
 func validateAuth(w Web) error {

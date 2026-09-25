@@ -5,6 +5,23 @@ management:
 
 ports: [3100, 3199]
 
+# Common scanner targets every demo app refuses with 403 before the app is contacted. Set under
+# defaults: so it covers all four apps at once; an app can override it with its own deny: list.
+# try: curl -i http://bun.lvh.me/wp-login.php
+defaults:
+  deny:
+    - "*.php"
+    - "*.asp"
+    - "*.aspx"
+    - "*.jsp"
+    - "*.cgi"
+    - "/.git/*"
+    - "/.env"
+    - "/wp-admin/*"
+    - "/wp-content/*"
+    - "/cgi-bin/*"
+    - "/phpmyadmin"
+
 # Hook pings and /metrics present this; a real host keeps it in dboss.local.yaml.
 tokens:
   dboss: demo-token

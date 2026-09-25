@@ -120,6 +120,9 @@
       bob: secret           # plain password
     allow_ips:
       - 10.0.0.0/8
+    deny:
+      - "*.php"
+      - /admin/*
 
     # host file
     proxy:
@@ -296,7 +299,7 @@
 
   class {
     init() {
-      this.state.topic = Pjax.hqs('topic') || 'intro'
+      this.state.topic = Fez.hqs('topic') || 'intro'
       this.state.groups = GROUPS
       this.state.features = GROUPS[1].topics
       this.state.examples = EXAMPLES
@@ -493,7 +496,7 @@
         <h3>Details</h3>
         <p>A leading <code>*.</code> matches subdomains only; a leading <code>.</code> matches the bare domain and every subdomain, so <code>hosts: .example.com</code> is <code>example.com</code> plus <code>*.example.com</code>. A single value is accepted like a list, and in single-app dev mode a process with no hosts is bound to <code>.lvh.me</code>.</p>
         <p><code>maintenance on</code> answers every request with the maintenance page while the app keeps running. A stopped app gets the starting page, then the real response once it is healthy. A host no app matches gets the host's <code>404</code> page.</p>
-        <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, health endpoint, <code>auth</code> sign-in, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward. Forwarded headers (<code>X-Forwarded-Proto</code>, <code>X-Forwarded-Host</code>, <code>X-Real-IP</code>) are added only when missing, so Cloudflare's values win.</p>
+        <p>Each request walks the stages in this order: canonical redirect, <code>allow_ips</code>, <code>deny</code>, health endpoint, <code>auth</code> sign-in, <code>basic_auth</code>, maintenance, static files, body buffer, then wake or forward. Forwarded headers (<code>X-Forwarded-Proto</code>, <code>X-Forwarded-Host</code>, <code>X-Real-IP</code>) are added only when missing, so Cloudflare's values win.</p>
       </section>
     {/if}
 
@@ -511,7 +514,7 @@
           <li>Keeping protected sleeping apps asleep: a request without valid credentials never wakes them.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-access"><db-config-keys paths="auth,session_ttl,authcog,authcog_realm,basic_auth,allow_ips,proxy.cloudflare" /></div>
+        <div fez:keep="keys-access"><db-config-keys paths="auth,session_ttl,authcog,authcog_realm,basic_auth,allow_ips,deny,proxy.cloudflare" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.access" />
         <h3>Details</h3>
@@ -523,7 +526,7 @@
           <li>A session is issued for one app: it opens neither another app nor the console.</li>
           <li><code>basic_auth</code> is independent: when both are set, both must pass.</li>
         </ul>
-        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a plain password or a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs (address ranges such as <code>10.0.0.0/8</code>), matched against the client address.</p>
+        <p><code>basic_auth</code> puts HTTP basic auth in front of the whole app, static files included. It maps a user to a plain password or a bcrypt hash printed by <code>dboss password</code>. <code>allow_ips</code> limits the app to a list of CIDRs (address ranges such as <code>10.0.0.0/8</code>), matched against the client address. <code>deny</code> refuses paths with <code>403</code> before the app is contacted: <code>*.php</code> matches any path ending in <code>.php</code>, <code>/admin/*</code> the path and its subtree, and a plain <code>/path</code> is exact, all case-insensitive.</p>
         <p><code>proxy.cloudflare: true</code> accepts connections only from Cloudflare's published ranges, built into dboss, and from the box itself; anything else gets <code>403</code>. The client address then comes from <code>CF-Connecting-IP</code>, which only Cloudflare can set. Without it the client address is the connection's own.</p>
         <ul>
           <li>A request with no or wrong credentials, or without a sign-in session, stops at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.</li>
@@ -537,7 +540,7 @@
     {#if state.topic === 'static'}
       <section>
         <h2>Static &amp; pages</h2>
-        <p>Each web process can serve asset files straight from its own <code>static</code> directory. Every page dboss answers with itself (starting, stopped, crashed, maintenance, error, forbidden, signed out, and on the host 404 and the console login) is built in and can be replaced with your own HTML.</p>
+        <p>Each web process can serve asset files straight from its own <code>static</code> directory. Every page dboss answers with itself (starting, stopped, crashed, maintenance, error, forbidden, blocked, signed out, and on the host 404 and the console login) is built in and can be replaced with your own HTML.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Serving CSS, JS, images and fonts without spending app workers, and without waking a stopped app.</li>

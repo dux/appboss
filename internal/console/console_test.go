@@ -313,6 +313,10 @@ func (fakeLogs) Channels(string) ([]logstore.Channel, error) {
 	return []logstore.Channel{{ID: "request", Label: "REQUEST"}, {ID: "stdout", Label: "STDOUT"}, {ID: "file:production.log", Label: "production.log"}}, nil
 }
 
+func (fakeLogs) Blocked() ([]logstore.BlockedStat, error) {
+	return []logstore.BlockedStat{{Path: "/wp-login.php", Count: 42}}, nil
+}
+
 func (fakeLogs) Tree([]string) ([]logstore.AppTree, error) {
 	return []logstore.AppTree{{
 		Name:     "sinatra",
@@ -536,6 +540,10 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	tree := call(t, handler, cookie, session, http.MethodGet, "/api/log/tree", "")
 	if tree.Code != http.StatusOK || !strings.Contains(tree.Body.String(), `"name":"sinatra"`) || !strings.Contains(tree.Body.String(), `"bytes":4096`) || !strings.Contains(tree.Body.String(), `"id":"file:production.log"`) {
 		t.Fatalf("unexpected tree: %d %s", tree.Code, tree.Body.String())
+	}
+	blocked := call(t, handler, cookie, session, http.MethodGet, "/api/log/blocked", "")
+	if blocked.Code != http.StatusOK || !strings.Contains(blocked.Body.String(), `"path":"/wp-login.php"`) || !strings.Contains(blocked.Body.String(), `"count":42`) {
+		t.Fatalf("unexpected blocked: %d %s", blocked.Code, blocked.Body.String())
 	}
 	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/log/search", "")
 	if missingApp.Code != http.StatusBadRequest {

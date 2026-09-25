@@ -152,7 +152,10 @@ The startup banner names the address every app ended up on, so when the demo fal
 * http://bun.lvh.me - Bun app
 * http://button.lvh.me - Bun app with `autostart: button`; it serves a start button and only its POST brings it up, so a crawler or favicon request never starts it (stop it in the console to see the page again)
 
+The demo host file blocks common scanner targets for every app (`defaults.deny`: `*.php`, `*.asp`, `*.aspx`, `*.jsp`, `*.cgi`, `/.git/*`, `/.env`, `/wp-admin/*`, `/wp-content/*`, `/cgi-bin/*`, `/phpmyadmin`), so `curl -i http://bun.lvh.me/wp-login.php` answers `403`.
+
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
+`make seed` recreates the demo's SQLite databases and event store from scratch with dummy data - a week of requests and a day of logs per app, Parquet analytics events behind the bun app's 4-step `onboarding` funnel (filter the Events tab by `plan:` or `page:` tags), plus audit rows, deny counters and daemon log lines in the host database - so a fresh console's Overview, Traffic, Logs, Events and Audit views are populated. Stop the running demo first; it deletes the databases it seeds (`go run ./internal/demo/seed --dir ./demo/.dboss/log`).
 `make kill` stops the demo apps and clears the port range after a crash.
 
 ## One config file, two modes
@@ -786,6 +789,9 @@ The one bridge without code is a procfile wrapper (`docker run -p 127.0.0.1:$POR
 `basic_auth` puts HTTP basic auth in front of the whole app, static files included.
 It maps a user to a plain password or a bcrypt hash printed by `dboss password`; set it under `defaults:` in the host file to protect every app on a staging box with one block.
 `allow_ips` limits the app to a list of CIDRs (address ranges such as `10.0.0.0/8`), matched against the client address.
+`deny` refuses paths with `403` before the app is contacted: `*.php` matches any path ending in `.php`, `/admin/*` the path and everything under it, and a plain `/path` is exact, all case-insensitive.
+Each blocked path is counted once in the reserved host database (`log/_dboss/dboss.sqlite`, table `blocked`: `path`, `count`), aggregated across apps and over time.
+The Logs page has a **Blocked requests** button that opens the `#/blocked` page, listing those paths with their request count and share of the total (`GET /api/log/blocked`).
 Behind Cloudflare set `proxy.cloudflare: true` in the host file: only Cloudflare's published ranges (built in) and the box itself may connect, and the client address comes from `CF-Connecting-IP`, which then cannot be spoofed.
 
 ```yaml
@@ -794,6 +800,10 @@ basic_auth:
   bob: secret           # plain password
 allow_ips:
   - 10.0.0.0/8
+deny:
+  - "*.php"
+  - /admin/*
+  - /server-status
 ```
 
 `auth` puts an AuthCog sign-in in front of the app, the way Cloudflare Access does, for people instead of shared passwords.
@@ -817,7 +827,7 @@ authcog: true   # or a path; true captures /authcog, which must match the realm'
 
 The app links to the path. dboss mints the challenge, sends the browser to `https://<authcog_realm>/d:<host>[/p:<port>][/s:http]` (the port only when it is not the scheme's default, the scheme only when the request was not https; it is read from TLS or the edge's `X-Forwarded-Proto`), and on the `?callback=` return exchanges the one-time hash server-side. It then forwards one request to the app's own route at that path with the profile in `X-Dboss-User` (`{"email","name","avatar","provider"}`). The app reads what it needs and creates its own session; dboss keeps no session. `X-Dboss-User` is removed from every inbound request, so only dboss can set it, and it is set only on that post-login request. Any AuthCog account is admitted, and logout is the app's job. `authcog` is independent of `auth`: its login path is never gated by `auth`.
 
-Each request walks the stages in this order: canonical redirect, `allow_ips`, health endpoint, `authcog` login, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
+Each request walks the stages in this order: canonical redirect, `allow_ips`, `deny`, health endpoint, `authcog` login, `auth` sign-in, `basic_auth`, maintenance, static files, body buffer, then wake or forward.
 
 * A request with no or wrong credentials gets `401` at the auth stage and never reaches the wake stage, so a crawler or scanner cannot start a protected sleeping app. The first request with valid credentials wakes it.
 * With no `basic_auth` any request wakes a stopped app, except an `autostart: button` app, which only its start button's POST wakes.
@@ -845,6 +855,7 @@ Every page dboss answers with itself is built in and can be replaced:
 | `maintenance` | 503 | `dboss maintenance <app> on` |
 | `error` | 502/5xx | the app is unreachable, or answers 5xx (see below) |
 | `forbidden` | 403 | `allow_ips` turns the visitor away |
+| `blocked` | 403 | the `deny` list covers the path |
 | `signed_out` | 200 | after `/.well-known/dboss/logout` |
 | `404` | 404 | a host no app owns (host only) |
 | `login` | 401 | the console without a session (host only) |

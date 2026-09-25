@@ -39,6 +39,7 @@ type WebOverrides struct {
 	MaxBody          *Size             `yaml:"max_body,omitempty" json:"max_body,omitempty"`
 	BasicAuth        map[string]string `yaml:"basic_auth,omitempty" json:"-"`
 	AllowIPs         List              `yaml:"allow_ips,omitempty" json:"allow_ips,omitempty"`
+	Deny             List              `yaml:"deny,omitempty" json:"deny,omitempty"`
 	Headers          map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Alerts           *AlertsOverrides  `yaml:"alerts,omitempty" json:"alerts,omitempty"`
 	Events           *EventsOverrides  `yaml:"events,omitempty" json:"events,omitempty"`

@@ -61,6 +61,7 @@ func (h *Handler) routes() *http.ServeMux {
 	signedIn("GET /api/log/channels", h.logChannels)
 	signedIn("GET /api/log/tree", h.logTree)
 	signedIn("GET /api/log/search", h.logSearch)
+	signedIn("GET /api/log/blocked", h.logBlocked)
 	session("POST /api/action", h.action)
 	session("POST /api/rescan", h.rescan)
 	session("POST /api/apps/add", h.addApp)

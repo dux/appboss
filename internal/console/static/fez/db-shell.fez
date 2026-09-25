@@ -16,7 +16,7 @@
     ]
 
     init() {
-      this.state.route = Pjax.hpath() || 'overview'
+      this.state.route = Fez.hpath() || 'overview'
       this.state.csrf = ''
       this.state.viewer = ''
       this.state.version = ''
@@ -52,12 +52,12 @@
     // syncRoute maps the fragment onto a tpl-<name> component. A missing route (e.g. the bare
     // origin, or a stale #anchor) falls back to overview with a replace, never a history entry.
     syncRoute() {
-      if (!Pjax.hpath()) Pjax.hpath('overview', { replace: true })
+      if (!Fez.hpath()) Fez.hpath('overview', { replace: true })
       this.navigate()
     }
 
     navigate() {
-      const name = Pjax.hpath() || 'overview'
+      const name = Fez.hpath() || 'overview'
       this.state.route = name
       const tag = 'tpl-' + name
       const outlet = document.getElementById('route-outlet')
@@ -79,13 +79,13 @@
 
     // readQs/setQs wrap the hash-route query so a page never has to build URLSearchParams.
     readQs(key, fallback = '') {
-      return Pjax.hqs(key) ?? fallback
+      return Fez.hqs(key) ?? fallback
     }
 
     setQs(key, value, replace = true) {
       const next = value || ''
-      if ((Pjax.hqs(key) || '') === next) return
-      Pjax.hqs(key, next || null, { replace })
+      if ((Fez.hqs(key) || '') === next) return
+      Fez.hqs(key, next || null, { replace })
     }
 
     initials() {

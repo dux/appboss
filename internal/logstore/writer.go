@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dboss/internal/logx"
@@ -17,6 +18,7 @@ const queueSize = 4096
 type entry struct {
 	request *RequestEntry
 	logs    []LogEntry
+	blocked string
 }
 
 type appWriter struct {
@@ -60,6 +62,24 @@ func (s *Store) RecordLogs(app string, entries []LogEntry) error {
 	}
 }
 
+// RecordBlocked counts a deny-blocked path in the reserved host database. The path is aggregated
+// per flush, so the table grows with distinct paths, never with hits.
+func (s *Store) RecordBlocked(path string) error {
+	if len(path) > maxBlockedPath {
+		path = strings.ToValidUTF8(path[:maxBlockedPath], "")
+	}
+	w, err := s.writer(HostApp)
+	if err != nil {
+		return err
+	}
+	select {
+	case w.entries <- entry{blocked: path}:
+		return nil
+	default:
+		return fmt.Errorf("blocked queue full for %s", HostApp)
+	}
+}
+
 // AppendLogs inserts a batch of process-log rows and waits for the commit. The file tailer and
 // sealed-segment ingester use it so they only delete a segment or advance an offset once its rows
 // are durably stored; RecordLogs is the fire-and-forget path for rows whose source can be retried.
@@ -71,7 +91,7 @@ func (s *Store) AppendLogs(app string, entries []LogEntry) error {
 	if err != nil {
 		return err
 	}
-	return w.insert(nil, entries)
+	return w.insert(nil, entries, nil)
 }
 
 func (s *Store) writer(app string) (*appWriter, error) {
@@ -135,6 +155,7 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS tail_offsets (path TEXT PRIMARY KEY, inode INTEGER NOT NULL, offset INTEGER NOT NULL, updated_ts TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS audit (ts TEXT NOT NULL, actor TEXT NOT NULL, app TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, result TEXT NOT NULL, error TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)`,
+	`CREATE TABLE IF NOT EXISTS blocked (path TEXT PRIMARY KEY, count INTEGER NOT NULL)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(message, raw, content='logs', content_rowid='rowid')`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN INSERT INTO logs_fts(rowid, message, raw) VALUES (new.rowid, new.message, new.raw); END`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN INSERT INTO logs_fts(logs_fts, rowid, message, raw) VALUES ('delete', old.rowid, old.message, old.raw); END`,
@@ -146,11 +167,12 @@ func (w *appWriter) loop(flush time.Duration) {
 	defer ticker.Stop()
 	var requests []RequestEntry
 	var logs []LogEntry
+	blocked := map[string]int{}
 	flushNow := func() {
-		if len(requests) == 0 && len(logs) == 0 {
+		if len(requests) == 0 && len(logs) == 0 && len(blocked) == 0 {
 			return
 		}
-		if err := w.insert(requests, logs); err != nil {
+		if err := w.insert(requests, logs, blocked); err != nil {
 			// Keep the batch for the next tick so a transient failure does not lose rows; cap
 			// it so a permanently broken database cannot grow the buffer without bound.
 			logx.Errorf("logstore insert: %v", err)
@@ -164,9 +186,13 @@ func (w *appWriter) loop(flush time.Duration) {
 				logx.Warnf("logstore: dropping %d log rows after repeated insert failures", drop)
 				logs = logs[:copy(logs, logs[drop:])]
 			}
+			if len(blocked) > maxBufferedLogs {
+				logx.Warnf("logstore: dropping %d blocked counters after repeated insert failures", len(blocked))
+				blocked = map[string]int{}
+			}
 			return
 		}
-		requests, logs = requests[:0], logs[:0]
+		requests, logs, blocked = requests[:0], logs[:0], map[string]int{}
 	}
 	drain := func(op entry) {
 		if op.request != nil {
@@ -175,12 +201,15 @@ func (w *appWriter) loop(flush time.Duration) {
 		if len(op.logs) > 0 {
 			logs = append(logs, op.logs...)
 		}
+		if op.blocked != "" {
+			blocked[op.blocked]++
+		}
 	}
 	for {
 		select {
 		case op := <-w.entries:
 			drain(op)
-			if len(requests) >= 256 {
+			if len(requests) >= 256 || len(blocked) >= 256 {
 				flushNow()
 			}
 		case <-ticker.C:
@@ -199,7 +228,7 @@ func (w *appWriter) loop(flush time.Duration) {
 	}
 }
 
-func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry) error {
+func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry, blocked map[string]int) error {
 	tx, err := w.db.Begin()
 	if err != nil {
 		return err
@@ -227,6 +256,21 @@ func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry) error {
 		}
 		for _, e := range logs {
 			if _, err := statement.Exec(stamp(e.Time), e.Source, e.Process, e.Stream, e.Level, e.Message, e.RequestID, e.Raw); err != nil {
+				_ = statement.Close()
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		_ = statement.Close()
+	}
+	if len(blocked) > 0 {
+		statement, err := tx.Prepare(`INSERT INTO blocked (path, count) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET count = count + excluded.count`)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		for path, count := range blocked {
+			if _, err := statement.Exec(path, count); err != nil {
 				_ = statement.Close()
 				_ = tx.Rollback()
 				return err

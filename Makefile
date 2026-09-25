@@ -11,7 +11,7 @@ LDFLAGS := -X dboss/internal/version.Version=$(VERSION)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test fmt vet lint check demo demo-watch kill clean
+.PHONY: help build test fmt vet lint check demo demo-watch seed kill clean
 
 help: ## List available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -46,6 +46,9 @@ demo-watch: build ## Rebuild and restart the demo on changes
 		--watch ./go.sum \
 		--ignore './demo/.dboss/**' \
 		-- $(MAKE) demo DEMO_FLAGS=-y
+
+seed: ## Recreate the demo databases with dummy traffic, logs, audit and blocked data (stop the demo first)
+	go run ./internal/demo/seed --dir ./demo/.dboss/log
 
 kill: build ## Kill all demo apps and listeners in the app port range
 	$(BINARY) kill -c ./demo/dboss.yaml

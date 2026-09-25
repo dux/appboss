@@ -16,6 +16,26 @@ env:
   GREETING: from-config
   SOURCE: config
 
+# Analytics events from log/*.json.log. `make seed` fills the same Parquet store the app would, so
+# the console's Events tab has data: a saved view, a second one to filter by page, and a 4-step
+# onboarding funnel broken down by plan. Run it with `dboss events funnel bun onboarding` (needs
+# the duckdb CLI) or from the Events tab. Try filtering with `plan:pro` or `page:pricing`.
+events:
+  retention: 30d
+  views:
+    pro_signups: "signup_completed plan:pro"
+    pricing_views: "page_view page:pricing"
+  funnels:
+    onboarding:
+      by: anon
+      window: 1d
+      breakdown: plan
+      steps:
+        - {name: Visited pricing, filter: "page_view page:pricing"}
+        - {name: Started signup, filter: "signup_started"}
+        - {name: Signed up, filter: "signup_completed"}
+        - {name: Paid, filter: "checkout_completed"}
+
 cron:
   heartbeat:
     schedule: every 30s

@@ -11,9 +11,9 @@
   class {
     init() {
       this.state.apps = []
-      this.state.app = Pjax.hqs('app') || ''
-      this.state.filter = Pjax.hqs('f') || ''
-      this.state.range = RANGES.includes(Pjax.hqs('range')) ? Pjax.hqs('range') : '30d'
+      this.state.app = Fez.hqs('app') || ''
+      this.state.filter = Fez.hqs('f') || ''
+      this.state.range = RANGES.includes(Fez.hqs('range')) ? Fez.hqs('range') : '30d'
       this.state.tab = ['latest', 'views', 'sql'].includes(Dboss.readQs('tab')) ? Dboss.readQs('tab') : 'overview'
       this.state.selectTab = (tab) => this.setTab(tab)
       this.state.summary = null
@@ -710,7 +710,7 @@
 <section class="card ev-filter-card">
   <div class="ev-filter">
     <div class="ev-filter-box">
-      <input class="ev-filter-input" fez:this="filterNode" fez:keep="ev-filter-input" type="text" spellcheck="false" autocomplete="off" aria-label="Filter" placeholder="checkout_completed plan:pro -#internal value>10 user=u_42" onkeydown="fez.filterKeydown(event)" oninput="fez.filterInput()" onfocus="fez.filterInput()" onblur="fez.hideSuggest()" />
+      <input class="ev-filter-input" fez:this="filterNode" fez:keep="ev-filter-input" type="text" spellcheck="false" autocomplete="off" aria-label="Filter" placeholder="checkout_completed plan:pro -#internal value&#62;10 user=u_42" onkeydown="fez.filterKeydown(event)" oninput="fez.filterInput()" onfocus="fez.filterInput()" onblur="fez.hideSuggest()" />
       {#if state.suggest.length}
         <div class="ev-suggest" role="listbox">
           {#each state.suggest as item}

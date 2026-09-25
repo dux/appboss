@@ -60,6 +60,16 @@ func (h *Handler) logChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"channels": channels, "updated_at": time.Now().UTC()})
 }
 
+// logBlocked lists the deny counters, shared by every app.
+func (h *Handler) logBlocked(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.service.Blocked()
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
+}
+
 func (h *Handler) logTree(w http.ResponseWriter, r *http.Request) {
 	apps, err := h.service.LogTree()
 	if err != nil {

@@ -451,6 +451,11 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		{"web key under process", "procfile:\n  web: ./server\nprocesses:\n  web:\n    static: ./public\n", "processes.web.static: unknown key"},
 		{"canonical host", "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test]\n    canonical_host: www.demo.test\n", "not one of the hosts"},
 		{"allow ips", "procfile:\n  web: ./server\nallow_ips: [10.0.0.0]\n", "allow_ips"},
+		{"deny bare word", "procfile:\n  web: ./server\ndeny: [php]\n", "deny"},
+		{"deny mid wildcard", "procfile:\n  web: ./server\ndeny: [/a/*/b]\n", "deny"},
+		{"deny empty extension", "procfile:\n  web: ./server\ndeny: [\"*.\"]\n", "deny"},
+		{"deny root", "procfile:\n  web: ./server\ndeny: [/]\n", "deny"},
+		{"deny trailing star", "procfile:\n  web: ./server\ndeny: [/admin*]\n", "deny"},
 		{"basic auth", "procfile:\n  web: ./server\nbasic_auth:\n  alice: \"\"\n", "password is empty"},
 		{"header name", "procfile:\n  web: ./server\nheaders:\n  \"X Y\": z\n", "headers"},
 		{"auth email", "procfile:\n  web: ./server\nauth: [not-an-email]\n", "auth: invalid entry"},
@@ -472,6 +477,16 @@ func TestAppRejectsInvalidWebKeys(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: got %v, want error containing %q", test.name, err, test.want)
 		}
+	}
+}
+
+func TestDenyPatternsAreAccepted(t *testing.T) {
+	app, err := ParseApp([]byte("procfile:\n  web: ./server\ndeny: [\"*.php\", /admin/*, /server-status, /index.html]\n"), "dboss.yaml", Default().Defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.Deny) != 4 {
+		t.Fatalf("deny = %v", app.Deny)
 	}
 }
 
