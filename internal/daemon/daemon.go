@@ -204,7 +204,7 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 		for index, address := range cfg.Proxy.Listen {
 			handler := http.Handler(edge)
 			if certs != nil {
-				handler = certs.HTTPHandler(nil)
+				handler = certs.HTTPHandler(edge)
 			}
 			listener, bound, err := bindProxy("proxy", "proxy.listen", address, proxyProcess(index), allocator, echo != nil)
 			if err != nil {

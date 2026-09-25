@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,5 +41,33 @@ func TestNewACMEInitializesCacheAndALPN(t *testing.T) {
 	}
 	if !slices.Contains(certs.TLSConfig().NextProtos, acme.ALPNProto) {
 		t.Fatalf("ALPN challenge protocol missing from %v", certs.TLSConfig().NextProtos)
+	}
+}
+
+func TestHTTPHandlerServesForwardedHTTPS(t *testing.T) {
+	cfg := config.Default()
+	cfg.StateDir = t.TempDir()
+	cfg.Proxy.TLS.Listen = ":443"
+	certs, err := NewACME(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := certs.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+
+	forwarded := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	secure := httptest.NewRecorder()
+	handler.ServeHTTP(secure, forwarded)
+	if secure.Code != http.StatusTeapot {
+		t.Fatalf("forwarded https should reach the fallback, got %d", secure.Code)
+	}
+
+	plain := httptest.NewRequest(http.MethodGet, "http://demo.test/", nil)
+	redirected := httptest.NewRecorder()
+	handler.ServeHTTP(redirected, plain)
+	if redirected.Code != http.StatusFound {
+		t.Fatalf("plain http should redirect, got %d", redirected.Code)
 	}
 }

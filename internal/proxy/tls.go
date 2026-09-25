@@ -54,11 +54,21 @@ func (a *ACME) TLSConfig() *tls.Config {
 	}
 }
 
-// HTTPHandler answers ACME HTTP-01 challenges on the plain-HTTP listener and redirects every
-// other request to HTTPS. A non-nil fallback is served instead of the redirect for non-challenge
-// requests, which is how a deployment that keeps plain HTTP keeps working.
+// HTTPHandler answers ACME HTTP-01 challenges on the plain-HTTP listener. A request whose public
+// scheme is already https - Cloudflare sets X-Forwarded-Proto when it terminates TLS and reaches
+// the origin over http (Flexible) - is served by the fallback, so a Flexible host keeps working
+// while dboss also terminates TLS for the hosts that reach it over https. Every other request
+// redirects to https.
 func (a *ACME) HTTPHandler(fallback http.Handler) http.Handler {
-	return a.manager.HTTPHandler(fallback)
+	served := a.manager.HTTPHandler(fallback)
+	redirect := a.manager.HTTPHandler(nil)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestScheme(r) == "https" {
+			served.ServeHTTP(w, r)
+			return
+		}
+		redirect.ServeHTTP(w, r)
+	})
 }
 
 // hostAllowed reports whether host belongs to an app of this host or to the console. It is the
