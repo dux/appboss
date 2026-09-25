@@ -36,6 +36,8 @@
       this.state.changing = app.state === 'starting' || app.state === 'stopping'
       this.state.live = app.state === 'running' || app.state === 'starting'
       this.state.processes = app.processes || []
+      const hubs = (app.web_processes || []).filter((web) => web.pubsub && web.pubsub.path)
+      this.state.pubsub = hubs.map((web) => `${web.name} ${web.pubsub.path}`)
       this.state.cron = app.cron || []
       this.state.hooks = (app.hooks || []).map((hook) => ({ ...hook, url: this.state.hookMeta[hook.name]?.url || '' }))
       this.state.errorLog = (app.error_log || []).join('\n')
@@ -186,6 +188,9 @@
     </div>
     <div class="app-status">
       <span class="badge">{props.app.state}</span>
+      {#if state.pubsub.length}
+        <a class="badge badge-success badge-pubsub" href="#/pubsub" title="Realtime hub: {state.pubsub.join(', ')}">PubSub</a>
+      {/if}
       {#if props.app.maintenance}
         <span class="badge badge-warning">maintenance</span>
       {/if}
