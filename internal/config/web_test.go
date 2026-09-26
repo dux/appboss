@@ -18,21 +18,21 @@ func TestStaticKeys(t *testing.T) {
 	if app.WebProcesses[0].Static != DefaultStatic || !slices.Contains(app.Web.StaticExtensions, "css") || slices.Contains(app.Web.StaticExtensions, "html") {
 		t.Fatalf("unexpected web defaults: %+v", app.WebProcesses[0])
 	}
-	custom, err := ParseApp([]byte(base+"    static: /srv/assets\nstatic_extensions: []\n"), filepath.Join(dir, FileName), defaults)
+	custom, err := ParseApp([]byte(base+"static: /srv/assets\nstatic_extensions: []\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if custom.WebProcesses[0].Static != "/srv/assets" || len(custom.Web.StaticExtensions) != 0 {
 		t.Fatalf("app keys did not override the defaults: %+v", custom.WebProcesses[0])
 	}
-	disabled, err := ParseApp([]byte(base+"    static: false\n"), filepath.Join(dir, FileName), defaults)
+	disabled, err := ParseApp([]byte(base+"static: false\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if disabled.WebProcesses[0].Static != "" {
 		t.Fatalf("static: false should disable serving: %q", disabled.WebProcesses[0].Static)
 	}
-	truthy, err := ParseApp([]byte(base+"    static: true\n"), filepath.Join(dir, FileName), defaults)
+	truthy, err := ParseApp([]byte(base+"static: true\n"), filepath.Join(dir, FileName), defaults)
 	if err != nil || truthy.WebProcesses[0].Static != DefaultStatic {
 		t.Fatalf("static: true = %q, %v", truthy.WebProcesses[0].Static, err)
 	}

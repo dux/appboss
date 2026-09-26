@@ -254,13 +254,18 @@ defaults:
 
   # --- Web keys: what nginx or Caddy did in front of the app. Shared by every web process. ----
   # Set here for every app, or at the top level of one app's file to override it there. The
-  # per-process web keys (hosts, static, pubsub, health, canonical_host) live on the procfile
-  # entry instead.
+  # per-process web keys (hosts, pubsub, health, canonical_host) live on the procfile entry.
   # Cloudflare owns TLS, compression, caching, WAF and rate limiting, so those are not here.
   # Order per request: canonical redirect -> allow_ips -> deny -> auth -> basic_auth -> maintenance
   # -> static -> max_body/body buffer -> wake or forward -> headers.
 
-  # File extensions served from the web process's static directory, lowercase and without the dot;
+  # Directory served straight from disk for GET and HEAD on every web process, relative to the
+  # app folder. true means ./public (the default), a path sets another directory, false disables
+  # serving. A missing folder simply turns serving off. Regular files only, no index lookup, and
+  # only the extensions in static_extensions; served with Last-Modified, If-Modified-Since and
+  # range support, without waking the app.
+  static: ./public
+  # File extensions served from the app's static directory, lowercase and without the dot;
   # the match ignores case. Anything else under the directory (an .html page, a dotfile, a file
   # with no extension) is the app's to answer, even when the file exists. [] serves any regular file.
   static_extensions: [css, js, mjs, map, json, txt, xml, ico, png, jpg, jpeg, gif, svg, webp, avif, woff, woff2, ttf, otf, eot, mp4, webm, mp3, pdf, wasm, webmanifest]
@@ -380,13 +385,7 @@ postgres:
 # ".myapp.com" means "myapp.com" and "*.myapp.com". Longest match wins.
 # In single mode (no hosts declared) the first process is bound to .lvh.me for local dev.
 #
-# A web process may set `static`, the directory served straight from disk for GET and HEAD on its
-# hosts. `static: true` (the default) uses ./public, a path sets another directory, and
-# `static: false` disables it. Files are resolved relative to the app folder on every request, so a
-# release symlink swap is picked up immediately. Regular files only, and only the extensions in
-# static_extensions: a directory, a missing file or another extension falls through to the app.
-# No index lookup. Served with Last-Modified, If-Modified-Since and range support, without waking
-# the app.
+# The static directory is an app key (see the Web keys above); every web process serves it.
 #
 # A web process may set `health`, the readiness path dboss polls until the start flips to
 # running, e.g. /up (GET http://127.0.0.1:PORT/up must answer 2xx). Omitted means a plain TCP
@@ -435,7 +434,6 @@ procfile:
     hosts:
       - ".myapp.com"
     pubsub: true
-    static: ./public
     health: /up
     canonical_host: myapp.com
     count: 2
@@ -481,6 +479,7 @@ memory_max: 512m
 cpu_max: 0
 env:
   MALLOC_ARENA_MAX: "2"
+static: ./public
 static_immutable: [/assets/, /packs/]
 max_body: 50m
 headers:
@@ -493,8 +492,8 @@ headers:
 # through the proxy. Read the allocation with `dboss ports`.
 
 # Per-proctype overrides. Process keys only (stop, restart, logs, env,
-# resources); a web key here is an error, and `health`/`canonical_host`/`static`/`pubsub` live on
-# the web procfile entry.
+# resources); a web key here is an error, and `health`/`canonical_host`/`pubsub` live on the web
+# procfile entry while the rest are app keys.
 # Useful for a worker that needs a longer stop_timeout than the web process it runs next to.
 processes:
   worker:

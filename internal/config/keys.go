@@ -121,6 +121,8 @@ func typesOf(t reflect.Type) []string {
 		return []string{"bool", "button"}
 	case reflect.TypeOf(AuthCogPath("")):
 		return []string{"string", "bool"}
+	case reflect.TypeOf(StaticPath("")):
+		return []string{"string", "bool"}
 	}
 	switch t.Kind() {
 	case reflect.String:

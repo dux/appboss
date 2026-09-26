@@ -8,6 +8,61 @@
 
   const escape = (text) => text.replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[character])
 
+  // A `{...}` that JSON.parse accepts is an example object. Pretty-print it with a 2-space indent
+  // and keep later lines under the column where the value started. YAML flow mappings fail the
+  // parse and stay as written.
+  const takeJSON = (text, start) => {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < text.length; i++) {
+      const character = text[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') {
+        inString = true
+        continue
+      }
+      if (character === '{' || character === '[') depth++
+      else if (character === '}' || character === ']') {
+        depth--
+        if (depth === 0) {
+          const slice = text.slice(start, i + 1)
+          try {
+            const value = JSON.parse(slice)
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) return { end: i + 1, pretty: JSON.stringify(value, null, 2) }
+          } catch { /* not a JSON object */ }
+          return null
+        }
+      }
+    }
+    return null
+  }
+
+  const prettyJSON = (text) => {
+    let out = ''
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== '{') {
+        out += text[i]
+        continue
+      }
+      const taken = takeJSON(text, i)
+      if (!taken) {
+        out += text[i]
+        continue
+      }
+      const column = out.length - out.lastIndexOf('\n') - 1
+      const lines = taken.pretty.split('\n')
+      out += lines.map((line, index) => (index === 0 ? line : ' '.repeat(column) + line)).join('\n')
+      i = taken.end - 1
+    }
+    return out
+  }
+
   // One pass per line: comment, quoted string, key (block or flow), $VAR, bare scalar literal.
   const YAML = new RegExp([
     /((?:^|\s)#.*$)/,
@@ -44,7 +99,7 @@
       const line = this.props.lang === 'yaml' ? yamlLine : escape
       // Fez collapses ">\n  <" in rendered HTML, which would glue two highlighted lines together,
       // so line breaks travel as an entity.
-      this.state.html = dedent(this.props.text).map(line).join('&#10;')
+      this.state.html = prettyJSON(dedent(this.props.text).join('\n')).split('\n').map(line).join('&#10;')
     }
   }
 </script>

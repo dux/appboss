@@ -32,7 +32,6 @@ type ProcessSpec struct {
 	Command string      `yaml:"command" json:"command"`
 	Hosts   List        `yaml:"hosts,omitempty" json:"hosts,omitempty"`
 	Pubsub  *PubsubSpec `yaml:"pubsub,omitempty" json:"pubsub,omitempty"`
-	Static  *StaticSpec `yaml:"static,omitempty" json:"static,omitempty"`
 	// Health is the web process's readiness path, e.g. /up; empty means a TCP connect.
 	Health string `yaml:"health,omitempty" json:"health,omitempty"`
 	// CanonicalHost is the web process hostname every other host redirects to; it must be one
@@ -51,7 +50,7 @@ func (p ProcessSpec) Instances() int { return max(p.Count, 1) }
 
 // processSpecKeys are the keys of the mapping form, in the order the hints name them. They are
 // checked here because a custom decoder is a leaf as far as the schema walk is concerned.
-var processSpecKeys = []string{"command", "hosts", "pubsub", "static", "health", "canonical_host", "count"}
+var processSpecKeys = []string{"command", "hosts", "pubsub", "health", "canonical_host", "count"}
 
 // processSpecFields is ProcessSpec without its methods, so the mapping form decodes and encodes
 // through the struct tags instead of recursing into the custom marshalers.
@@ -76,7 +75,7 @@ func (p *ProcessSpec) UnmarshalYAML(node *yaml.Node) error {
 
 // commandOnly reports whether the process only runs a command, which marshals as a scalar.
 func (p ProcessSpec) commandOnly() bool {
-	return len(p.Hosts) == 0 && p.Pubsub == nil && p.Static == nil && p.Health == "" && p.CanonicalHost == "" && p.Count <= 1
+	return len(p.Hosts) == 0 && p.Pubsub == nil && p.Health == "" && p.CanonicalHost == "" && p.Count <= 1
 }
 
 // MarshalYAML writes a scalar command when the process only runs a command, else the full mapping,
@@ -96,43 +95,60 @@ func (p ProcessSpec) MarshalJSON() ([]byte, error) {
 	return json.Marshal(processSpecFields(p))
 }
 
-// StaticSpec is a web process's static file option: `true` for the default ./public, a path, or
-// `false` to disable. An absent option also uses the default.
-type StaticSpec struct {
-	Path string
-}
+// StaticPath is the app-level static file option: a directory served straight from disk, true for
+// the default ./public, or false to disable. An absent option uses the default.
+type StaticPath string
 
 // UnmarshalYAML accepts true (the default directory), a path, or false (disabled).
-func (s *StaticSpec) UnmarshalYAML(node *yaml.Node) error {
+func (s *StaticPath) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.ScalarNode {
 		return &Error{Line: node.Line, Key: "static", Message: "must be true, a path, or false"}
 	}
 	switch node.Tag {
 	case "!!bool":
 		if node.Value == "true" {
-			s.Path = DefaultStatic
+			*s = DefaultStatic
 		}
 		return nil
 	case "!!null":
 		return nil
 	}
-	s.Path = node.Value
+	*s = StaticPath(node.Value)
 	return nil
 }
 
 // MarshalYAML writes false when static serving is off, else the directory.
-func (s StaticSpec) MarshalYAML() (any, error) {
-	if s.Path == "" {
+func (s StaticPath) MarshalYAML() (any, error) {
+	if s == "" {
 		return false, nil
 	}
-	return s.Path, nil
+	return string(s), nil
 }
 
-func (s StaticSpec) MarshalJSON() ([]byte, error) {
-	if s.Path == "" {
+func (s StaticPath) MarshalJSON() ([]byte, error) {
+	if s == "" {
 		return []byte("false"), nil
 	}
-	return json.Marshal(s.Path)
+	return json.Marshal(string(s))
+}
+
+// UnmarshalJSON mirrors UnmarshalYAML for the console's JSON config payloads.
+func (s *StaticPath) UnmarshalJSON(data []byte) error {
+	var path string
+	if err := json.Unmarshal(data, &path); err == nil {
+		*s = StaticPath(path)
+		return nil
+	}
+	var enabled bool
+	if err := json.Unmarshal(data, &enabled); err != nil {
+		return err
+	}
+	if enabled {
+		*s = DefaultStatic
+		return nil
+	}
+	*s = ""
+	return nil
 }
 
 // PubsubSpec is the web process's realtime option: `true` for the default path, a bare path, or a
@@ -270,10 +286,7 @@ func (a *App) deriveWeb() error {
 		if len(spec.Hosts) == 0 {
 			continue
 		}
-		web := WebProcess{Name: name, Hosts: spec.Hosts, CanonicalHost: spec.CanonicalHost, Static: DefaultStatic}
-		if spec.Static != nil {
-			web.Static = spec.Static.Path
-		}
+		web := WebProcess{Name: name, Hosts: spec.Hosts, CanonicalHost: spec.CanonicalHost}
 		a.WebProcesses = append(a.WebProcesses, web)
 		for _, host := range spec.Hosts {
 			if !validHostPattern(host) {
@@ -288,6 +301,14 @@ func (a *App) deriveWeb() error {
 		}
 	}
 	return nil
+}
+
+// resolveStatic copies the app-level static directory onto every web process, so the option lives
+// in one place. An empty value disables serving.
+func (a *App) resolveStatic() {
+	for index := range a.WebProcesses {
+		a.WebProcesses[index].Static = string(a.Web.Static)
+	}
 }
 
 // resolveHealth moves each web process's health path onto its process keys. Only a web process may
@@ -369,7 +390,7 @@ func (a *App) UseDevHosts() {
 	if _, ok := a.Procfile["web"]; !ok {
 		name = processNames(a.Procfile)[0]
 	}
-	a.WebProcesses = []WebProcess{{Name: name, Hosts: List{DevHost}, Static: DefaultStatic}}
+	a.WebProcesses = []WebProcess{{Name: name, Hosts: List{DevHost}, Static: string(a.Web.Static)}}
 	a.Hosts = List{DevHost}
 }
 
@@ -440,6 +461,7 @@ func buildApp(raw appFile, defaults Defaults, dev bool) (App, error) {
 	if dev {
 		app.UseDevHosts()
 	}
+	app.resolveStatic()
 	if err := app.resolveHealth(); err != nil {
 		return App{}, err
 	}

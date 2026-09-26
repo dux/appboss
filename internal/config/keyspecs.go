@@ -51,7 +51,7 @@ var keySpecs = map[string]KeySpec{
 	"postgres.backups": {Block: "postgres", Name: "Backups", Description: "databases dumped by the daily run, each with its rotation: week or month", Example: "{myapp_production: week, reports: month}"},
 
 	// --- App ---
-	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds hosts is a web process (an app may have several, each with its own hosts, static, pubsub, health and canonical_host); count runs that many copies, balanced by the proxy for a web process", Example: "{web: {command: bundle exec puma -C config/puma.rb, hosts: [\".myapp.com\"], static: ./public, health: /up, canonical_host: myapp.com, count: 2}, worker: bundle exec lux jobs:work}", Required: true},
+	"procfile":  {Block: "app", Name: "Process commands", Description: "process commands by name; names match [a-z][a-z0-9_-]*. A scalar is a background process; every mapping that adds hosts is a web process (an app may have several, each with its own hosts, pubsub, health and canonical_host); count runs that many copies, balanced by the proxy for a web process", Example: "{web: {command: bundle exec puma -C config/puma.rb, hosts: [\".myapp.com\"], health: /up, canonical_host: myapp.com, count: 2}, worker: bundle exec lux jobs:work}", Required: true},
 	"autostart": {Block: "app", Name: "Start policy", Description: "start policy: true with the host, false on run/console/any request, button only on a POST to the wake page", Enum: []string{"true", "false", "button"}},
 	"deletable": {Block: "app", Name: "Allow destroy", Description: "allow operators to permanently remove this app through the console or dboss destroy"},
 	"pages":     {Block: "app", Name: "Pages", Description: "folder of the dboss pages served for the app (<name>.html, else template.html, else the host's, else built in); in the host file the fallback for every app", Example: "./public/errors"},
@@ -82,6 +82,7 @@ var keySpecs = map[string]KeySpec{
 
 	// --- Web ---
 	"health_endpoint":   {Block: "web", Name: "Health endpoint", Description: "public status path on the app's own hosts: 200 when running or asleep and wakeable, 503 otherwise; empty disables", Example: "/healthz"},
+	"static":            {Block: "web", Name: "Static directory", Description: "directory served straight from disk for GET and HEAD on every web process; true means ./public (the default), false disables serving", Example: "./public"},
 	"static_immutable":  {Block: "web", Name: "Immutable prefixes", Description: "path prefixes under the static directory cached as immutable for a year", Example: "[/assets/, /packs/]"},
 	"static_extensions": {Block: "web", Name: "Static extensions", Description: "file extensions served from the static directory, without the dot; empty serves any file", Example: "[css, js, png]"},
 	"max_body":          {Block: "web", Name: "Max body size", Description: "request body limit; 0 none"},

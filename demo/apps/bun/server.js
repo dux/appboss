@@ -19,6 +19,11 @@ Bun.serve({
             <h1>Hello from Bun</h1>
             <p>Served by dboss on port ${port}.</p>
             <p>PROC_TYPE=${env("PROC_TYPE")} GREETING=${env("GREETING")} SOURCE=${env("SOURCE")} PORT=${env("PORT")}</p>
+
+            <h2>Static files</h2>
+            <img src="/dboss.svg" alt="Served by dboss" width="260" height="72" style="max-width: 100%; height: auto;">
+            <p>This image is served by dboss straight from disk, not by the Bun app.</p>
+            <p>The file is <code>public/dboss.svg</code>; dboss answers <code>/dboss.svg</code> at the same path, so the app never sees the request and the asset still loads while the app is stopped.</p>
           </main>
         </body>
       </html>`,

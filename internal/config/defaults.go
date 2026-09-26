@@ -38,6 +38,7 @@ type Process struct {
 // hashes stay out of the console and `dboss status --json`.
 type Web struct {
 	HealthEndpoint   string            `yaml:"health_endpoint" json:"health_endpoint"`
+	Static           StaticPath        `yaml:"static" json:"static"`
 	StaticImmutable  List              `yaml:"static_immutable" json:"static_immutable"`
 	StaticExtensions List              `yaml:"static_extensions" json:"static_extensions"`
 	MaxBody          Size              `yaml:"max_body" json:"max_body"`

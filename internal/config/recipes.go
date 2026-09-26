@@ -83,22 +83,39 @@ var recipeSpecs = []recipeSpec{
 		},
 	},
 	{
+		id:          "static",
+		title:       "Static files",
+		description: "Serve CSS, JS, images and fonts straight from a folder on disk, at the same URL, without waking the app.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "static"},
+			{path: "static_extensions"},
+			{path: "static_immutable"},
+		},
+	},
+	{
+		id:          "pages",
+		title:       "Error pages",
+		description: "The HTML dboss renders for its own 502s and for the app's 5xx answers, and every other page it serves.",
+		scope:       RecipeApp,
+		fields: []recipeField{
+			{path: "pages"},
+		},
+	},
+	{
 		id:          "web",
 		title:       "Web",
-		description: "Static policy and the proxy behaviour in front of the app. Hosts, the static directory and the canonical host are declared on the web process in the YAML editor.",
+		description: "Proxy behaviour in front of the app: response headers, body limit, IP allow lists and path denies. Hosts and the canonical host are declared on the web process in the YAML editor.",
 		scope:       RecipeApp,
 		fields: []recipeField{
 			{path: "autostart"},
 			{path: "deletable"},
-			{path: "static_immutable"},
-			{path: "static_extensions"},
 			{path: "health_endpoint"},
 			{path: "max_body"},
 			{path: "allow_ips"},
 			{path: "deny"},
 			{path: "headers"},
 			{path: "basic_auth"},
-			{path: "pages"},
 		},
 	},
 	{

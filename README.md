@@ -883,16 +883,19 @@ Each request walks the stages in this order: canonical redirect, `allow_ips`, `d
 * A pubsub publisher presenting the app's publish secret passes without the basic-auth credentials or a sign-in session.
 * The same holds for `auth`: no session means no wake, the health endpoint stays open, and static files are protected.
 
-## Static files and pages
+## Static files
 
-Each web process serves `./public` straight from disk (`static` on the web procfile entry, relative to the app folder) for GET and HEAD, without waking the app.
-Set `static: /path` for another directory or `static: false` to disable it for that process.
+Each app serves one folder straight from disk, at the same URL, for GET and HEAD, without waking the app (`static`, relative to the app folder).
+It defaults to `./public`, so a `public/foo/bar.png` answers `/foo/bar.png` with nothing declared.
+Set `static: /path` for another directory or `static: false` to disable it for the app.
 Only the common asset types in `static_extensions` are served: css, js, mjs, map, json, txt, xml, ico, images, fonts, mp4, webm, mp3, pdf, wasm and webmanifest.
 A missing file, a directory, or a file with any other extension (an `.html` page, a dotfile, no extension) is a normal request to the app, so a route always wins over a stray file.
 A missing `public` folder simply turns static serving off; `static_extensions: []` serves any regular file.
 Paths under `static_immutable` (default `/assets/`) are cached as immutable for a year, everything else for an hour.
 
-Every page dboss answers with itself is built in and can be replaced:
+## Error pages
+
+Every page dboss answers with itself is built in and can be replaced, the server error page included:
 
 | Page | Status | Served when |
 |---|---|---|

@@ -226,7 +226,7 @@ func TestBasicAuthProtectsStaticToo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := featureSnapshot(t, "    static: ./public\nbasic_auth:\n  alice: \""+string(hash)+"\"\n")
+	snapshot := featureSnapshot(t, "static: ./public\nbasic_auth:\n  alice: \""+string(hash)+"\"\n")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "robots.txt"), "User-agent: *\n")
 	request := httptest.NewRequest(http.MethodGet, "http://demo.test/robots.txt", nil)
 	response := serveFeature(t, featureHandler(), snapshot, request)
@@ -327,7 +327,7 @@ func TestHostPagesAreTheFallback(t *testing.T) {
 }
 
 func TestStaticFilesStayInsideRoot(t *testing.T) {
-	snapshot := featureSnapshot(t, "    static: ./public\nheaders:\n  X-Robots-Tag: none\n")
+	snapshot := featureSnapshot(t, "static: ./public\nheaders:\n  X-Robots-Tag: none\n")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "secret.txt"), "secret")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "assets", "app.css"), "body{}")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "index.html"), "<p>index</p>")
@@ -370,9 +370,13 @@ func TestStaticDefaultsToPublicDirectory(t *testing.T) {
 		t.Fatalf("missing public dir should reach the app, got %d", response.Code)
 	}
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "logo.PNG"), "png")
+	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "foo", "bar.png"), "nested")
 	writeProxyFixture(t, filepath.Join(snapshot.Dir, "public", "about.html"), "<p>about</p>")
 	if response := get("/logo.PNG"); response.Code != http.StatusOK || response.Body.String() != "png" {
 		t.Fatalf("asset from default public dir: %d %q", response.Code, response.Body.String())
+	}
+	if response := get("/foo/bar.png"); response.Code != http.StatusOK || response.Body.String() != "nested" {
+		t.Fatalf("nested asset keeps its path: %d %q", response.Code, response.Body.String())
 	}
 	if response := get("/about.html"); response.Code != http.StatusBadGateway {
 		t.Fatalf("html under public should reach the app, got %d", response.Code)

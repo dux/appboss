@@ -377,7 +377,7 @@ func TestAppOverridesMergeKeyByKey(t *testing.T) {
 	defaults.Env = map[string]string{"A": "host", "B": "host"}
 	defaults.Headers = map[string]string{"X-Frame-Options": "DENY"}
 	defaults.BasicAuth = map[string]string{"ops": "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"}
-	data := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test, www.demo.test]\n    canonical_host: demo.test\n    static: ./public\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
+	data := "procfile:\n  web:\n    command: ./server\n    hosts: [demo.test, www.demo.test]\n    canonical_host: demo.test\nstatic: ./public\nidle_stop: 0s\nenv:\n  B: app\nheaders:\n  X-Powered-By: \"\"\nstatic_immutable: []\nmax_body: 50m\nallow_ips: [10.0.0.0/8]\nprocesses:\n  web:\n    env:\n      C: proc\n    stop_timeout: 1s\n"
 	app, err := ParseApp([]byte(data), "app/dboss.yaml", defaults)
 	if err != nil {
 		t.Fatal(err)

@@ -54,7 +54,7 @@ func signInCookieFor(t *testing.T, handler *Handler, snapshot supervisor.Snapsho
 }
 
 func TestSignInGatesTheAppBehindAuthCog(t *testing.T) {
-	snapshot := featureSnapshot(t, "    static: ./public\n"+gated)
+	snapshot := featureSnapshot(t, "static: ./public\n"+gated)
 	if err := os.MkdirAll(filepath.Join(snapshot.Dir, "public"), 0o755); err != nil {
 		t.Fatal(err)
 	}

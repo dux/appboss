@@ -11,6 +11,10 @@ procfile:
       - admin.bun.lvh.me
     health: /up
 
+# Every web process serves ./public straight from disk at the same URL, so public/dboss.svg
+# answers /dboss.svg without waking the app. ./public is the default; false disables it.
+static: ./public
+
 # .env sets GREETING too and wins; SOURCE comes only from here. The page at / prints both.
 env:
   GREETING: from-config

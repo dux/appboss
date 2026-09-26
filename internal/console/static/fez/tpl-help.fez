@@ -18,12 +18,8 @@
         { id: 'idle', title: 'Idle stop & wake', summary: 'Stops apps nobody uses and starts them again on the next request.' },
         { id: 'routing', title: 'Routing', summary: 'Sends each hostname to the right app, with redirects, headers and maintenance mode.' },
         { id: 'access', title: 'Access control', summary: 'AuthCog sign-in, basic auth, IP allow lists and a Cloudflare-only origin.' },
-        { id: 'static', title: 'Static & pages', summary: 'Serves assets from disk, and every page dboss answers with from one template you can replace.' },
-        { id: 'logging', title: 'Logging', summary: 'Every channel dboss records per app - requests, stdout, app log files, blocked paths, traffic and events - and how retention keeps them bounded.' },
-        { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
-        { id: 'exceptions', title: 'Exceptions', summary: 'Error groups from a *.exceptions.log file, with per-minute counts, users and IPs.' },
-        { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
-        { id: 'events', title: 'Events', summary: 'Analytics from JSON log lines: counts, filters, tag facets, funnels and SQL over Parquet.' },
+        { id: 'static', title: 'Static files', summary: 'Serves CSS, JS, images and fonts from a folder on disk, at the same URL, without waking the app.' },
+        { id: 'pages', title: 'Error pages', summary: 'Replaces server errors and every page dboss answers with, from one HTML template you can replace.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
         { id: 'add', title: 'Add from git', summary: 'Installs a repository that carries its own dboss.yaml from its URL.' },
         { id: 'hooks', title: 'Deploy hooks', summary: 'Commands a signed HTTP ping triggers, plus one-off exec.' },
@@ -35,6 +31,17 @@
         { id: 'notify', title: 'Notifications', summary: 'One operator webhook for crashes and failures.' },
         { id: 'alerts', title: 'Alerts', summary: 'Posts to the webhook when an app answers with too many errors or too slowly.' },
         { id: 'postgres', title: 'PostgreSQL', summary: 'Inspect the host server, run SQL, and keep daily dumps for a week or a month.' },
+      ],
+    },
+    {
+      title: 'Logging',
+      topics: [
+        { id: 'logging', title: 'Logging', summary: 'Every channel dboss records per app - requests, stdout, app log files, blocked paths, traffic and events - and how retention keeps them bounded.' },
+        { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
+        { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
+        { id: 'events', title: 'Events', summary: 'Analytics from JSON log lines: counts, filters, tag facets, funnels and SQL over Parquet.' },
+        { id: 'exceptions', title: 'Exceptions', summary: 'Error groups from a *.exceptions.log file, with per-minute counts, users and IPs.' },
+        { id: 'blocked', title: 'Blocked requests', summary: 'Paths the deny rules refuse with 403, counted by path across every app.' },
       ],
     },
   ]
@@ -135,9 +142,20 @@
       web:
         command: ./start.sh
         hosts: [shop.example.com]
-        static: ./public
+
+    # ./public by default; a path, or false to disable. Served at the same URL,
+    # so public/foo/bar.png answers /foo/bar.png.
+    static: ./public
     static_immutable: [/assets/, /packs/]
-    pages: ./public/error_pages   # the default
+    `,
+    pages: `
+    procfile:
+      web:
+        command: ./start.sh
+        hosts: [shop.example.com]
+
+    # The folder dboss reads its pages from; ./public/error_pages by default.
+    pages: ./public/error_pages
     `,
     pagesTemplate: `
     <!doctype html>
@@ -152,6 +170,14 @@
     dboss pages dump shop             # write template.html to edit
     dboss pages dump shop error       # write error.html with its wording
     dboss pages dump --all            # the host template and every page
+    `,
+    blocked: `
+    # app dboss.yaml, or defaults: in the host file
+    deny:
+      - "*.php"
+      - /admin/*
+      - /.git/*
+      - /.env
     `,
     logging: `
     # host dboss.yaml
@@ -319,7 +345,6 @@
     init() {
       this.state.topic = Fez.hqs('topic') || 'intro'
       this.state.groups = GROUPS
-      this.state.features = GROUPS[1].topics
       this.state.examples = EXAMPLES
     }
 
@@ -362,15 +387,19 @@
         <h2>What is dboss</h2>
         <p>dboss is one binary that runs the apps on one host. It starts and supervises their processes, owns port 80 and routes each hostname to the right app, keeps their logs searchable, and serves this console and a CLI over the same actions.</p>
         <p>Cloudflare is the edge: TLS, caching, compression and WAF live there. Releases are the deploy tool's job. Everything in between is configured with plain <code>dboss.yaml</code> files on disk, one for the host and one per app.</p>
-        <h3>Features</h3>
-        <div class="help-index">
-          {#each state.features as feature}
-            <div class="help-cmd">
-              <a class="help-jump" onclick="fez.select('{feature.id}')">{feature.title}</a>
-              <span>{feature.summary}</span>
+        {#each state.groups as group}
+          {#unless group.title === 'Overview'}
+            <h3>{group.title}</h3>
+            <div class="help-index">
+              {#each group.topics as feature}
+                <div class="help-cmd">
+                  <a class="help-jump" onclick="fez.select('{feature.id}')">{feature.title}</a>
+                  <span>{feature.summary}</span>
+                </div>
+              {/each}
             </div>
-          {/each}
-        </div>
+          {/unless}
+        {/each}
         <h3>Around the features</h3>
         <ul>
           <li>Management console with live state, start, stop, restart and maintenance controls, a validated config editor, logs, audit and help.</li>
@@ -488,7 +517,7 @@
         <h3>Details</h3>
         <ul>
           <li>Idle apps are checked every minute; <code>idle_stop</code> is off (<code>0s</code>) unless an app or <code>defaults</code> sets it.</li>
-          <li>A stopped app gets the <code>starting</code> page, which reloads every 5 seconds until the app is healthy. A crashed app gets the <code>crashed</code> page. Both are <a href="#/help?topic=static">pages</a> you can replace.</li>
+          <li>A stopped app gets the <code>starting</code> page, which reloads every 5 seconds until the app is healthy. A crashed app gets the <code>crashed</code> page. Both are <a href="#/help?topic=pages">pages</a> you can replace.</li>
           <li>Static files, the health endpoint and PubSub are served by dboss itself and never wake the app.</li>
           <li>A wake that fails posts <code>wake-failed</code> to the operator webhook; explicit starts from the CLI or console do not.</li>
         </ul>
@@ -557,24 +586,51 @@
 
     {#if state.topic === 'static'}
       <section>
-        <h2>Static &amp; pages</h2>
-        <p>Each web process can serve asset files straight from its own <code>static</code> directory. Every page dboss answers with itself (starting, stopped, crashed, maintenance, error, forbidden, blocked, signed out, and on the host 404 and the console login) is built in and can be replaced with your own HTML.</p>
+        <h2>Static files</h2>
+        <p>Each app serves one folder straight from disk, at the same URL, without waking the app. Put <code>public/foo/bar.png</code> in the repo and the proxy answers <code>/foo/bar.png</code> from disk, so CSS, JS, images and fonts never spend an app worker.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Serving CSS, JS, images and fonts without spending app workers, and without waking a stopped app.</li>
           <li>Year-long immutable caching for fingerprinted asset folders, so Cloudflare and browsers keep them.</li>
-          <li>One branded template for every page dboss shows, per app or for the whole host, while API clients still get the bare status.</li>
-          <li>Replacing the app's own <code>5xx</code> body with the same branded page.</li>
+          <li>One folder to drop a build into: the path on disk is the path in the URL.</li>
         </ul>
         <h3>Config keys</h3>
-        <div fez:keep="keys-static"><db-config-keys paths="static_extensions,static_immutable,pages" /></div>
+        <div fez:keep="keys-static"><db-config-keys paths="static,static_extensions,static_immutable" /></div>
         <h3>Example</h3>
         <db-preview-yaml :text="state.examples.static" />
         <h3>Details</h3>
-        <p>Files under a web process's <code>static</code> (default <code>./public</code>; <code>static: false</code> disables it) are served straight from disk for GET and HEAD without waking the app, but only the asset types in <code>static_extensions</code>. A missing file, or any other extension such as <code>.html</code>, is a normal request to the app. An empty list serves any file.</p>
-        <p>For each page dboss reads, on every request, the first of: <code>&#60;name&#62;.html</code> in the app's <code>pages</code> folder, <code>template.html</code> there, the same two in the host's <code>pages</code> folder, then the built-in template. So one <code>template.html</code> covers every page. Pages go only to a GET that accepts <code>text/html</code>; everything else gets the bare status.</p>
-        <p>A page fills these tokens and leaves any other <code>&#123;&#123;...&#125;&#125;</code> alone: <code>&#123;&#123;status&#125;&#125;</code>, <code>&#123;&#123;title&#125;&#125;</code>, <code>&#123;&#123;message&#125;&#125;</code>, <code>&#123;&#123;action&#125;&#125;</code> (the start button or sign-in link dboss builds), <code>&#123;&#123;app&#125;&#125;</code> and <code>&#123;&#123;dboss_logo&#125;&#125;</code> (the dboss mark, served at <code>/.well-known/dboss/logo.svg</code> on every host).</p>
+        <ul>
+          <li><code>static</code> is the folder, relative to the app (<code>./public</code> by default). <code>static: false</code> disables serving; another path, e.g. <code>./assets</code>, serves that folder instead.</li>
+          <li>With no config, serving is on when a <code>public/</code> folder exists and off when it does not, so nothing has to be declared for the common case.</li>
+          <li>Only GET and HEAD are answered; every other method reaches the app. Only the extensions in <code>static_extensions</code> are served, and an empty list serves any regular file.</li>
+          <li>A missing file, a directory, an <code>.html</code> page, a dotfile or an extensionless path reaches the app, so a route always wins over a stray file. No index lookup.</li>
+          <li>Lookups stay inside the folder, so <code>..</code> cannot escape it. A release symlink swap is picked up on the next request.</li>
+          <li>Paths under <code>static_immutable</code> (default <code>/assets/</code>) get <code>Cache-Control: public, max-age=31536000, immutable</code>; everything else gets an hour.</li>
+          <li>Static files sit behind <code>auth</code>, <code>basic_auth</code>, <code>allow_ips</code> and <code>deny</code>, so a protected app protects its assets too.</li>
+          <li>For the pages dboss serves, including server errors, see <a href="#/help?topic=pages">Error pages</a>.</li>
+        </ul>
+      </section>
+    {/if}
+
+    {#if state.topic === 'pages'}
+      <section>
+        <h2>Error pages</h2>
+        <p>Every page dboss answers with itself is built in and can be replaced with your own HTML: the server error page for a <code>502</code> and for an app's own <code>5xx</code>, plus starting, stopped, crashed, maintenance, forbidden, blocked, signed out, and on the host the <code>404</code> and the console login.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>One branded server error page instead of a bare <code>502</code> or the app's own error body.</li>
+          <li>One branded template for every page dboss shows, per app or for the whole host, while API clients still get the bare status.</li>
+          <li>Replacing the app's own <code>5xx</code> body with the same page.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-pages"><db-config-keys paths="pages" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.pages" />
+        <h3>Template</h3>
         <db-preview-yaml :text="state.examples.pagesTemplate" lang="text" />
+        <h3>Details</h3>
+        <p>For each page dboss reads, on every request, the first of: <code>&#60;name&#62;.html</code> in the app's <code>pages</code> folder (default <code>./public/error_pages</code>), <code>template.html</code> there, the same two in the host's <code>pages</code> folder, then the built-in template. So one <code>template.html</code> covers every page.</p>
+        <p>A page fills these tokens and leaves any other <code>&#123;&#123;...&#125;&#125;</code> alone: <code>&#123;&#123;status&#125;&#125;</code>, <code>&#123;&#123;title&#125;&#125;</code>, <code>&#123;&#123;message&#125;&#125;</code>, <code>&#123;&#123;action&#125;&#125;</code> (the start button or sign-in link dboss builds), <code>&#123;&#123;app&#125;&#125;</code> and <code>&#123;&#123;dboss_logo&#125;&#125;</code> (the dboss mark, served at <code>/.well-known/dboss/logo.svg</code> on every host). Pages go only to a GET that accepts <code>text/html</code>; everything else gets the bare status.</p>
         <ul>
           <li>dboss's own errors (<code>502</code> when the app is unreachable, timed out or has no port) always render the <code>error</code> page.</li>
           <li>The app's own <code>5xx</code> answers are replaced with the <code>error</code> page, status kept, only when the app's pages folder has <code>error.html</code> or <code>template.html</code>. An app that ships no pages keeps its own error bodies.</li>
@@ -587,7 +643,7 @@
     {#if state.topic === 'logging'}
       <section>
         <h2>Logging</h2>
-        <p>Every app gets its own store at <code>dir/log/&#60;app&#62;/dboss.sqlite</code>, holding its requests, process output and app log files; analytics events live next to it as Parquet. The daemon log and the operator audit live in the reserved <code>_dboss</code> database. The <a href="#/help?topic=logs">Logs</a>, <a href="#/help?topic=traffic">Traffic</a> and <a href="#/help?topic=events">Events</a> tabs, the full-screen viewer at <code>/logs</code> and <code>dboss logs</code> all read the same data.</p>
+        <p>Every app gets its own store at <code>dir/log/&#60;app&#62;/dboss.sqlite</code>, holding its requests, process output and app log files; analytics events live next to it as Parquet. The daemon log and the operator audit live in the reserved <code>_dboss</code> database. The <a href="#/help?topic=logs">Logs</a>, <a href="#/help?topic=traffic">Traffic</a>, <a href="#/help?topic=events">Events</a> and <a href="#/help?topic=exceptions">Exceptions</a> tabs, the full-screen viewer at <code>/logs</code> and <code>dboss logs</code> all read the same data.</p>
         <h3>What it helps with</h3>
         <ul>
           <li>Finding one failing request or reading what a process printed, without an SSH session.</li>
@@ -602,14 +658,14 @@
           <li><code>dboss</code> - the daemon's own log, in the reserved <code>_dboss</code> database, shared by the whole host.</li>
           <li>One channel per <code>*.log</code> file under the app's <code>./log</code> folder, plus <code>cron-&#60;job&#62;</code>, <code>hook-&#60;name&#62;</code> and <code>lifecycle-&#60;step&#62;</code> for the commands dboss runs.</li>
           <li><code>&#60;ns&#62;.json.log</code> is not a plain log: it is an <a href="#/help?topic=events">event</a> namespace, stored as Parquet per namespace and day.</li>
-          <li>Blocked requests are not process output: each <code>deny</code> hit is counted by path in the <code>_dboss</code> database and kept forever.</li>
+          <li><a href="#/help?topic=blocked">Blocked requests</a> are not process output: each <code>deny</code> hit is counted by path in the <code>_dboss</code> database and kept forever.</li>
         </ul>
         <h3>Console views</h3>
         <ul>
           <li><a href="#/help?topic=logs">Logs</a> - full-text search and a time range over every channel, with level, method and status filters, a per-row detail view, copy and a text export. A Cloudflare Ray ID can be pasted as the query.</li>
           <li><a href="#/help?topic=traffic">Traffic</a> - requests over time, error rate, latency quantiles and the top paths, countries and clients, aggregated from the request rows.</li>
           <li><a href="#/help?topic=events">Events</a> - counts, filters, tag facets, funnels and SQL over the app's Parquet files.</li>
-          <li>Blocked requests (<code>#/blocked</code>, from the Logs page) - the denied paths across every app, biggest first, capped at 200.</li>
+          <li><a href="#/help?topic=blocked">Blocked requests</a> (<code>#/blocked</code>, from the Logs page) - the denied paths across every app, biggest first, capped at 200.</li>
           <li><a href="#/help?topic=audit">Audit</a> - who did what, in the reserved <code>_dboss</code> database, with its own retention.</li>
         </ul>
         <h3>Config keys</h3>
@@ -624,7 +680,7 @@
           <li><code>dir</code> is the runtime directory; every store lives under its <code>log/</code>. Keep it on a filesystem with room for the retention you choose.</li>
           <li><code>maintenance_at</code> (default <code>04:10</code>) is the one daily housekeeping time: the prune runs first, then SQLite <code>VACUUM</code> on every app database and the host database. Run it off peak, since the vacuum rewrites each file.</li>
           <li>Process log files rotate at 10m and keep five rotated files; stdout retention is what bounds the copied segments. App <code>*.log</code> files are app-owned: dboss tails them and advances an offset, never deletes or renames them.</li>
-          <li><code>deny</code> refuses paths before the app is contacted and counts each hit under Blocked requests. The list and its patterns are in <a href="#/help?topic=access">Access control</a>.</li>
+          <li><code>deny</code> refuses paths before the app is contacted and counts each hit under <a href="#/help?topic=blocked">Blocked requests</a>. The list and its patterns are in <a href="#/help?topic=access">Access control</a>.</li>
           <li><code>log_retention</code>, <code>stdout_retention</code> and <code>events.retention</code> are app keys; <code>dir</code>, <code>log_level</code>, <code>audit_retention</code> and <code>maintenance_at</code> are host keys that need a daemon restart.</li>
         </ul>
       </section>
@@ -679,6 +735,31 @@
           <li>Clicking a group opens its full dump and the last 50 minute rows. <strong>Resolve</strong>/<strong>Reopen</strong> flips <code>is_resolved</code> and audits the click; resolved rows dim.</li>
           <li><code>log_retention</code> prunes old minute rows; the summary, its flag and its first nonempty dump are kept.</li>
           <li>A malformed line becomes a <code>warn</code> row on the file's channel, like an event.</li>
+        </ul>
+      </section>
+    {/if}
+
+    {#if state.topic === 'blocked'}
+      <section>
+        <h2>Blocked requests</h2>
+        <p>Every path a <code>deny</code> rule refuses is counted by path, once across every app and over time, in the reserved <code>_dboss</code> database. The <strong>Blocked requests</strong> page (<code>#/blocked</code>, reached from the Logs page) lists them biggest first.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Seeing what scanners and bots are probing the host: <code>/wp-login.php</code>, <code>*.php</code>, <code>/.env</code> and the rest.</li>
+          <li>Checking a new deny rule is doing something, and how much it turns away.</li>
+          <li>No request noise: a denied hit never reaches the app and is not a request row.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-blocked"><db-config-keys paths="deny" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.blocked" />
+        <h3>Details</h3>
+        <ul>
+          <li><code>deny</code> refuses a request with <code>403</code> at the deny stage, before auth and before the app is contacted. A pattern is a suffix (<code>*.php</code>), a subtree (<code>/admin/*</code>) or an exact path (<code>/wp-login.php</code>), all case-insensitive.</li>
+          <li>Each refused path is counted in the host's <code>blocked</code> table (<code>path</code>, <code>count</code>), aggregated across every app. The page shows the biggest 200 with each path's share of the total.</li>
+          <li>The counters live with the audit rows in <code>_dboss</code> and are never pruned, so they outlive the per-app request retention.</li>
+          <li>The page is host-wide, not per app: a path blocked on any host adds to the same count. It is read-only and writes no audit row.</li>
+          <li>Common scanner targets are usually blocked for every app at once under <code>defaults.deny</code> in the host file; see <a href="#/help?topic=access">Access control</a> for the patterns and their place in the request pipeline.</li>
         </ul>
       </section>
     {/if}

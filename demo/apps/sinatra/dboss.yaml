@@ -5,8 +5,10 @@ procfile:
       - .sinatra.lvh.me
     health: /up
     canonical_host: sinatra.lvh.me
-    static: ./public
   job: ./job.sh
+
+# Serve ./public straight from disk at the same URL (the default folder).
+static: ./public
 
 autostart: false
 

@@ -2509,8 +2509,13 @@ textarea.sql-editor {
   font-size: var(--text-size-small);
 }
 
+.help-body .fez-db-preview-yaml,
 .help-body pre {
-  max-width: 74ch;
+  width: 100%;
+  max-width: none;
+}
+
+.help-body pre {
   margin: 0 0 16px;
   padding: 12px 14px;
   overflow: auto;

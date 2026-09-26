@@ -129,3 +129,21 @@ func TestHelpKeyPathsExist(t *testing.T) {
 		}
 	}
 }
+
+// Every Help nav topic must have a matching {#if state.topic === '<id>'} section, or selecting it
+// renders nothing. The #help tab silently lost its case once, so guard the pairing from here.
+func TestHelpTopicsHaveSections(t *testing.T) {
+	data, err := assets.ReadFile("static/fez/tpl-help.fez")
+	if err != nil {
+		t.Fatal(err)
+	}
+	topics := regexp.MustCompile(`\{ id: '([a-z0-9_-]+)'`).FindAllStringSubmatch(string(data), -1)
+	if len(topics) == 0 {
+		t.Fatal("no help topics found in tpl-help.fez")
+	}
+	for _, topic := range topics {
+		if !strings.Contains(string(data), "state.topic === '"+topic[1]+"'") {
+			t.Errorf("help topic %q has no section", topic[1])
+		}
+	}
+}
