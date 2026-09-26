@@ -1,7 +1,20 @@
 # dboss
 
-Run all your apps on one server, from one Go binary.
+Your own mini-Heroku on one server: a single-binary Kubernetes alternative that runs, routes, logs and monitors all your apps.
 Supervisor, router, HTTPS, log store and web console in a single file, configured by one `dboss.yaml` per app.
+
+<table>
+  <tr>
+    <td width="33%"><a href="assets/screen-1.png"><img src="assets/screen-1.png" alt="Overview" width="100%"></a></td>
+    <td width="33%"><a href="assets/screen-2.png"><img src="assets/screen-2.png" alt="Logs" width="100%"></a></td>
+    <td width="33%"><a href="assets/screen-3.png"><img src="assets/screen-3.png" alt="Traffic" width="100%"></a></td>
+  </tr>
+  <tr>
+    <td align="center">Overview - apps, processes, jobs, hooks</td>
+    <td align="center">Logs - requests and process output, searchable</td>
+    <td align="center">Traffic - requests, error rate, latency, top paths</td>
+  </tr>
+</table>
 
 ## Who this is for
 
@@ -21,18 +34,22 @@ dboss is deliberately a single-host tool, and it is very good at being one.
 
 All of it is in the one binary: no sidecars, no agents, no extra database, no YAML you did not write.
 
-* **Routing built in.** Requests reach the right app by hostname, including wildcard and apex patterns, several web processes per app, canonical host redirects and static files served straight off disk.
-* **Logging built in.** Every process log line and every request lands in a per-app SQLite database with full-text search, read from the console or from `dboss logs`, so there is no log pipeline to run.
-* **Analytics built in.** An app writes one JSON event per line to `log/<name>.json.log`; dboss stores the events as Parquet, keeps daily counts and tag facets, and answers filters, saved views, funnels and DuckDB SQL from the console or `dboss events`, with no analytics service to run.
-* **Traffic built in.** Requests over time, error rate, latency quantiles and the top paths, status codes, countries and client IPs, per app.
-* **Effortless deploys.** `dboss deploy sync` pushes the tracked files over ssh and restarts the app, `dboss deploy git` has the box pull and restart with nothing but a token, or push to GitHub or GitLab and a signed webhook does the same, with no runner and no pipeline credentials on the box.
-* **Process supervision.** A procfile per app, workers alongside web processes, several copies of one process behind one host, restart policies with backoff, readiness and liveness checks, and rolling restarts that start the new release next to the old one, so a deploy never drops a request and a broken release never replaces a working one.
-* **Apps that sleep.** An idle app stops on its own and the next request wakes it, so a dozen side projects share one box without holding RAM they are not using.
-* **HTTPS without the chore.** Set one key and dboss gets Let's Encrypt certificates on demand for the hostnames it already serves and renews them, or put Cloudflare in front and let it terminate.
-* **A real web console.** Live state, start and stop, log search, traffic, the config files edited on disk with revision history and restore, and an audit row for every action.
-* **Scheduled jobs.** Cron per app, running even while the app itself is stopped, with output in the same log store.
-* **Access control.** Basic auth, IP allowlists, or a full SSO sign-in in front of any app, without touching the app's code.
-* **Batteries for the rest.** PostgreSQL inspection, a SQL prompt, scheduled backups, rotation and restore; realtime pubsub channels over WebSocket or SSE; Prometheus metrics with `/healthz` and `/readyz`; webhook alerts on crashes, restart loops, failed cron jobs, OOM kills, full disks, error rates and slow responses; per-process memory and CPU limits on a cgroup v2 host.
+* **Routing** - requests reach the right app by hostname, with wildcards, canonical redirects and static files from disk.
+* **Process supervision** - procfile per app, workers, several instances, restart backoff, health checks and zero-downtime rolling restarts.
+* **Apps that sleep** - an idle app stops on its own and the next request wakes it.
+* **HTTPS** - on-demand Let's Encrypt certificates, or Cloudflare in front.
+* **Logs** - every log line and request in a per-app SQLite store with full-text search.
+* **Exceptions** - app exceptions grouped by fingerprint, with counts, resolve and ignore.
+* **Traffic** - requests over time, error rate, latency quantiles, top and slowest paths per app.
+* **Events** - JSON event lines stored as Parquet, with filters, saved views, funnels and DuckDB SQL.
+* **Deploys** - `dboss deploy sync` over ssh, `dboss deploy git`, or a signed GitHub/GitLab webhook.
+* **Scheduled jobs** - per-app cron that runs even while the app is stopped.
+* **Access control** - basic auth, IP allowlists or SSO sign-in in front of any app, no app code changes.
+* **Web console** - live state, start/stop, log search, config editing with history, and an audit row for every action.
+* **PostgreSQL** - inspection, SQL prompt, scheduled backups, rotation and restore.
+* **PubSub** - realtime channels over WebSocket or SSE.
+* **Metrics and alerts** - Prometheus `/metrics`, `/healthz`, `/readyz`, and webhook alerts on crashes, OOM kills, full disks, error rates and slow responses.
+* **Resource limits** - per-process memory and CPU limits on a cgroup v2 host.
 
 Install is one command and the service runs as an ordinary user, not root.
 `dboss start` on your laptop gives you the same thing locally, with no sudo and no setup.
