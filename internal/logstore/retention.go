@@ -37,6 +37,11 @@ func (s *Store) Prune(ctx context.Context, app string, retention, stdoutRetentio
 	if _, err := w.db.ExecContext(ctx, `DELETE FROM logs WHERE source = 'file' AND ts < ?`, stamp(time.Now().Add(-retention))); err != nil {
 		return err
 	}
+	// Exception summaries and dumps live in `exceptions` and are kept; only the per-minute
+	// occurrence rows age out.
+	if _, err := w.db.ExecContext(ctx, `DELETE FROM exception_logs WHERE minute_at < ?`, time.Now().Add(-retention).UnixMilli()); err != nil {
+		return err
+	}
 	if stdoutRetention > 0 {
 		cutoff := stamp(time.Now().Add(-stdoutRetention))
 		// Everything that is not an app log file is the short-lived console stream, including

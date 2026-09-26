@@ -5,12 +5,14 @@
 package main
 
 import (
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dboss/internal/events"
@@ -75,7 +77,19 @@ func seed(dir string, apps []string, now time.Time) error {
 		}
 	}
 	seedHost(store, rng, now)
-	return store.Close()
+	if err := store.Close(); err != nil {
+		return err
+	}
+	// Exceptions last, on a fresh store: the batched request/log writers above are stopped, so
+	// the synchronous exception upsert never contends with them for SQLite's write lock.
+	exceptions := logstore.New(dir, 50*time.Millisecond, nil, "", time.Hour, 0)
+	for i, app := range apps {
+		if err := seedExceptions(exceptions, rng, app, i, now); err != nil {
+			_ = exceptions.Close()
+			return err
+		}
+	}
+	return exceptions.Close()
 }
 
 var (
@@ -143,6 +157,66 @@ func seedApp(store *logstore.Store, rng *rand.Rand, app, host string, now time.T
 			Raw:       message,
 		}})
 	}
+}
+
+// seedException is one fingerprint the demo can write: a realistic class, message and origin,
+// plus the users and IPs it was reported for.
+type seedException struct {
+	klass, message, origin, description string
+	users, ips                          []string
+}
+
+// seedExceptionPool is walked by app index, so each demo app's Exceptions tab looks different
+// and picking another app in the select visibly changes the list.
+var seedExceptionPool = []seedException{
+	{"PG::ConnectionBad", "PG::ConnectionBad: connection refused", "app/controllers/checkout_controller.rb:42:in `create'", "confirming an order", []string{"u_1024", "u_2048"}, []string{"203.0.113.7", "198.51.100.4"}},
+	{"NoMethodError", "NoMethodError: undefined method `total' for nil", "app/services/report.rb:88:in `build'", "building the monthly report", []string{"u_7"}, []string{"192.0.2.55"}},
+	{"KeyError", `KeyError: key not found: "cart"`, "app/models/cart.rb:19:in `fetch'", "loading the cart", []string{"u_42", "u_77"}, []string{"198.51.100.9"}},
+	{"Timeout::Error", "Timeout::Error: execution expired", "app/clients/payments.rb:57:in `charge'", "charging a card", []string{"u_311"}, []string{"203.0.113.21"}},
+	{"ActiveRecord::RecordNotFound", "ActiveRecord::RecordNotFound: Couldn't find Order", "app/controllers/orders_controller.rb:23:in `show'", "showing an order", []string{"u_88", "u_99"}, []string{"192.0.2.201"}},
+}
+
+// seedExceptions writes two fingerprints for one app, each with a busy minute and a quiet one,
+// so the Exceptions tab has groups and their per-minute breakdowns. The app index picks the pool
+// entries so no two apps show the same exceptions.
+func seedExceptions(store *logstore.Store, rng *rand.Rand, app string, index int, now time.Time) error {
+	picked := []seedException{
+		seedExceptionPool[index%len(seedExceptionPool)],
+		seedExceptionPool[(index+1)%len(seedExceptionPool)],
+	}
+	groups := make([]logstore.ExceptionGroup, 0, len(picked))
+	for i, fp := range picked {
+		uid := exceptionUID(app, fp.klass, fp.origin)
+		dump := fmt.Sprintf("%s: %s (%s)", fp.origin, fp.message, fp.klass)
+		base := now.Add(-time.Duration(30*(i+1)) * time.Minute).Truncate(time.Minute)
+		counts := []int{80 + rng.Intn(60), 3 + rng.Intn(6)}
+		group := logstore.ExceptionGroup{ExpUID: uid, Dump: dump, FirstAt: base}
+		for m, count := range counts {
+			minute := base.Add(time.Duration(m) * time.Minute)
+			group.Count += count
+			group.LastAt = minute.Add(30 * time.Second)
+			group.Minutes = append(group.Minutes, logstore.ExceptionMinute{
+				MinuteAt:    minute,
+				Count:       count,
+				Message:     fp.message,
+				Tags:        []string{strings.ToLower(strings.SplitN(fp.klass, "::", 2)[0])},
+				Description: fp.description,
+				Users:       fp.users,
+				IPs:         fp.ips,
+			})
+		}
+		groups = append(groups, group)
+	}
+	if err := store.AppendExceptions(app, logstore.ExceptionBatch{Groups: groups}); err != nil {
+		return err
+	}
+	// One group ships resolved, so the console shows both states out of the box.
+	return store.SetExceptionResolved(app, exceptionUID(app, picked[1].klass, picked[1].origin), true)
+}
+
+// exceptionUID is a stand-in for the Lux writer's SHA-256 of [file, line, class].
+func exceptionUID(app, klass, origin string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{app, origin, klass}, "\x00"))))
 }
 
 // seedHost fills the reserved host database: audit rows, deny counters and a few daemon log lines.

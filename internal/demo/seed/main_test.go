@@ -32,6 +32,23 @@ func TestSeedPopulatesDatabases(t *testing.T) {
 		t.Fatalf("seeded logs: %v %d", err, len(logs))
 	}
 
+	exceptions, err := store.Exceptions("demo", logstore.ExceptionFilter{})
+	if err != nil || len(exceptions) != 2 {
+		t.Fatalf("seeded exceptions: %v %d", err, len(exceptions))
+	}
+	resolved := 0
+	for _, group := range exceptions {
+		if group.Count == 0 || len(group.Minutes) != 2 || len(group.Minutes[0].Users) == 0 || len(group.Minutes[0].IPs) == 0 {
+			t.Fatalf("seeded exception group = %+v", group)
+		}
+		if group.IsResolved {
+			resolved++
+		}
+	}
+	if resolved != 1 {
+		t.Fatalf("seeded resolved groups = %d, want 1", resolved)
+	}
+
 	eventStore := events.NewStore(dir)
 	partitions, err := eventStore.Partitions("demo")
 	if err != nil || len(partitions) == 0 {

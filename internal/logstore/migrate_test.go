@@ -42,3 +42,31 @@ func TestRequestsTableGainsCountryColumnInPlace(t *testing.T) {
 		t.Fatalf("row written before the upgrade: %v %+v", err, old)
 	}
 }
+
+// An exceptions table created before is_resolved existed must gain the column before a read.
+func TestExceptionsTableGainsResolvedColumnInPlace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "demo", "dboss.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE exceptions (exp_uid TEXT PRIMARY KEY, dump TEXT, first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, count INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO exceptions (exp_uid, dump, first_at, last_at, count) VALUES ('e', 'd', 1, 2, 3)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store := New(dir, time.Hour, nil, "", time.Hour, 0)
+	defer store.Close()
+	rows, err := store.Exceptions("demo", ExceptionFilter{})
+	if err != nil || len(rows) != 1 || rows[0].ExpUID != "e" || rows[0].IsResolved {
+		t.Fatalf("exceptions after migration: %v %+v", err, rows)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"dboss/internal/logstore"
+	"dboss/internal/ops"
 )
 
 // writeLogs streams the matching rows as plain text, for download and for `curl` against the
@@ -68,6 +69,55 @@ func (h *Handler) logBlocked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
+}
+
+// logExceptions lists one app's aggregated exception groups for the Exceptions tab.
+func (h *Handler) logExceptions(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	app := strings.TrimSpace(query.Get("app"))
+	if app == "" {
+		writeError(w, http.StatusBadRequest, "app is required")
+		return
+	}
+	span, ok := trafficRanges[query.Get("range")]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "range must be 1h, 24h, 7d or 30d")
+		return
+	}
+	rows, err := h.service.Exceptions(app, logstore.ExceptionFilter{Since: time.Now().Add(-span)})
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"app": app, "rows": rows, "updated_at": time.Now().UTC()})
+}
+
+// exceptionResolve flips the is_resolved flag on one exception group. It mutates, so it goes
+// through ops.Service.Do and leaves an audit row.
+func (h *Handler) exceptionResolve(w http.ResponseWriter, r *http.Request, session authSession) {
+	if !h.requireCSRF(w, r, session) {
+		return
+	}
+	var request struct {
+		App    string `json:"app"`
+		ExpUID string `json:"exp_uid"`
+		On     bool   `json:"on"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	app := strings.TrimSpace(request.App)
+	expUID := strings.TrimSpace(request.ExpUID)
+	if app == "" || expUID == "" {
+		writeError(w, http.StatusBadRequest, "app and exp_uid are required")
+		return
+	}
+	if _, err := h.service.Do(ops.Request{Method: ops.ActionExceptionResolve, App: app, ExpUID: expUID, On: request.On, Actor: session.Email}); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated_at": time.Now().UTC()})
 }
 
 func (h *Handler) logTree(w http.ResponseWriter, r *http.Request) {

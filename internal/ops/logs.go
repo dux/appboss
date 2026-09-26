@@ -64,6 +64,51 @@ func (s *Service) Blocked() ([]logstore.BlockedStat, error) {
 	return reader.Blocked()
 }
 
+// Exceptions lists one app's aggregated exception groups. A store without the capability (a test
+// double) answers empty.
+func (s *Service) Exceptions(app string, filter logstore.ExceptionFilter) ([]logstore.ExceptionSummary, error) {
+	if s.store == nil {
+		return nil, errNoLogStore
+	}
+	reader, ok := s.store.(interface {
+		Exceptions(string, logstore.ExceptionFilter) ([]logstore.ExceptionSummary, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.Exceptions(app, filter)
+}
+
+// UnresolvedExceptions counts one app's unresolved exception groups for the app card badge. A
+// store without the capability (a test double) answers zero.
+func (s *Service) UnresolvedExceptions(app string) (int, error) {
+	if s.store == nil {
+		return 0, nil
+	}
+	reader, ok := s.store.(interface {
+		UnresolvedExceptionCount(string) (int, error)
+	})
+	if !ok {
+		return 0, nil
+	}
+	return reader.UnresolvedExceptionCount(app)
+}
+
+// resolveException flips the resolved flag on one exception group. A store without the capability
+// (a test double) answers with an error, so a click never silently no-ops.
+func (s *Service) resolveException(app, expUID string, resolved bool) error {
+	if s.store == nil {
+		return errNoLogStore
+	}
+	writer, ok := s.store.(interface {
+		SetExceptionResolved(string, string, bool) error
+	})
+	if !ok {
+		return errors.New("exceptions are not available")
+	}
+	return writer.SetExceptionResolved(app, expUID, resolved)
+}
+
 // Traffic returns the aggregated request log of one app for requests newer than since.
 func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error) {
 	if s.store == nil {

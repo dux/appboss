@@ -19,7 +19,9 @@
         { id: 'routing', title: 'Routing', summary: 'Sends each hostname to the right app, with redirects, headers and maintenance mode.' },
         { id: 'access', title: 'Access control', summary: 'AuthCog sign-in, basic auth, IP allow lists and a Cloudflare-only origin.' },
         { id: 'static', title: 'Static & pages', summary: 'Serves assets from disk, and every page dboss answers with from one template you can replace.' },
+        { id: 'logging', title: 'Logging', summary: 'Every channel dboss records per app - requests, stdout, app log files, blocked paths, traffic and events - and how retention keeps them bounded.' },
         { id: 'logs', title: 'Logs', summary: 'Requests, stdout and app log files in one searchable store per app.' },
+        { id: 'exceptions', title: 'Exceptions', summary: 'Error groups from a *.exceptions.log file, with per-minute counts, users and IPs.' },
         { id: 'traffic', title: 'Traffic', summary: 'Requests over time, error rate, latency and the top paths, countries and IPs per app.' },
         { id: 'events', title: 'Events', summary: 'Analytics from JSON log lines: counts, filters, tag facets, funnels and SQL over Parquet.' },
         { id: 'cron', title: 'Scheduled jobs', summary: 'One-shot commands on an interval or a cron expression.' },
@@ -151,6 +153,18 @@
     dboss pages dump shop error       # write error.html with its wording
     dboss pages dump --all            # the host template and every page
     `,
+    logging: `
+    # host dboss.yaml
+    dir: /var/lib/dboss        # state/, log/ and the control socket live here
+    log_level: info            # dboss's own log level
+    maintenance_at: "04:10"    # daily prune, then SQLite VACUUM
+
+    # app dboss.yaml, or defaults: in the host file
+    log_retention: 336h        # request rows and app log files
+    stdout_retention: 3h       # process stdout and the dboss daemon log
+    events:
+      retention: 90d           # raw events from log/*.json.log
+    `,
     logs: `
     log_retention: 168h
     stdout_retention: 12h
@@ -159,6 +173,10 @@
     dboss logs -f shop
     dboss logs shop --process worker -n 500
     dboss logs shop --search timeout --level error --channel stdout
+    `,
+    exceptionsLine: `
+    # one compact JSON object per line in log/app.exceptions.log
+    {"exp_uid":"<sha256>","dump":"...","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"ts":"2026-09-26T10:00:30.123Z"}
     `,
     cron: `
     cron:
@@ -566,6 +584,52 @@
       </section>
     {/if}
 
+    {#if state.topic === 'logging'}
+      <section>
+        <h2>Logging</h2>
+        <p>Every app gets its own store at <code>dir/log/&#60;app&#62;/dboss.sqlite</code>, holding its requests, process output and app log files; analytics events live next to it as Parquet. The daemon log and the operator audit live in the reserved <code>_dboss</code> database. The <a href="#/help?topic=logs">Logs</a>, <a href="#/help?topic=traffic">Traffic</a> and <a href="#/help?topic=events">Events</a> tabs, the full-screen viewer at <code>/logs</code> and <code>dboss logs</code> all read the same data.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Finding one failing request or reading what a process printed, without an SSH session.</li>
+          <li>Counting what users do, from the JSON lines the app already writes, with no analytics service to run.</li>
+          <li>Seeing scrapers and attacks turned away, and how much traffic each denied path accounts for.</li>
+          <li>Bounded disk use: a retention per channel, size-based rotation, a daily prune and SQLite <code>VACUUM</code>.</li>
+        </ul>
+        <h3>Channels</h3>
+        <ul>
+          <li><code>REQUEST</code> - one row per proxied request: method, path, status, duration, bytes, country and Cloudflare Ray ID. There is one per web process.</li>
+          <li><code>STDOUT</code> - the stdout and stderr of every process, one channel per process, with the port in the label.</li>
+          <li><code>dboss</code> - the daemon's own log, in the reserved <code>_dboss</code> database, shared by the whole host.</li>
+          <li>One channel per <code>*.log</code> file under the app's <code>./log</code> folder, plus <code>cron-&#60;job&#62;</code>, <code>hook-&#60;name&#62;</code> and <code>lifecycle-&#60;step&#62;</code> for the commands dboss runs.</li>
+          <li><code>&#60;ns&#62;.json.log</code> is not a plain log: it is an <a href="#/help?topic=events">event</a> namespace, stored as Parquet per namespace and day.</li>
+          <li>Blocked requests are not process output: each <code>deny</code> hit is counted by path in the <code>_dboss</code> database and kept forever.</li>
+        </ul>
+        <h3>Console views</h3>
+        <ul>
+          <li><a href="#/help?topic=logs">Logs</a> - full-text search and a time range over every channel, with level, method and status filters, a per-row detail view, copy and a text export. A Cloudflare Ray ID can be pasted as the query.</li>
+          <li><a href="#/help?topic=traffic">Traffic</a> - requests over time, error rate, latency quantiles and the top paths, countries and clients, aggregated from the request rows.</li>
+          <li><a href="#/help?topic=events">Events</a> - counts, filters, tag facets, funnels and SQL over the app's Parquet files.</li>
+          <li>Blocked requests (<code>#/blocked</code>, from the Logs page) - the denied paths across every app, biggest first, capped at 200.</li>
+          <li><a href="#/help?topic=audit">Audit</a> - who did what, in the reserved <code>_dboss</code> database, with its own retention.</li>
+        </ul>
+        <h3>Config keys</h3>
+        <div fez:keep="keys-logging"><db-config-keys paths="log_retention,stdout_retention,events.retention,audit_retention,log_level,maintenance_at,dir,deny" /></div>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.logging" />
+        <h3>Details</h3>
+        <ul>
+          <li><code>log_retention</code> (default <code>336h</code>, two weeks) covers request rows and app log files; <code>stdout_retention</code> (default <code>3h</code>) covers stdout and the daemon log. <code>0</code> turns a channel off, and <code>log_retention: 0</code> disables the whole store for the app, so it has no request log, no traffic and no events either.</li>
+          <li><code>events.retention</code> (default <code>365d</code>) removes only the raw Parquet days; the daily counts and tag facets stay.</li>
+          <li><code>log_level</code> is dboss's own level: <code>debug</code>, <code>info</code>, <code>warn</code> or <code>error</code>. The log always goes to stderr, so it is the terminal in the foreground and journald under systemd.</li>
+          <li><code>dir</code> is the runtime directory; every store lives under its <code>log/</code>. Keep it on a filesystem with room for the retention you choose.</li>
+          <li><code>maintenance_at</code> (default <code>04:10</code>) is the one daily housekeeping time: the prune runs first, then SQLite <code>VACUUM</code> on every app database and the host database. Run it off peak, since the vacuum rewrites each file.</li>
+          <li>Process log files rotate at 10m and keep five rotated files; stdout retention is what bounds the copied segments. App <code>*.log</code> files are app-owned: dboss tails them and advances an offset, never deletes or renames them.</li>
+          <li><code>deny</code> refuses paths before the app is contacted and counts each hit under Blocked requests. The list and its patterns are in <a href="#/help?topic=access">Access control</a>.</li>
+          <li><code>log_retention</code>, <code>stdout_retention</code> and <code>events.retention</code> are app keys; <code>dir</code>, <code>log_level</code>, <code>audit_retention</code> and <code>maintenance_at</code> are host keys that need a daemon restart.</li>
+        </ul>
+      </section>
+    {/if}
+
     {#if state.topic === 'logs'}
       <section>
         <h2>Logs</h2>
@@ -591,6 +655,31 @@
         <p><code>log_retention</code> (default two weeks) covers requests and app log files; <code>stdout_retention</code> (default three hours) covers stdout and the daemon log. <code>log_retention: 0</code> turns the store off for the app. The daily prune runs at <code>maintenance_at</code> (default 04:10) and is followed by SQLite <code>VACUUM</code> on every store. Process log files rotate at 10m and keep five rotated files.</p>
         <db-preview-yaml :text="state.examples.logsCli" lang="text" />
         <p>With <code>--search</code>, <code>--level</code> or <code>--channel</code> the command queries the store instead of tailing files.</p>
+      </section>
+    {/if}
+
+    {#if state.topic === 'exceptions'}
+      <section>
+        <h2>Exceptions</h2>
+        <p>An app that writes <code>log/&#60;app&#62;.exceptions.log</code> gets an Exceptions tab. The Lux <code>web_common</code> plugin writes that file automatically from <code>Lux.error.log</code>, but any producer may append the same JSON lines. dboss tails it like any app log and groups the occurrences instead of storing one row each.</p>
+        <h3>What it helps with</h3>
+        <ul>
+          <li>Seeing which errors actually happen, newest and most frequent first, without a database-backed error tracker.</li>
+          <li>One row per fingerprint rather than one per crash: a loop throwing 44,000 times is still one exception and ten minute rows.</li>
+          <li>Who it hit: the distinct user refs and client IPs per minute, capped at five each.</li>
+          <li>Seeing it at a glance: the app card's Exceptions button turns red with the count while any group is unresolved.</li>
+          <li>Bounded storage: only the per-minute counts age out; the fingerprint, its first dump and the totals stay.</li>
+        </ul>
+        <h3>Example</h3>
+        <db-preview-yaml :text="state.examples.exceptionsLine" lang="text" />
+        <h3>Details</h3>
+        <ul>
+          <li><code>exp_uid</code> (nonempty) and <code>message</code> are required; <code>dump</code>, <code>user</code>, <code>ip</code>, <code>tags</code> and <code>description</code> are optional, and <code>ts</code> defaults to the time dboss reads the line.</li>
+          <li>One row per fingerprint per UTC minute holds the count, the first occurrence's message, and the distinct users and IPs (up to five each).</li>
+          <li>Clicking a group opens its full dump and the last 50 minute rows. <strong>Resolve</strong>/<strong>Reopen</strong> flips <code>is_resolved</code> and audits the click; resolved rows dim.</li>
+          <li><code>log_retention</code> prunes old minute rows; the summary, its flag and its first nonempty dump are kept.</li>
+          <li>A malformed line becomes a <code>warn</code> row on the file's channel, like an event.</li>
+        </ul>
       </section>
     {/if}
 

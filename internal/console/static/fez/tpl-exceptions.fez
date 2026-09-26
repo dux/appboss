@@ -1,0 +1,266 @@
+<script>
+  class {
+    init() {
+      this.state.apps = []
+      this.state.app = Fez.hqs('app') || ''
+      this.state.range = Fez.hqs('range') || '24h'
+      this.state.rows = []
+      this.state.expandedKey = ''
+      this.state.loaded = false
+      this.state.busy = false
+      this.state.error = ''
+      this.state.needsSelectSync = false
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    // The selects are fez:this refs: their value is set after the options render, never on every
+    // pass, so picking an app or a range never fights a re-render.
+    afterRender() {
+      if (!this.state.needsSelectSync) return
+      this.state.needsSelectSync = false
+      if (this.state.appSelect) this.state.appSelect.value = this.state.app
+      if (this.state.rangeSelect) this.state.rangeSelect.value = this.state.range
+    }
+
+    async load() {
+      this.state.busy = true
+      try {
+        const fleet = await Dboss.api('/api/apps')
+        this.state.apps = (fleet.apps || []).map((app) => app.name).sort()
+        if (!this.state.apps.includes(this.state.app)) this.state.app = this.state.apps[0] || ''
+        Dboss.setQs('app', this.state.app)
+        this.state.needsSelectSync = true
+        this.state.expandedKey = ''
+        if (this.state.app) {
+          const params = new URLSearchParams({ app: this.state.app, range: this.state.range })
+          const data = await Dboss.api(`/api/exceptions?${params}`)
+          this.state.rows = (data.rows || []).map((row) => this.shape(row))
+        } else {
+          this.state.rows = []
+        }
+        this.state.loaded = true
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    shape(row) {
+      const minutes = row.minutes || []
+      const clients = new Set()
+      for (const minute of minutes) {
+        for (const user of minute.users || []) clients.add('u:' + user)
+        for (const ip of minute.ips || []) clients.add(ip)
+      }
+      return {
+        exp_uid: row.exp_uid,
+        dump: row.dump || '',
+        resolved: !!row.is_resolved,
+        short: (row.exp_uid || '').slice(0, 12),
+        message: minutes.length ? minutes[0].message : '',
+        countLabel: this.number(row.count),
+        lastLabel: this.time(row.last_at),
+        spanLabel: `${this.time(row.first_at)} - ${this.time(row.last_at)}`,
+        clients: clients.size,
+        minutes: minutes.map((minute) => ({
+          time: this.time(minute.minute_at),
+          countLabel: this.number(minute.count),
+          usersLabel: (minute.users || []).join(', '),
+          ipsLabel: (minute.ips || []).join(', '),
+          tagsLabel: (minute.tags || []).join(', '),
+          description: minute.description || '',
+        })),
+      }
+    }
+
+    toggle(index) {
+      const uid = this.state.rows[index] && this.state.rows[index].exp_uid
+      this.state.expandedKey = this.state.expandedKey === uid ? '' : uid
+    }
+
+    async resolve(index) {
+      const row = this.state.rows[index]
+      if (!row) return
+      const on = !row.resolved
+      this.state.busy = true
+      try {
+        await Dboss.api('/api/exceptions/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ app: this.state.app, exp_uid: row.exp_uid, on }),
+        })
+        this.state.rows = this.state.rows.map((item, i) => (i === index ? { ...item, resolved: on } : item))
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    pickApp(name) {
+      this.state.app = name
+      Dboss.setQs('app', name)
+      this.load()
+    }
+
+    pickRange(value) {
+      this.state.range = value
+      Dboss.setQs('range', value === '24h' ? '' : value)
+      this.load()
+    }
+
+    total() {
+      return this.state.rows.reduce((sum, row) => sum + Number(row.count || 0), 0)
+    }
+
+    clients() {
+      return this.state.rows.reduce((sum, row) => sum + Number(row.clients || 0), 0)
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Math.round(Number(value || 0)))
+    }
+
+    time(value) {
+      if (!value) return ''
+      const date = new Date(value)
+      return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle">Exceptions <span class="text-muted">{state.app}</span></p>
+    <h1 class="page-title">Errors &amp; crashes</h1>
+  </div>
+  <div class="page-actions traffic-filters">
+    <select fez:this="appSelect" aria-label="App" onchange="fez.pickApp(this.value)">
+      {#each state.apps as name}
+        <option value={name}>{name}</option>
+      {/each}
+    </select>
+    <select fez:this="rangeSelect" aria-label="Range" onchange="fez.pickRange(this.value)">
+      <option value="1h">Last hour</option>
+      <option value="24h">Last 24 hours</option>
+      <option value="7d">Last 7 days</option>
+      <option value="30d">Last 30 days</option>
+    </select>
+    <button class="btn" type="button" onclick="fez.load()" disabled={state.busy}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      {state.busy ? 'Loading' : 'Refresh'}
+    </button>
+  </div>
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+<section class="stat-row" aria-label="Exceptions summary">
+  <article class="card stat-card">
+    <span class="subheader">Exceptions</span>
+    <strong class="stat-value">{number(state.rows.length)}</strong>
+    <span class="text-muted">distinct fingerprints</span>
+  </article>
+  <article class="card stat-card">
+    <span class="subheader">Occurrences</span>
+    <strong class="stat-value">{number(total())}</strong>
+    <span class="text-muted">in the selected range</span>
+  </article>
+  <article class="card stat-card">
+    <span class="subheader">Clients</span>
+    <strong class="stat-value">{number(clients())}</strong>
+    <span class="text-muted">users and IPs seen</span>
+  </article>
+</section>
+
+<section class="log-view log-view-single exceptions-table">
+  <div class="log-main">
+    <div class="log-scroll">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Exception</th>
+            <th class="num">Count</th>
+            <th class="num">Clients</th>
+            <th>Last seen</th>
+            <th class="exceptions-action">Resolved</th>
+          </tr>
+        </thead>
+        {#each state.rows as row, index}
+          <tbody>
+            <tr class="log-row" class:log-row-open={state.expandedKey === row.exp_uid} class:log-row-resolved={row.resolved} onclick="fez.toggle({index})">
+              <td>
+                <div class="log-process">
+                  {row.short}
+                  {#if row.resolved}<span class="badge badge-success">resolved</span>{/if}
+                </div>
+                <div class="log-message">{row.message || '(no message)'}</div>
+              </td>
+              <td class="num">{row.countLabel}</td>
+              <td class="num">{row.clients}</td>
+              <td class="log-time">{row.lastLabel}</td>
+              <td class="exceptions-action">
+                <button class="btn btn-sm" type="button" onclick="event.stopPropagation(); fez.resolve({index})" disabled={state.busy}>
+                  {row.resolved ? 'Reopen' : 'Resolve'}
+                </button>
+              </td>
+            </tr>
+            {#if state.expandedKey === row.exp_uid}
+              <tr class="log-detail-row">
+                <td colspan="5">
+                  <div class="log-detail-head">
+                    <strong>{row.short} · {row.spanLabel}</strong>
+                    <span class="text-muted">{row.minutes.length} minute(s), last 50 shown</span>
+                  </div>
+                  {#if row.dump}
+                    <pre class="log-detail">{row.dump}</pre>
+                  {:else}
+                    <pre class="log-detail">{row.message || '(no dump)'}</pre>
+                  {/if}
+                  <table class="log-table exceptions-minutes">
+                    <thead>
+                      <tr>
+                        <th>Minute</th>
+                        <th class="num">Count</th>
+                        <th>Users</th>
+                        <th>IPs</th>
+                        <th>Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each row.minutes as minute}
+                        <tr>
+                          <td class="log-time">{minute.time}</td>
+                          <td class="num">{minute.countLabel}</td>
+                          <td class="log-ip">{minute.usersLabel || '-'}</td>
+                          <td class="log-ip">{minute.ipsLabel || '-'}</td>
+                          <td class="log-message">{minute.description || minute.tagsLabel || '-'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </td>
+              </tr>
+            {/if}
+          </tbody>
+        {/each}
+      </table>
+      {#if !state.rows.length}
+        <p class="text-muted log-empty">{state.loaded ? 'No exceptions in range' : 'Loading...'}</p>
+      {/if}
+    </div>
+    <div class="log-footer">
+      <span class="text-muted">One row per fingerprint; click to see the full dump and the last 50 minutes. Produced by an app's <code>*.exceptions.log</code>.</span>
+      {#if state.busy}
+        <span class="spinner" aria-hidden="true"></span>
+      {/if}
+    </div>
+  </div>
+</section>

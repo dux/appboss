@@ -5,6 +5,7 @@
     ROUTES = [
       { name: 'overview', label: 'Overview', icon: 'i-home' },
       { name: 'logs', label: 'Logs', icon: 'i-list' },
+      { name: 'exceptions', label: 'Exceptions', icon: 'i-alert' },
       { name: 'traffic', label: 'Traffic', icon: 'i-activity' },
       { name: 'events', label: 'Events', icon: 'i-search' },
       { name: 'audit', label: 'Audit', icon: 'i-file-text' },

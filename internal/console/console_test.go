@@ -317,6 +317,21 @@ func (fakeLogs) Blocked() ([]logstore.BlockedStat, error) {
 	return []logstore.BlockedStat{{Path: "/wp-login.php", Count: 42}}, nil
 }
 
+func (fakeLogs) SetExceptionResolved(string, string, bool) error { return nil }
+
+func (fakeLogs) UnresolvedExceptionCount(string) (int, error) { return 3, nil }
+
+func (fakeLogs) Exceptions(string, logstore.ExceptionFilter) ([]logstore.ExceptionSummary, error) {
+	return []logstore.ExceptionSummary{{
+		ExpUID:  "9f2e1a4b",
+		Dump:    "boom",
+		FirstAt: time.Now(),
+		LastAt:  time.Now(),
+		Count:   7,
+		Minutes: []logstore.ExceptionMinuteRow{{MinuteAt: time.Now(), Count: 7, Message: "boom", Users: []string{"u_1"}, IPs: []string{"1.2.3.4"}}},
+	}}, nil
+}
+
 func (fakeLogs) Tree([]string) ([]logstore.AppTree, error) {
 	return []logstore.AppTree{{
 		Name:     "sinatra",
@@ -353,6 +368,10 @@ func TestConsoleBootstrapAndActions(t *testing.T) {
 	}
 	if dashboard.Viewer != "admin@example.com" || dashboard.CSRF != session.CSRF || dashboard.Apps[0].RequestRates.LastHour != 7 {
 		t.Fatalf("unexpected dashboard: %+v", dashboard)
+	}
+	// The app card shows the unresolved exception count; the store decorates the snapshot with it.
+	if dashboard.Apps[0].Exceptions != 3 {
+		t.Fatalf("dashboard exceptions = %d, want 3", dashboard.Apps[0].Exceptions)
 	}
 	// The navbar renders this next to the brand, so an empty payload would leave it blank.
 	if dashboard.Version != version.String() {
@@ -544,6 +563,22 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	blocked := call(t, handler, cookie, session, http.MethodGet, "/api/log/blocked", "")
 	if blocked.Code != http.StatusOK || !strings.Contains(blocked.Body.String(), `"path":"/wp-login.php"`) || !strings.Contains(blocked.Body.String(), `"count":42`) {
 		t.Fatalf("unexpected blocked: %d %s", blocked.Code, blocked.Body.String())
+	}
+	exceptions := call(t, handler, cookie, session, http.MethodGet, "/api/exceptions?app=sinatra&range=24h", "")
+	if exceptions.Code != http.StatusOK || !strings.Contains(exceptions.Body.String(), `"exp_uid":"9f2e1a4b"`) || !strings.Contains(exceptions.Body.String(), `"count":7`) {
+		t.Fatalf("unexpected exceptions: %d %s", exceptions.Code, exceptions.Body.String())
+	}
+	badRange := call(t, handler, cookie, session, http.MethodGet, "/api/exceptions?app=sinatra&range=90d", "")
+	if badRange.Code != http.StatusBadRequest {
+		t.Fatalf("bad range should be a 400: %d", badRange.Code)
+	}
+	resolve := call(t, handler, cookie, session, http.MethodPost, "/api/exceptions/resolve", `{"app":"sinatra","exp_uid":"9f2e1a4b","on":true}`)
+	if resolve.Code != http.StatusOK || !strings.Contains(resolve.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected resolve: %d %s", resolve.Code, resolve.Body.String())
+	}
+	noUID := call(t, handler, cookie, session, http.MethodPost, "/api/exceptions/resolve", `{"app":"sinatra"}`)
+	if noUID.Code != http.StatusBadRequest {
+		t.Fatalf("missing exp_uid should be a 400: %d", noUID.Code)
 	}
 	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/log/search", "")
 	if missingApp.Code != http.StatusBadRequest {

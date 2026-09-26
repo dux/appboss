@@ -207,8 +207,11 @@
     <div class="btn-list app-actions">
       <ui-btn class="btn-sm" icon="i-file-text" label="Logs" href="#/logs?app={props.app.name}" />
       <ui-btn class="btn-sm" icon="i-activity" label="Traffic" href="#/traffic?app={props.app.name}" title="Request traffic for this app" />
+      <ui-btn class="btn-sm {props.app.exceptions ? 'btn-danger' : ''}" icon="i-alert" label={props.app.exceptions ? 'Exceptions (' + props.app.exceptions + ')' : 'Exceptions'} href="#/exceptions?app={props.app.name}" title={props.app.exceptions ? props.app.exceptions + ' unresolved exception group(s)' : 'Error groups from the app exceptions log'} />
+      <span class="app-actions-sep" aria-hidden="true">&sdot;</span>
       <ui-btn class="btn-sm" icon="i-settings" label="Config" href="#/config?id=app:{props.app.name}" title="Edit this app's dboss.yaml" />
       <ui-btn class="btn-sm {props.app.maintenance ? 'btn-warning' : ''}" icon="i-tool" label={props.app.maintenance ? 'End maintenance' : 'Maintenance'} onclick="fez.act('{props.app.maintenance ? 'maintenance-off' : 'maintenance-on'}')" disabled={state.pending} title={props.app.maintenance ? 'Serve the app again' : 'Answer every request with the maintenance page'} />
+      <span class="app-actions-sep" aria-hidden="true">&sdot;</span>
       <ui-btn class="btn-sm" icon="i-play" label="Start" onclick="fez.act('start')" disabled={state.pending || props.app.state === 'running' || props.app.state === 'starting'} />
       <ui-btn class="btn-sm" icon="i-rotate" label="Restart" onclick="fez.act('restart')" disabled={state.pending || state.changing || props.app.state === 'stopped'} />
       <ui-btn class="btn-sm btn-outline-danger" icon="i-stop" label="Stop" onclick="fez.act('stop')" disabled={state.pending || state.changing || props.app.state === 'stopped'} />

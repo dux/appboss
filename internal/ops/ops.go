@@ -29,44 +29,45 @@ var ErrUnknownAction = errors.New("unknown action")
 
 // Action names are the canonical method strings shared by the control protocol and the console.
 const (
-	ActionList          = "ls"
-	ActionStatus        = "status"
-	ActionStart         = "start"
-	ActionStop          = "stop"
-	ActionRestart       = "restart"
-	ActionDestroy       = "destroy"
-	ActionMaintenance   = "maintenance"
-	ActionRescan        = "rescan"
-	ActionLogs          = "logs"
-	ActionPorts         = "ports"
-	ActionCron          = "cron"
-	ActionCronRun       = "cron-run"
-	ActionHook          = "hook"
-	ActionHookRun       = "hook-run"
-	ActionHostHookRun   = "host-hook-run"
-	ActionExec          = "exec"
-	ActionAudit         = "audit"
-	ActionLogSearch     = "log-search"
-	ActionPG            = "pg"
-	ActionPGBackup      = "pg-backup"
-	ActionPGBackups     = "pg-backups"
-	ActionPGRestore     = "pg-restore"
-	ActionPGDrop        = "pg-drop"
-	ActionPGDeleteDump  = "pg-delete-dump"
-	ActionPGQuery       = "pg-query"
-	ActionPubsub        = "pubsub"
-	ActionPubsubSecret  = "pubsub-secret"
-	ActionPubsubRotate  = "pubsub-rotate"
-	ActionPubsubPublish = "pubsub-publish"
-	ActionAdd           = "add"
-	ActionEvents        = "events"
-	ActionEventsLatest  = "events-latest"
-	ActionEventsFacets  = "events-facets"
-	ActionEventsViews   = "events-views"
-	ActionEventsFunnel  = "events-funnel"
-	ActionEventsQuery   = "events-query"
-	ActionEventsSave    = "events-save"
-	ActionEventsDelete  = "events-delete"
+	ActionList             = "ls"
+	ActionStatus           = "status"
+	ActionStart            = "start"
+	ActionStop             = "stop"
+	ActionRestart          = "restart"
+	ActionDestroy          = "destroy"
+	ActionMaintenance      = "maintenance"
+	ActionRescan           = "rescan"
+	ActionLogs             = "logs"
+	ActionPorts            = "ports"
+	ActionCron             = "cron"
+	ActionCronRun          = "cron-run"
+	ActionHook             = "hook"
+	ActionHookRun          = "hook-run"
+	ActionHostHookRun      = "host-hook-run"
+	ActionExec             = "exec"
+	ActionAudit            = "audit"
+	ActionLogSearch        = "log-search"
+	ActionPG               = "pg"
+	ActionPGBackup         = "pg-backup"
+	ActionPGBackups        = "pg-backups"
+	ActionPGRestore        = "pg-restore"
+	ActionPGDrop           = "pg-drop"
+	ActionPGDeleteDump     = "pg-delete-dump"
+	ActionPGQuery          = "pg-query"
+	ActionPubsub           = "pubsub"
+	ActionPubsubSecret     = "pubsub-secret"
+	ActionPubsubRotate     = "pubsub-rotate"
+	ActionPubsubPublish    = "pubsub-publish"
+	ActionAdd              = "add"
+	ActionEvents           = "events"
+	ActionEventsLatest     = "events-latest"
+	ActionEventsFacets     = "events-facets"
+	ActionEventsViews      = "events-views"
+	ActionEventsFunnel     = "events-funnel"
+	ActionEventsQuery      = "events-query"
+	ActionEventsSave       = "events-save"
+	ActionEventsDelete     = "events-delete"
+	ActionExceptionResolve = "exception-resolve"
 )
 
 // auditActions are the methods that write an audit row when they run.
@@ -76,6 +77,7 @@ var auditActions = map[string]bool{
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true, ActionAdd: true,
 	ActionEventsQuery: true, ActionEventsSave: true, ActionEventsDelete: true,
+	ActionExceptionResolve: true,
 }
 
 // Runtime is the supervisor surface the service drives.
@@ -204,6 +206,8 @@ type Request struct {
 	Key  string `json:"key,omitempty"`
 	Kind string `json:"kind,omitempty"`
 	Name string `json:"name,omitempty"`
+	// ExpUID addresses one exception group for the resolve action; On carries the new flag.
+	ExpUID string `json:"exp_uid,omitempty"`
 }
 
 // RescanResult is what a rescan changed: the fleet after the scan, apps it could not load and
@@ -323,6 +327,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return nil, s.eventsSave(request.App, request.Kind, request.Data)
 	case ActionEventsDelete:
 		return nil, s.eventsDelete(request.App, request.Kind, request.Name)
+	case ActionExceptionResolve:
+		return nil, s.resolveException(request.App, request.ExpUID, request.On)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -401,6 +407,8 @@ func auditDetail(request Request) string {
 		return request.Kind + " " + savedName(request.Data)
 	case ActionEventsDelete:
 		return request.Kind + " " + request.Name
+	case ActionExceptionResolve:
+		return request.ExpUID
 	case ActionAdd:
 		detail := request.Repo
 		if request.Branch != "" {

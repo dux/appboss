@@ -155,7 +155,7 @@ The startup banner names the address every app ended up on, so when the demo fal
 The demo host file blocks common scanner targets for every app (`defaults.deny`: `*.php`, `*.asp`, `*.aspx`, `*.jsp`, `*.cgi`, `/.git/*`, `/.env`, `/wp-admin/*`, `/wp-content/*`, `/cgi-bin/*`, `/phpmyadmin`), so `curl -i http://bun.lvh.me/wp-login.php` answers `403`.
 
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
-`make seed` recreates the demo's SQLite databases and event store from scratch with dummy data - a week of requests and a day of logs per app, Parquet analytics events behind the bun app's 4-step `onboarding` funnel (filter the Events tab by `plan:` or `page:` tags), plus audit rows, deny counters and daemon log lines in the host database - so a fresh console's Overview, Traffic, Logs, Events and Audit views are populated. Stop the running demo first; it deletes the databases it seeds (`go run ./internal/demo/seed --dir ./demo/.dboss/log`).
+`make seed` recreates the demo's SQLite databases and event store from scratch with dummy data - a week of requests and a day of logs per app, Parquet analytics events behind the bun app's 4-step `onboarding` funnel (filter the Events tab by `plan:` or `page:` tags), plus exception groups with per-minute counts, and audit rows, deny counters and daemon log lines in the host database - so a fresh console's Overview, Traffic, Logs, Exceptions, Events and Audit views are populated. Stop the running demo first; it deletes the databases it seeds (`go run ./internal/demo/seed --dir ./demo/.dboss/log`).
 `make kill` stops the demo apps and clears the port range after a crash.
 
 ## One config file, two modes
@@ -343,9 +343,10 @@ A stopped app is also started by the first proxied request, which gets the `star
 
 ## Logs
 
-Every app has one SQLite database at `dir/log/<app>/dboss.sqlite` with three tables:
+Every app has one SQLite database at `dir/log/<app>/dboss.sqlite` with these tables:
 `requests` (one row per proxied request, written by the proxy), `logs` (one row per log line,
-written by the ingestion module) and `tail_offsets` (how far the file tailer has read).
+written by the ingestion module), `exceptions` and `exception_logs` (the aggregated exception
+stream, see **Exceptions** below) and `tail_offsets` (how far the file tailer has read).
 `logs` carries `ts`, `source`, `process`, `stream`, `level`, `message`, `request_id` and `raw`,
 and an FTS5 index over `message` and `raw` backs the text search.
 `requests` carries `request_id` (the `CF-Ray` when Cloudflare sent one, so a request from the Cloudflare dashboard can be found by pasting its Ray ID into the search) and `country` (the two-character `CF-IPCountry`, empty without it).
@@ -357,7 +358,8 @@ Each row belongs to a channel and the console's **Logs** viewer selects one:
 * `dboss` - dboss's own daemon log, mirrored into the reserved `dir/log/_dboss` database and
   offered as **Host (dboss)** in the app picker.
 * one channel per `*.log` file the app writes under `<app dir>/log`, tailed by byte offset and
-  never rotated or deleted.
+  never rotated or deleted. A `*.exceptions.log` file is the exception stream instead (see
+  **Exceptions** below), so it has its own tab rather than a log channel.
 
 `REQUEST` rows and app log files are kept for `log_retention` (default `336h`, two weeks);
 `STDOUT` and the dboss daemon log for `stdout_retention` (default `3h`). Both are deleted by the
@@ -386,6 +388,35 @@ The **Logs** route (the **Logs** button on an app card opens `#/logs?app=<name>`
 filters by channel, time range, level or HTTP method/status and free text, highlights matches,
 expands a row to its raw fields and exports the current query as text.
 The current filters live in the hash query, so a view can be bookmarked, shared or reached with Back.
+
+## Exceptions
+
+A `.exceptions.log` file under an app's `log/` folder is an exception stream, not a plain log
+channel. The Lux `web_common` plugin's `ExceptionWriter` writes it, one compact JSON object per
+line, but any producer may append the same shape:
+
+```json
+{"exp_uid":"<sha256>","dump":"<full message>","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"description":"Confirming an order","ts":"2026-09-26T10:00:30.123Z"}
+```
+
+* `exp_uid` (required, nonempty) is the fingerprint that groups occurrences; `message` is required. `dump`, `user`, `ip`, `tags` and `description` are optional and type-checked; `ts` is RFC3339 UTC and falls back to the time dboss reads the line. A malformed line becomes a `warn` row on the file's channel, like an event.
+* dboss tails the file every 5 seconds by byte offset, never deletes it, and keeps a trailing partial line for the next pass.
+
+Two tables hold the stream:
+
+* `exceptions` - one row per `exp_uid`: the first nonempty `dump`, `first_at`/`last_at`, the total `count` and `is_resolved`. Summaries and dumps are never pruned.
+* `exception_logs` - one row per `exp_uid` per UTC minute: `count`, the `message`/`tags`/`description` of the first occurrence in that minute, and the distinct `users` and `ips` seen (each a JSON array, capped at 5). Later occurrences only raise the count and add new users/IPs, so a thousand lines in one minute are a single row.
+
+Timestamps are UTC Unix milliseconds. `log_retention` prunes old `exception_logs` minute rows;
+`log_retention: 0` stops ingesting the stream. `dboss check` is not affected; the tables are
+created on first write.
+
+The console's **Exceptions** tab (`#/exceptions?app=<name>&range=`) lists one app's groups for
+the last hour, 24 hours, 7 days or 30 days, newest first. Clicking a group shows its full dump
+and the last 50 minute rows (counts, users, IPs), and a **Resolve**/**Reopen** button flips
+`is_resolved` (audited). Listing is read-only and writes no audit row.
+The app card shows an **Exceptions** button next to **Logs** and **Traffic**; it turns red
+with the count of unresolved groups while any remain.
 
 ## Events
 

@@ -12,6 +12,7 @@
   --primary-soft: rgb(0 84 166 / 8%);
   --success: #2fb344;
   --danger: #d63939;
+  --danger-hover: #bf3333;
   --warning: #f59f00;
   --neutral: #667382;
   --code-string: #1a7f37;
@@ -405,6 +406,17 @@ body:has(.held-bar) .help-nav {
   background: var(--primary-hover);
 }
 
+.btn-danger {
+  border-color: var(--danger);
+  color: #fff;
+  background: var(--danger);
+}
+
+.btn-danger:hover {
+  border-color: var(--danger-hover);
+  background: var(--danger-hover);
+}
+
 .btn-ghost {
   border-color: transparent;
   color: var(--muted);
@@ -783,6 +795,16 @@ input[type="radio"] {
 /* the buttons always get their own line, so a long host or an extra badge never reflows the header */
 .app-actions {
   flex: 1 0 100%;
+}
+
+/* a middle dot between the action groups, kept off the flex baseline and out of the tab order */
+.app-actions-sep {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  margin: 0 -3px;
+  color: var(--muted);
+  line-height: 1;
 }
 
 .badge {
@@ -2730,6 +2752,15 @@ textarea.sql-editor {
 .log-view-single {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* The Exceptions tab sits below its stat cards; the minute table sits below the dump. */
+.exceptions-table { margin-top: 16px; }
+
+.exceptions-minutes { margin-top: 8px; }
+
+.exceptions-action { text-align: right; white-space: nowrap; }
+
+.log-row-resolved { opacity: 0.55; }
 
 .log-nav {
   overflow: auto;

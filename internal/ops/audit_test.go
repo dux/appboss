@@ -19,7 +19,10 @@ func (s *auditStore) Rates(string) (logstore.Rates, error) { return logstore.Rat
 
 func (s *auditStore) Channels(string) ([]logstore.Channel, error) { return nil, nil }
 func (s *auditStore) Tree([]string) ([]logstore.AppTree, error)   { return nil, nil }
-func (s *auditStore) RecordAudit(e logstore.AuditEntry) error     { s.rows = append(s.rows, e); return nil }
+func (s *auditStore) SetExceptionResolved(string, string, bool) error {
+	return nil
+}
+func (s *auditStore) RecordAudit(e logstore.AuditEntry) error { s.rows = append(s.rows, e); return nil }
 func (s *auditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error) {
 	return s.rows, nil
 }
@@ -42,6 +45,17 @@ func TestDoAuditsMutatingActions(t *testing.T) {
 	service.Audit("", "app", "config-write", "app:x", nil)
 	if len(store.rows) != 2 || store.rows[1].Actor != "cli" {
 		t.Fatalf("explicit audit = %+v", store.rows)
+	}
+}
+
+func TestDoAuditsExceptionResolve(t *testing.T) {
+	store := &auditStore{}
+	service := New(&fakeRuntime{}, store, nil, nil, nil, nil)
+	if _, err := service.Do(Request{Method: ActionExceptionResolve, App: "web", ExpUID: "abc", On: true, Actor: "admin@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.rows) != 1 || store.rows[0].Action != ActionExceptionResolve || store.rows[0].Detail != "abc" || store.rows[0].Result != "ok" {
+		t.Fatalf("audit = %+v", store.rows)
 	}
 }
 

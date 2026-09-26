@@ -57,11 +57,12 @@ type fakeApps struct{ snapshots []supervisor.Snapshot }
 func (f fakeApps) Snapshots() []supervisor.Snapshot { return f.snapshots }
 
 type memorySink struct {
-	entries   []logstore.LogEntry
-	offsets   map[string]logstore.TailOffset
-	removed   []string
-	appendErr error
-	countries map[string]string
+	entries    []logstore.LogEntry
+	offsets    map[string]logstore.TailOffset
+	removed    []string
+	appendErr  error
+	countries  map[string]string
+	exceptions []logstore.ExceptionBatch
 }
 
 func (m *memorySink) RecordLogs(_ string, entries []logstore.LogEntry) error {
@@ -74,6 +75,20 @@ func (m *memorySink) AppendLogs(_ string, entries []logstore.LogEntry) error {
 		return m.appendErr
 	}
 	m.entries = append(m.entries, entries...)
+	return nil
+}
+
+func (m *memorySink) AppendExceptions(_ string, batch logstore.ExceptionBatch) error {
+	if m.appendErr != nil {
+		return m.appendErr
+	}
+	m.exceptions = append(m.exceptions, batch)
+	if batch.Path != "" {
+		if m.offsets == nil {
+			m.offsets = map[string]logstore.TailOffset{}
+		}
+		m.offsets[batch.Path] = logstore.TailOffset{Path: batch.Path, Inode: batch.Inode, Offset: batch.Offset}
+	}
 	return nil
 }
 

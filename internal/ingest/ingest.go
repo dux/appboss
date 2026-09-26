@@ -45,6 +45,7 @@ type Snapshotter interface {
 type Store interface {
 	RecordLogs(app string, entries []logstore.LogEntry) error
 	AppendLogs(app string, entries []logstore.LogEntry) error
+	AppendExceptions(app string, batch logstore.ExceptionBatch) error
 	TailOffsets(app string) (map[string]logstore.TailOffset, error)
 	SaveTailOffset(app, path string, inode uint64, offset int64) error
 	RemoveTailOffsets(app string, paths []string) error
@@ -205,6 +206,8 @@ func (m *Module) tailFiles(snapshot supervisor.Snapshot) {
 		var err error
 		if events.IsEventLog(path) {
 			err = m.tailEvents(snapshot, dir, path, tracked[path])
+		} else if IsExceptionLog(path) {
+			err = m.tailExceptions(snapshot, dir, path, tracked[path])
 		} else {
 			err = m.tailFile(snapshot, dir, path, tracked[path])
 		}

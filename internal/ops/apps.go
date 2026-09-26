@@ -146,6 +146,9 @@ func (s *Service) rescan() (RescanResult, error) {
 func (s *Service) decorate(snapshot *supervisor.Snapshot) {
 	if s.store != nil {
 		s.withRates(snapshot)
+		if count, err := s.UnresolvedExceptions(snapshot.Name); err == nil {
+			snapshot.Exceptions = count
+		}
 	}
 	if s.disk != nil {
 		if usage, ok := s.disk.Usage(snapshot.Name); ok {

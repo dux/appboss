@@ -90,7 +90,9 @@ type Snapshot struct {
 	Resources       res.Stats            `json:"resources"`
 	RequestRates    RequestRates         `json:"request_rates"`
 	Disk            DiskUsage            `json:"disk"`
-	Error           string               `json:"error,omitempty"`
+	// Exceptions is the number of unresolved exception groups the log store holds; ops fills it.
+	Exceptions int    `json:"exceptions,omitempty"`
+	Error      string `json:"error,omitempty"`
 	ErrorLog        []string             `json:"error_log,omitempty"`
 	LogRetention    time.Duration        `json:"-"`
 	StdoutRetention time.Duration        `json:"-"`

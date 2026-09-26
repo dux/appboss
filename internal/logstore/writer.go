@@ -118,6 +118,7 @@ func (s *Store) writer(app string) (*appWriter, error) {
 	// log cache is disposable but a failed insert would silently drop rows, so add it in place once.
 	_, _ = db.Exec(`ALTER TABLE requests ADD COLUMN process TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE requests ADD COLUMN country TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE exceptions ADD COLUMN is_resolved INTEGER NOT NULL DEFAULT 0`)
 	w := &appWriter{db: db, entries: make(chan entry, queueSize), stop: make(chan struct{}), done: make(chan struct{})}
 	s.apps[app] = w
 	go w.loop(s.flush)
@@ -156,6 +157,9 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS audit (ts TEXT NOT NULL, actor TEXT NOT NULL, app TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, result TEXT NOT NULL, error TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)`,
 	`CREATE TABLE IF NOT EXISTS blocked (path TEXT PRIMARY KEY, count INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS exceptions (exp_uid TEXT PRIMARY KEY, dump TEXT, first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, count INTEGER NOT NULL, is_resolved INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS exception_logs (exp_uid TEXT NOT NULL REFERENCES exceptions(exp_uid), minute_at INTEGER NOT NULL, count INTEGER NOT NULL, message TEXT NOT NULL, users TEXT, tags TEXT, description TEXT, ips TEXT, PRIMARY KEY (exp_uid, minute_at))`,
+	`CREATE INDEX IF NOT EXISTS exception_logs_minute ON exception_logs(minute_at)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(message, raw, content='logs', content_rowid='rowid')`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN INSERT INTO logs_fts(rowid, message, raw) VALUES (new.rowid, new.message, new.raw); END`,
 	`CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN INSERT INTO logs_fts(logs_fts, rowid, message, raw) VALUES ('delete', old.rowid, old.message, old.raw); END`,
@@ -249,19 +253,10 @@ func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry, blocked map
 		_ = statement.Close()
 	}
 	if len(logs) > 0 {
-		statement, err := tx.Prepare(`INSERT INTO logs (ts, source, process, stream, level, message, request_id, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-		if err != nil {
+		if err := insertLogs(tx, logs); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
-		for _, e := range logs {
-			if _, err := statement.Exec(stamp(e.Time), e.Source, e.Process, e.Stream, e.Level, e.Message, e.RequestID, e.Raw); err != nil {
-				_ = statement.Close()
-				_ = tx.Rollback()
-				return err
-			}
-		}
-		_ = statement.Close()
 	}
 	if len(blocked) > 0 {
 		statement, err := tx.Prepare(`INSERT INTO blocked (path, count) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET count = count + excluded.count`)
@@ -279,6 +274,22 @@ func (w *appWriter) insert(requests []RequestEntry, logs []LogEntry, blocked map
 		_ = statement.Close()
 	}
 	return tx.Commit()
+}
+
+// insertLogs writes process-log rows inside an open transaction, shared by the batched writer
+// and the synchronous exception writer.
+func insertLogs(tx *sql.Tx, entries []LogEntry) error {
+	statement, err := tx.Prepare(`INSERT INTO logs (ts, source, process, stream, level, message, request_id, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer statement.Close()
+	for _, e := range entries {
+		if _, err := statement.Exec(stamp(e.Time), e.Source, e.Process, e.Stream, e.Level, e.Message, e.RequestID, e.Raw); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
