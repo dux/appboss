@@ -25,11 +25,6 @@ const (
 	cliLoginPath = "/login"
 	cliEmail     = "cli@localhost"
 	cliTokenTTL  = 3 * time.Minute
-	// A hand-run session prints its console link once, in the startup banner, and the operator
-	// clicks it whenever they get to it. A single-use link would be dead by then, so this one
-	// stays usable for its whole life. It is only ever minted for a terminal session on the
-	// loopback address, never under systemd.
-	devTokenTTL = time.Hour
 )
 
 type authSession = authcog.Session
@@ -37,23 +32,26 @@ type authSession = authcog.Session
 // authenticator is the console's side of the shared AuthCog flow: admins only, plus the
 // one-time `dboss login` tokens.
 type authenticator struct {
-	flow       *authcog.Flow
-	gate       authcog.Gate
-	admins     map[string]bool
-	mu         sync.Mutex
-	cliTokens  map[string]cliToken
-	dev        bool
-	devSession authSession // the one local session a dev run hands out, minted at startup
-	hostPages  func() string
+	flow         *authcog.Flow
+	gate         authcog.Gate
+	admins       map[string]bool
+	mu           sync.Mutex
+	cliTokens    map[string]cliToken
+	local        bool
+	localSession authSession // the one local session a hand-run or dev session hands out
+	hostPages    func() string
 }
 
 func consoleAuthenticator(flow *authcog.Flow, cfg config.Config, hostPages func() string) (*authenticator, error) {
-	management, dev := cfg.Management, cfg.Dev()
+	management := cfg.Management
+	// A dev session (running an app from its own folder) and a hand-run host in a terminal both
+	// trust the machine's own loopback, so neither sends the operator through a token.
+	local := cfg.Dev() || cfg.Local
 	hosts := make(map[string]bool, len(management.Host))
 	for _, host := range management.Host {
 		hosts[strings.ToLower(host)] = true
 	}
-	auth := &authenticator{flow: flow, admins: map[string]bool{}, dev: dev, hostPages: hostPages}
+	auth := &authenticator{flow: flow, admins: map[string]bool{}, local: local, hostPages: hostPages}
 	for _, email := range management.Admins {
 		auth.admins[strings.ToLower(email)] = true
 	}
@@ -67,7 +65,7 @@ func consoleAuthenticator(flow *authcog.Flow, cfg config.Config, hostPages func(
 		TTL:           cfg.Defaults.SessionTTL.Value(),
 		Allow:         func(email string) bool { return auth.admins[email] },
 	}
-	if dev {
+	if local {
 		// One session for the whole run, not a cookie minted per request: the console reads its
 		// CSRF token once at boot and polls for the rest of the session, so a token that changed
 		// under it would start failing every mutating call.
@@ -76,7 +74,7 @@ func consoleAuthenticator(flow *authcog.Flow, cfg config.Config, hostPages func(
 			return nil, err
 		}
 		// It is never signed into a cookie, so its expiry is only there to outlive the run.
-		auth.devSession = authSession{Email: cliEmail, CSRF: csrf, Audience: authAudience, ExpiresAt: time.Now().AddDate(10, 0, 0).Unix()}
+		auth.localSession = authSession{Email: cliEmail, CSRF: csrf, Audience: authAudience, ExpiresAt: time.Now().AddDate(10, 0, 0).Unix()}
 	}
 	return auth, nil
 }
@@ -98,10 +96,10 @@ func (a *authenticator) authenticate(w http.ResponseWriter, r *http.Request) (au
 	if session, ok := a.validSession(r); ok {
 		return session, true
 	}
-	if a.dev && loopbackPeer(r) {
-		// A dev session answering its own machine is the operator's own terminal, so sending
-		// them to `dboss login` buys nothing; hand them the local session directly.
-		return a.devSession, true
+	if a.local && loopbackPeer(r) {
+		// A hand-run or dev session answering its own machine is the operator's own terminal, so
+		// sending them to `dboss login` buys nothing; hand them the local session directly.
+		return a.localSession, true
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json")
@@ -146,25 +144,17 @@ func loopbackPeer(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// cliToken is one pending login link. A `dboss login` link is spent on first use; the banner
-// link of a hand-run session is not, so the same line can be clicked again while it lives.
+// cliToken is one pending `dboss login` link, spent on first use.
 type cliToken struct {
 	expiresAt time.Time
-	reusable  bool
 }
 
 // issueCLIToken returns a fresh single-use login token that expires after cliTokenTTL.
 func (a *authenticator) issueCLIToken() (string, error) {
-	return a.issueToken(cliTokenTTL, false)
+	return a.issueToken(cliTokenTTL)
 }
 
-// issueDevToken returns the banner link's token: longer lived and reusable, for a terminal
-// session only.
-func (a *authenticator) issueDevToken() (string, error) {
-	return a.issueToken(devTokenTTL, true)
-}
-
-func (a *authenticator) issueToken(ttl time.Duration, reusable bool) (string, error) {
+func (a *authenticator) issueToken(ttl time.Duration) (string, error) {
 	token, err := authcog.RandomToken()
 	if err != nil {
 		return "", err
@@ -180,7 +170,7 @@ func (a *authenticator) issueToken(ttl time.Duration, reusable bool) (string, er
 			delete(a.cliTokens, key)
 		}
 	}
-	a.cliTokens[token] = cliToken{expiresAt: now.Add(ttl), reusable: reusable}
+	a.cliTokens[token] = cliToken{expiresAt: now.Add(ttl)}
 	return token, nil
 }
 
@@ -193,9 +183,7 @@ func (a *authenticator) cliLogin(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	a.mu.Lock()
 	pending, ok := a.cliTokens[token]
-	if !pending.reusable || !pending.expiresAt.After(time.Now()) {
-		delete(a.cliTokens, token)
-	}
+	delete(a.cliTokens, token)
 	a.mu.Unlock()
 	if token == "" || !ok || !pending.expiresAt.After(time.Now()) {
 		http.Error(w, "login link is invalid or expired; run dboss login again", http.StatusBadRequest)

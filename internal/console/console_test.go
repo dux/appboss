@@ -640,6 +640,26 @@ func TestDevConsoleOpensOnLoopbackWithoutASession(t *testing.T) {
 	}
 }
 
+// A host run by hand in a terminal admits its own loopback without a token, like a dev session.
+// Under systemd cfg.Local is false, so the same host still needs `dboss login`.
+func TestHandRunHostConsoleAdmitsLoopbackWithoutASession(t *testing.T) {
+	cfg := config.Default()
+	cfg.Management.Host = config.List{"dboss.lvh.me"}
+	cfg.Management.Admins = []string{"admin@example.com"}
+	cfg.Local = true
+	handler := handlerFor(t, cfg, &fakeManager{}, nil)
+	if !handler.capabilities()["dev"] {
+		t.Fatal("a hand-run console should report a local session")
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3100/api/bootstrap", nil)
+	request.RemoteAddr = "127.0.0.1:54321"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"viewer":"cli@localhost"`) {
+		t.Fatalf("hand-run bootstrap = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestConsoleServesSystemInspection(t *testing.T) {
 	handler := newTestHandler(t, &fakeManager{}, nil)
 	cookie, session := sessionCookie(t, handler)

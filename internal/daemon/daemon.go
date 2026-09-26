@@ -116,6 +116,8 @@ func Build(cfg config.Config, echo *supervisor.Echo, opts Options) (*Daemon, err
 		return nil, err
 	}
 	cfg.ConsolePort = managementPort
+	// A hand-run terminal session admits its own loopback without a token; systemd has no terminal.
+	cfg.Local = echo != nil
 	notifier := notify.New(notify.Config{URL: cfg.Notify.URL, Format: notify.FormatFor(cfg.Notify.URL), Events: cfg.Notify.Events, MinInterval: notifyQuiet, Headers: cfg.Notify.Headers})
 	manager, invalid, err := supervisor.New(cfg, allocator, echo, notifier)
 	if err != nil {
@@ -244,7 +246,7 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		return err
 	}
 	if d.management != nil {
-		if d.cfg.Dev() {
+		if d.cfg.Dev() || d.cfg.Local {
 			logx.Infof("management console: http://127.0.0.1:%d (open from this machine, no sign-in)", d.managementPort)
 		} else {
 			logx.Infof("management console: http://127.0.0.1:%d (run `dboss login` for a one-time sign-in link)", d.managementPort)

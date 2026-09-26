@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"dboss/internal/config"
-	"dboss/internal/logx"
 	"dboss/internal/supervisor"
 	"dboss/internal/version"
 )
@@ -22,18 +21,10 @@ func (d *Daemon) printBanner() {
 	}
 	scheme, port := d.appAddress()
 	console, note := "", ""
-	switch {
-	case d.management == nil:
-	case d.cfg.Dev():
-		// A dev session admits this machine without a session, so the link needs no token.
-		console, note = d.cfg.ConsoleURL(), "open on this machine"
-	default:
-		link, err := d.management.DevLoginURL()
-		if err != nil {
-			logx.Warnf("console link: %v", err)
-		} else {
-			console, note = link, "signed in for an hour"
-		}
+	// printBanner only runs for a terminal session, which admits loopback without a token, so the
+	// console row carries no sign-in link.
+	if d.management != nil {
+		console, note = "http://"+managementAddress(d.managementPort), "open on this machine"
 	}
 	secure := devHTTPS{}
 	if d.devHTTPS != "" {

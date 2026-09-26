@@ -60,7 +60,7 @@ type Handler struct {
 	publicHost     string
 	mux            *http.ServeMux
 	sys            SysReader
-	dev            bool
+	local          bool
 	appScheme      string
 	appPort        string
 	// hostname names the machine in the console's tab title.
@@ -110,7 +110,7 @@ func New(cfg config.Config, flow *authcog.Flow, service *ops.Service, store Conf
 		return nil, err
 	}
 	// The console's own listener sits on the first port of the range, reserved by the allocator.
-	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.ConsolePort), sys: sys, dev: cfg.Dev()}
+	handler := &Handler{service: service, store: store, auth: auth, static: static, managementPort: strconv.Itoa(cfg.ConsolePort), sys: sys, local: cfg.Dev() || cfg.Local}
 	handler.hostname, _ = os.Hostname()
 	handler.mux = handler.routes()
 	if len(cfg.Management.Host) > 0 {
@@ -131,14 +131,6 @@ func (h *Handler) SetAppAddress(scheme, port string) {
 // when one is configured. Both links carry the same single-use token.
 func (h *Handler) LoginURL() (local, public string, err error) {
 	return h.loginURL(h.auth.issueCLIToken)
-}
-
-// DevLoginURL is the loopback link printed in the startup banner of a hand-run session: it lives
-// for an hour and survives being clicked, so the one line stays useful for the whole session.
-// Callers must gate it on the session being a terminal; it is never minted under systemd.
-func (h *Handler) DevLoginURL() (string, error) {
-	local, _, err := h.loginURL(h.auth.issueDevToken)
-	return local, err
 }
 
 func (h *Handler) loginURL(issue func() (string, error)) (local, public string, err error) {

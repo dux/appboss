@@ -22,7 +22,10 @@ type Config struct {
 	Socket     string `yaml:"-" json:"socket"`
 	Ports      [2]int `yaml:"ports" json:"ports"`
 	// ConsolePort is the loopback port the console is bound to; daemon.Build sets it.
-	ConsolePort    int        `yaml:"-" json:"-"`
+	ConsolePort int `yaml:"-" json:"-"`
+	// Local marks a hand-run terminal session, whose console admits loopback requests without a
+	// session. daemon.Build sets it from the terminal signal, so it is never true under systemd.
+	Local          bool       `yaml:"-" json:"-"`
 	LogLevel       string     `yaml:"log_level" json:"log_level"`
 	AuditRetention Duration   `yaml:"audit_retention" json:"audit_retention"`
 	MaintenanceAt  string     `yaml:"maintenance_at" json:"maintenance_at"`
