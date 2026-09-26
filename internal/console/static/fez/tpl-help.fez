@@ -202,7 +202,7 @@
     `,
     exceptionsLine: `
     # one compact JSON object per line in log/app.exceptions.log
-    {"exp_uid":"<sha256>","dump":"...","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"ts":"2026-09-26T10:00:30.123Z"}
+    {"uid":"<sha256>","dump":"...","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"ts":"2026-09-26T10:00:30.123Z"}
     `,
     cron: `
     cron:
@@ -730,10 +730,10 @@
         <db-preview-yaml :text="state.examples.exceptionsLine" lang="text" />
         <h3>Details</h3>
         <ul>
-          <li><code>exp_uid</code> (nonempty) and <code>message</code> are required; <code>dump</code>, <code>user</code>, <code>ip</code>, <code>tags</code> and <code>description</code> are optional, and <code>ts</code> defaults to the time dboss reads the line.</li>
+          <li><code>uid</code> (nonempty) and <code>message</code> are required; <code>dump</code>, <code>user</code>, <code>ip</code>, <code>tags</code> and <code>description</code> are optional, and <code>ts</code> defaults to the time dboss reads the line.</li>
           <li>One row per fingerprint per UTC minute holds the count, the first occurrence's message, and the distinct users and IPs (up to five each).</li>
-          <li>Clicking a group opens its full dump and the last 50 minute rows. <strong>Resolve</strong>/<strong>Reopen</strong> flips <code>is_resolved</code> and audits the click; resolved rows dim.</li>
-          <li><code>log_retention</code> prunes old minute rows; the summary, its flag and its first nonempty dump are kept.</li>
+          <li>Clicking a group opens its full dump and the last 50 minute rows. <strong>Resolve</strong> marks it resolved, and the next occurrence reopens it. <strong>Ignore</strong> marks it resolved and ignored, and a later occurrence leaves it that way. Both clicks are audited; resolved and ignored rows dim.</li>
+          <li><code>log_retention</code> prunes old minute rows; the summary, its flags and its first nonempty dump are kept.</li>
           <li>A malformed line becomes a <code>warn</code> row on the file's channel, like an event.</li>
         </ul>
       </section>

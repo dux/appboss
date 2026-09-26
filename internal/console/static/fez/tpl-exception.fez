@@ -1,0 +1,266 @@
+<script>
+  class {
+    init() {
+      this.state.app = Fez.hqs('app') || ''
+      this.state.uid = Fez.hqs('uid') || ''
+      this.state.row = null
+      this.state.loaded = false
+      this.state.busy = false
+      this.state.error = ''
+    }
+
+    onMount() {
+      this.load()
+    }
+
+    async load() {
+      this.state.busy = true
+      try {
+        if (!this.state.app || !this.state.uid) throw new Error('Missing app or exception id.')
+        const params = new URLSearchParams({ app: this.state.app, uid: this.state.uid })
+        const data = await Dboss.api(`/api/exceptions?${params}`)
+        const raw = (data.rows || [])[0]
+        if (!raw) {
+          this.state.row = null
+          this.state.error = 'This exception is no longer in the store.'
+        } else {
+          this.state.row = this.shape(raw)
+          this.state.error = ''
+        }
+        this.state.loaded = true
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    shape(raw) {
+      const minutes = raw.minutes || []
+      const users = new Set()
+      const ips = new Set()
+      for (const minute of minutes) {
+        for (const user of minute.users || []) users.add(user)
+        for (const ip of minute.ips || []) ips.add(ip)
+      }
+      const described = minutes.find((minute) => minute.description)
+      return {
+        exp_uid: raw.exp_uid,
+        short: (raw.exp_uid || '').slice(0, 12),
+        dump: raw.dump || '',
+        resolved: !!raw.is_resolved,
+        ignored: !!raw.is_ignored,
+        message: minutes.length ? minutes[0].message : '',
+        description: described ? described.description : '',
+        countLabel: this.number(raw.count),
+        firstLabel: this.time(raw.first_at),
+        lastLabel: this.time(raw.last_at),
+        clients: users.size + ips.size,
+        minutes: minutes.map((minute) => ({
+          time: this.time(minute.minute_at),
+          countLabel: this.number(minute.count),
+          usersLabel: (minute.users || []).join(', '),
+          ips: minute.ips || [],
+        })),
+      }
+    }
+
+    async resolve() {
+      if (!this.state.row) return
+      const on = !this.state.row.resolved
+      this.state.busy = true
+      try {
+        await Dboss.api('/api/exceptions/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ app: this.state.app, exp_uid: this.state.row.exp_uid, on }),
+        })
+        this.state.row = { ...this.state.row, resolved: on, ignored: on ? this.state.row.ignored : false }
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async ignore() {
+      if (!this.state.row) return
+      const on = !this.state.row.ignored
+      this.state.busy = true
+      try {
+        await Dboss.api('/api/exceptions/ignore', {
+          method: 'POST',
+          body: JSON.stringify({ app: this.state.app, exp_uid: this.state.row.exp_uid, on }),
+        })
+        this.state.row = { ...this.state.row, ignored: on, resolved: on ? true : this.state.row.resolved }
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async copy(value, label) {
+      if (!value) return
+      try {
+        await navigator.clipboard.writeText(value)
+        Toast.show(`${label} copied`)
+      } catch (error) {
+        Toast.show(error.message, true)
+      }
+    }
+
+    number(value) {
+      return new Intl.NumberFormat().format(Math.round(Number(value || 0)))
+    }
+
+    time(value) {
+      if (!value) return ''
+      const date = new Date(value)
+      return date.toLocaleString([], {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    }
+  }
+</script>
+
+<div class="page-header">
+  <div>
+    <p class="page-pretitle"><a href={'#/exceptions?app=' + state.app}>&larr; Exceptions</a></p>
+    <h1 class="page-title">
+      Exception {state.row ? state.row.short : ''}
+      {#if state.row}
+        {#if state.row.ignored}
+          <span class="badge">ignored</span>
+        {:else}
+          <span class="badge {state.row.resolved ? 'badge-success' : 'badge-danger'}">{state.row.resolved ? 'resolved' : 'open'}</span>
+        {/if}
+      {/if}
+    </h1>
+  </div>
+  <div class="page-actions">
+    <button class="btn" type="button" onclick="fez.load()" disabled={state.busy}>
+      <svg class="icon"><use href="#i-refresh"></use></svg>
+      Refresh
+    </button>
+    {#if state.row}
+      <button class="btn {state.row.resolved ? '' : 'btn-primary'}" type="button" onclick="fez.resolve()" disabled={state.busy}>
+        {state.row.resolved ? 'Reopen' : 'Resolve'}
+      </button>
+      <button class="btn" type="button" onclick="fez.ignore()" disabled={state.busy}>
+        {state.row.ignored ? 'Unignore' : 'Ignore'}
+      </button>
+    {/if}
+  </div>
+</div>
+
+{#if state.error}
+  <div class="alert alert-danger">{state.error}</div>
+{/if}
+
+{#if !state.row}
+  <div class="card empty-state">
+    {#if state.busy}
+      <span class="spinner" aria-hidden="true"></span>
+      <strong>Loading exception</strong>
+    {:else if state.loaded}
+      <strong>Exception not available</strong>
+      <span>It may have been pruned from the store.</span>
+    {/if}
+  </div>
+{:else}
+  <section class="stat-row" aria-label="Exception summary">
+    <article class="card stat-card">
+      <span class="subheader">Occurrences</span>
+      <strong class="stat-value">{state.row.countLabel}</strong>
+      <span class="text-muted">all time</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Clients</span>
+      <strong class="stat-value">{number(state.row.clients)}</strong>
+      <span class="text-muted">users and IPs</span>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">First seen</span>
+      <strong class="stat-value exception-when">{state.row.firstLabel}</strong>
+    </article>
+    <article class="card stat-card">
+      <span class="subheader">Last seen</span>
+      <strong class="stat-value exception-when">{state.row.lastLabel}</strong>
+    </article>
+  </section>
+
+  <section class="card exception-identity">
+    <div class="card-body">
+      <div class="exception-fingerprint">
+        <span class="subheader">Fingerprint</span>
+        <code>{state.row.exp_uid}</code>
+        <button class="btn btn-sm btn-ghost btn-icon" type="button" onclick="fez.copy(state.row.exp_uid, 'Fingerprint')" title="Copy the fingerprint">
+          <svg class="icon"><use href="#i-copy"></use></svg>
+        </button>
+      </div>
+      <p class="exception-message">{state.row.description || state.row.message || '(no message)'}</p>
+      {#if state.row.description && state.row.message}
+        <p class="exception-technical">{state.row.message}</p>
+      {/if}
+    </div>
+  </section>
+
+  <div class="section-head">
+    <h2>Stacktrace</h2>
+    <button class="btn btn-sm" type="button" onclick="fez.copy(state.row.dump || state.row.message, 'Stacktrace')" disabled={!state.row.dump && !state.row.message}>
+      <svg class="icon"><use href="#i-copy"></use></svg>
+      Copy
+    </button>
+  </div>
+  <section class="card">
+    <pre class="log-detail exception-dump">{state.row.dump || state.row.message || '(no stacktrace captured)'}</pre>
+  </section>
+
+  <div class="section-head">
+    <h2>Occurrences</h2>
+    <span class="text-muted">One row per UTC minute, the most recent 50 shown</span>
+  </div>
+  <section class="log-view log-view-single">
+    <div class="log-main">
+      <div class="log-scroll">
+        <table class="log-table exception-occurrences">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th class="num">Count</th>
+              <th>Users</th>
+              <th>IPs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each state.row.minutes as minute}
+              <tr>
+                <td class="log-time">{minute.time}</td>
+                <td class="num">{minute.countLabel}</td>
+                <td class="log-ip">{minute.usersLabel || '-'}</td>
+                <td class="log-ip">
+                  {#each minute.ips as ip, i}
+                    <a href={'https://ip-api.com/#' + ip} target="_blank" rel="noreferrer">{ip}</a>{#if i < minute.ips.length - 1}, {/if}
+                  {:else}
+                    -
+                  {/each}
+                </td>
+              </tr>
+            {:else}
+              <tr>
+                <td colspan="4" class="text-muted log-empty">No minute rows in the store.</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+{/if}

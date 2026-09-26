@@ -41,11 +41,11 @@ func exceptionModule(dir string, sink *memorySink) *Module {
 func TestExceptionLogRoutesAndAggregates(t *testing.T) {
 	dir := t.TempDir()
 	content := strings.Join([]string{
-		`{"exp_uid":"e1","message":"boom","dump":"d1","user":"u1","ip":"1.1.1.1","tags":["a"],"ts":"2026-09-26T10:00:30Z"}`,
-		`{"exp_uid":"e1","message":"boom","dump":"d2","user":"u2","ip":"1.1.1.1","ts":"2026-09-26T10:00:45Z"}`,
+		`{"uid":"e1","message":"boom","dump":"d1","user":"u1","ip":"1.1.1.1","tags":["a"],"ts":"2026-09-26T10:00:30Z"}`,
+		`{"uid":"e1","message":"boom","dump":"d2","user":"u2","ip":"1.1.1.1","ts":"2026-09-26T10:00:45Z"}`,
 		`not json`,
-		`{"exp_uid":"e1","message":"boom","user":"u3","ip":"2.2.2.2","ts":"2026-09-26T10:01:10Z"}`,
-		`{"exp_uid":"e1","message":"boom","ts":"2026-09-26T10:01:20Z"}`,
+		`{"uid":"e1","message":"boom","user":"u3","ip":"2.2.2.2","ts":"2026-09-26T10:01:10Z"}`,
+		`{"uid":"e1","message":"boom","ts":"2026-09-26T10:01:20Z"}`,
 	}, "\n") + "\n"
 	path := writeAppLog(t, dir, "app.exceptions.log", content)
 	sink := &memorySink{}
@@ -92,7 +92,7 @@ func TestExceptionLogRoutesAndAggregates(t *testing.T) {
 
 func TestExceptionHoldsBackPartialLine(t *testing.T) {
 	dir := t.TempDir()
-	path := writeAppLog(t, dir, "app.exceptions.log", `{"exp_uid":"e","message":"m1","ts":"2026-09-26T10:00:30Z"}`+"\n"+`{"exp_uid":"e","mess`)
+	path := writeAppLog(t, dir, "app.exceptions.log", `{"uid":"e","message":"m1","ts":"2026-09-26T10:00:30Z"}`+"\n"+`{"uid":"e","mess`)
 	sink := &memorySink{}
 	module := exceptionModule(dir, sink)
 	module.runOnce()
@@ -113,7 +113,7 @@ func TestExceptionHoldsBackPartialLine(t *testing.T) {
 
 func TestExceptionAppendFailureKeepsOffset(t *testing.T) {
 	dir := t.TempDir()
-	path := writeAppLog(t, dir, "app.exceptions.log", `{"exp_uid":"e","message":"m","ts":"2026-09-26T10:00:30Z"}`+"\n")
+	path := writeAppLog(t, dir, "app.exceptions.log", `{"uid":"e","message":"m","ts":"2026-09-26T10:00:30Z"}`+"\n")
 	sink := &memorySink{appendErr: errors.New("database unavailable")}
 	exceptionModule(dir, sink).runOnce()
 	if _, ok := sink.offsets[path]; ok {
@@ -123,7 +123,7 @@ func TestExceptionAppendFailureKeepsOffset(t *testing.T) {
 
 func TestParseExceptionValidates(t *testing.T) {
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
-	record, err := parseException([]byte(`{"exp_uid":"e","message":"m"}`), now)
+	record, err := parseException([]byte(`{"uid":"e","message":"m"}`), now)
 	if err != nil || !record.TS.Equal(now) {
 		t.Fatalf("missing ts should use ingestion time: %v %+v", err, record)
 	}
@@ -131,12 +131,13 @@ func TestParseExceptionValidates(t *testing.T) {
 		t.Fatalf("message = %q", record.Message)
 	}
 	for name, line := range map[string]string{
-		"no exp_uid":  `{"message":"m"}`,
-		"no message":  `{"exp_uid":"e"}`,
-		"bad message": `{"exp_uid":"e","message":5}`,
-		"bad user":    `{"exp_uid":"e","message":"m","user":42}`,
-		"bad tags":    `{"exp_uid":"e","message":"m","tags":[1]}`,
-		"bad ts":      `{"exp_uid":"e","message":"m","ts":"nope"}`,
+		"no uid":      `{"message":"m"}`,
+		"exp_uid":     `{"exp_uid":"e","message":"m"}`,
+		"no message":  `{"uid":"e"}`,
+		"bad message": `{"uid":"e","message":5}`,
+		"bad user":    `{"uid":"e","message":"m","user":42}`,
+		"bad tags":    `{"uid":"e","message":"m","tags":[1]}`,
+		"bad ts":      `{"uid":"e","message":"m","ts":"nope"}`,
 		"not json":    `nope`,
 	} {
 		if _, err := parseException([]byte(line), now); err == nil {

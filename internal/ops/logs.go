@@ -109,6 +109,21 @@ func (s *Service) resolveException(app, expUID string, resolved bool) error {
 	return writer.SetExceptionResolved(app, expUID, resolved)
 }
 
+// ignoreException marks one exception group ignored (and therefore resolved) or clears only the
+// ignore flag. A store without the capability answers with an error.
+func (s *Service) ignoreException(app, expUID string, ignored bool) error {
+	if s.store == nil {
+		return errNoLogStore
+	}
+	writer, ok := s.store.(interface {
+		SetExceptionIgnored(string, string, bool) error
+	})
+	if !ok {
+		return errors.New("exceptions are not available")
+	}
+	return writer.SetExceptionIgnored(app, expUID, ignored)
+}
+
 // Traffic returns the aggregated request log of one app for requests newer than since.
 func (s *Service) Traffic(name string, since time.Time) (logstore.Traffic, error) {
 	if s.store == nil {

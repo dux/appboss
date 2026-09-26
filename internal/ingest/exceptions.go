@@ -27,7 +27,7 @@ func IsExceptionLog(name string) bool { return strings.HasSuffix(name, Exception
 // exceptionLine is one JSON record as the Lux ExceptionWriter emits it. The optional strings are
 // pointers so a number or object where a string belongs is rejected rather than coerced.
 type exceptionLine struct {
-	ExpUID      string   `json:"exp_uid"`
+	ExpUID      string   `json:"uid"`
 	Message     *string  `json:"message"`
 	Dump        *string  `json:"dump"`
 	User        *string  `json:"user"`
@@ -50,7 +50,7 @@ type exceptionRecord struct {
 	IP          string
 }
 
-// parseException reads one line. exp_uid must be a nonempty string and message a string; the
+// parseException reads one line. uid must be a nonempty string and message a string; the
 // other optional fields are validated by type and ts falls back to the ingestion time.
 func parseException(line []byte, now time.Time) (exceptionRecord, error) {
 	var fields exceptionLine
@@ -58,7 +58,7 @@ func parseException(line []byte, now time.Time) (exceptionRecord, error) {
 		return exceptionRecord{}, err
 	}
 	if fields.ExpUID == "" {
-		return exceptionRecord{}, errors.New("exp_uid is required")
+		return exceptionRecord{}, errors.New("uid is required")
 	}
 	if fields.Message == nil {
 		return exceptionRecord{}, errors.New("message is required")
@@ -90,7 +90,7 @@ func stringValue(value *string) string {
 	return *value
 }
 
-// exceptionAggregator folds parsed occurrences into groups keyed by exp_uid and, inside each
+// exceptionAggregator folds parsed occurrences into groups keyed by uid and, inside each
 // group, one minute row per UTC minute. Order is preserved so the first occurrence owns the
 // metadata and the first nonempty dump wins.
 type exceptionAggregator struct {

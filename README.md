@@ -172,7 +172,7 @@ The startup banner names the address every app ended up on, so when the demo fal
 The demo host file blocks common scanner targets for every app (`defaults.deny`: `*.php`, `*.asp`, `*.aspx`, `*.jsp`, `*.cgi`, `/.git/*`, `/.env`, `/wp-admin/*`, `/wp-content/*`, `/cgi-bin/*`, `/phpmyadmin`), so `curl -i http://bun.lvh.me/wp-login.php` answers `403`.
 
 `make demo-watch` rebuilds and restarts on source changes through `watchexec`.
-`make seed` recreates the demo's SQLite databases and event store from scratch with dummy data - a week of requests and a day of logs per app, Parquet analytics events behind the bun app's 4-step `onboarding` funnel (filter the Events tab by `plan:` or `page:` tags), plus exception groups with per-minute counts, and audit rows, deny counters and daemon log lines in the host database - so a fresh console's Overview, Traffic, Logs, Exceptions, Events and Audit views are populated. Stop the running demo first; it deletes the databases it seeds (`go run ./internal/demo/seed --dir ./demo/.dboss/log`).
+`make seed` recreates the demo's SQLite databases and event store from scratch with dummy data - a week of requests and a day of logs per app, Parquet analytics events behind the bun app's 4-step `onboarding` funnel (filter the Events tab by `plan:` or `page:` tags), plus exception groups with per-minute counts on the first app, and audit rows, deny counters and daemon log lines in the host database - so a fresh console's Overview, Traffic, Logs, Exceptions, Events and Audit views are populated. Stop the running demo first; it deletes the databases it seeds (`go run ./internal/demo/seed --dir ./demo/.dboss/log`).
 `make kill` stops the demo apps and clears the port range after a crash.
 
 ## One config file, two modes
@@ -413,16 +413,16 @@ channel. The Lux `web_common` plugin's `ExceptionWriter` writes it, one compact 
 line, but any producer may append the same shape:
 
 ```json
-{"exp_uid":"<sha256>","dump":"<full message>","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"description":"Confirming an order","ts":"2026-09-26T10:00:30.123Z"}
+{"uid":"<sha256>","dump":"<full message>","message":"boom","user":"u_42","ip":"203.0.113.7","tags":["checkout"],"description":"Confirming an order","ts":"2026-09-26T10:00:30.123Z"}
 ```
 
-* `exp_uid` (required, nonempty) is the fingerprint that groups occurrences; `message` is required. `dump`, `user`, `ip`, `tags` and `description` are optional and type-checked; `ts` is RFC3339 UTC and falls back to the time dboss reads the line. A malformed line becomes a `warn` row on the file's channel, like an event.
+* `uid` (required, nonempty) is the fingerprint that groups occurrences; `message` is required. `dump`, `user`, `ip`, `tags` and `description` are optional and type-checked; `ts` is RFC3339 UTC and falls back to the time dboss reads the line. A malformed line becomes a `warn` row on the file's channel, like an event.
 * dboss tails the file every 5 seconds by byte offset, never deletes it, and keeps a trailing partial line for the next pass.
 
 Two tables hold the stream:
 
-* `exceptions` - one row per `exp_uid`: the first nonempty `dump`, `first_at`/`last_at`, the total `count` and `is_resolved`. Summaries and dumps are never pruned.
-* `exception_logs` - one row per `exp_uid` per UTC minute: `count`, the `message`/`tags`/`description` of the first occurrence in that minute, and the distinct `users` and `ips` seen (each a JSON array, capped at 5). Later occurrences only raise the count and add new users/IPs, so a thousand lines in one minute are a single row.
+* `exceptions` - one row per `uid`: the first nonempty `dump`, `first_at`/`last_at`, the total `count`, `is_resolved` and `is_ignored`. Summaries and dumps are never pruned.
+* `exception_logs` - one row per `uid` per UTC minute: `count`, the `message`/`tags`/`description` of the first occurrence in that minute, and the distinct `users` and `ips` seen (each a JSON array, capped at 5). Later occurrences only raise the count and add new users/IPs, so a thousand lines in one minute are a single row.
 
 Timestamps are UTC Unix milliseconds. `log_retention` prunes old `exception_logs` minute rows;
 `log_retention: 0` stops ingesting the stream. `dboss check` is not affected; the tables are
@@ -430,8 +430,10 @@ created on first write.
 
 The console's **Exceptions** tab (`#/exceptions?app=<name>&range=`) lists one app's groups for
 the last hour, 24 hours, 7 days or 30 days, newest first. Clicking a group shows its full dump
-and the last 50 minute rows (counts, users, IPs), and a **Resolve**/**Reopen** button flips
-`is_resolved` (audited). Listing is read-only and writes no audit row.
+and the last 50 minute rows (counts, users, IPs). **Resolve** sets `is_resolved` (audited); the next
+occurrence clears it. **Ignore** sets `is_resolved` and `is_ignored`, and a later occurrence leaves
+both set. **Reopen** clears both, and **Unignore** clears only `is_ignored`. Listing is read-only
+and writes no audit row.
 The app card shows an **Exceptions** button next to **Logs** and **Traffic**; it turns red
 with the count of unresolved groups while any remain.
 

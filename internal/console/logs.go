@@ -71,7 +71,8 @@ func (h *Handler) logBlocked(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "updated_at": time.Now().UTC()})
 }
 
-// logExceptions lists one app's aggregated exception groups for the Exceptions tab.
+// logExceptions lists one app's aggregated exception groups for the Exceptions tab. With a uid it
+// returns just that fingerprint, so the detail page reads one group without a range.
 func (h *Handler) logExceptions(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	app := strings.TrimSpace(query.Get("app"))
@@ -79,12 +80,16 @@ func (h *Handler) logExceptions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "app is required")
 		return
 	}
-	span, ok := trafficRanges[query.Get("range")]
-	if !ok {
-		writeError(w, http.StatusBadRequest, "range must be 1h, 24h, 7d or 30d")
-		return
+	filter := logstore.ExceptionFilter{ExpUID: strings.TrimSpace(query.Get("uid"))}
+	if filter.ExpUID == "" {
+		span, ok := trafficRanges[query.Get("range")]
+		if !ok {
+			writeError(w, http.StatusBadRequest, "range must be 1h, 24h, 7d or 30d")
+			return
+		}
+		filter.Since = time.Now().Add(-span)
 	}
-	rows, err := h.service.Exceptions(app, logstore.ExceptionFilter{Since: time.Now().Add(-span)})
+	rows, err := h.service.Exceptions(app, filter)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -95,6 +100,15 @@ func (h *Handler) logExceptions(w http.ResponseWriter, r *http.Request) {
 // exceptionResolve flips the is_resolved flag on one exception group. It mutates, so it goes
 // through ops.Service.Do and leaves an audit row.
 func (h *Handler) exceptionResolve(w http.ResponseWriter, r *http.Request, session authSession) {
+	h.exceptionFlag(w, r, session, ops.ActionExceptionResolve)
+}
+
+// exceptionIgnore marks one group ignored, which also resolves it, or clears only that flag.
+func (h *Handler) exceptionIgnore(w http.ResponseWriter, r *http.Request, session authSession) {
+	h.exceptionFlag(w, r, session, ops.ActionExceptionIgnore)
+}
+
+func (h *Handler) exceptionFlag(w http.ResponseWriter, r *http.Request, session authSession, action string) {
 	if !h.requireCSRF(w, r, session) {
 		return
 	}
@@ -113,7 +127,7 @@ func (h *Handler) exceptionResolve(w http.ResponseWriter, r *http.Request, sessi
 		writeError(w, http.StatusBadRequest, "app and exp_uid are required")
 		return
 	}
-	if _, err := h.service.Do(ops.Request{Method: ops.ActionExceptionResolve, App: app, ExpUID: expUID, On: request.On, Actor: session.Email}); err != nil {
+	if _, err := h.service.Do(ops.Request{Method: action, App: app, ExpUID: expUID, On: request.On, Actor: session.Email}); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

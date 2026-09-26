@@ -66,7 +66,7 @@ func TestExceptionsTableGainsResolvedColumnInPlace(t *testing.T) {
 	store := New(dir, time.Hour, nil, "", time.Hour, 0)
 	defer store.Close()
 	rows, err := store.Exceptions("demo", ExceptionFilter{})
-	if err != nil || len(rows) != 1 || rows[0].ExpUID != "e" || rows[0].IsResolved {
+	if err != nil || len(rows) != 1 || rows[0].ExpUID != "e" || rows[0].IsResolved || rows[0].IsIgnored {
 		t.Fatalf("exceptions after migration: %v %+v", err, rows)
 	}
 }

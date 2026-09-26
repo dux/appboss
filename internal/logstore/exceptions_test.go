@@ -251,6 +251,108 @@ func TestSetExceptionResolvedAndMinuteCap(t *testing.T) {
 	}
 }
 
+func TestResolvedLiftsUnlessIgnored(t *testing.T) {
+	store := openExceptionStore(t)
+	minute := time.Now().UTC().Truncate(time.Minute)
+	if err := store.AppendExceptions("demo", singleMinuteBatch("e", minute, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetExceptionResolved("demo", "e", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendExceptions("demo", singleMinuteBatch("e", minute.Add(time.Minute), 1)); err != nil {
+		t.Fatal(err)
+	}
+	row := mustException(t, store, "e")
+	if row.IsResolved || row.IsIgnored || row.Count != 2 {
+		t.Fatalf("a repeat should reopen a resolved group: %+v", row)
+	}
+
+	if err := store.SetExceptionIgnored("demo", "e", true); err != nil {
+		t.Fatal(err)
+	}
+	row = mustException(t, store, "e")
+	if !row.IsResolved || !row.IsIgnored {
+		t.Fatalf("ignore should resolve the group: %+v", row)
+	}
+	count, err := store.UnresolvedExceptionCount("demo")
+	if err != nil || count != 0 {
+		t.Fatalf("ignored group still counts as unresolved: %d %v", count, err)
+	}
+	if err := store.AppendExceptions("demo", singleMinuteBatch("e", minute.Add(2*time.Minute), 1)); err != nil {
+		t.Fatal(err)
+	}
+	row = mustException(t, store, "e")
+	if !row.IsResolved || !row.IsIgnored || row.Count != 3 {
+		t.Fatalf("a repeat should leave an ignored group resolved: %+v", row)
+	}
+
+	if err := store.SetExceptionIgnored("demo", "e", false); err != nil {
+		t.Fatal(err)
+	}
+	row = mustException(t, store, "e")
+	if !row.IsResolved || row.IsIgnored {
+		t.Fatalf("unignore should keep the group resolved: %+v", row)
+	}
+	if err := store.AppendExceptions("demo", singleMinuteBatch("e", minute.Add(3*time.Minute), 1)); err != nil {
+		t.Fatal(err)
+	}
+	row = mustException(t, store, "e")
+	if row.IsResolved || row.IsIgnored || row.Count != 4 {
+		t.Fatalf("a repeat after unignore should reopen the group: %+v", row)
+	}
+
+	if err := store.SetExceptionIgnored("demo", "e", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetExceptionResolved("demo", "e", false); err != nil {
+		t.Fatal(err)
+	}
+	row = mustException(t, store, "e")
+	if row.IsResolved || row.IsIgnored {
+		t.Fatalf("reopen should clear both flags: %+v", row)
+	}
+	if err := store.SetExceptionIgnored("demo", "missing", true); err == nil {
+		t.Fatal("ignoring an unknown fingerprint should fail")
+	}
+}
+
+func mustException(t *testing.T, store *Store, uid string) ExceptionSummary {
+	t.Helper()
+	rows, err := store.Exceptions("demo", ExceptionFilter{ExpUID: uid})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("exception %s: %v %+v", uid, err, rows)
+	}
+	return rows[0]
+}
+
+func TestExceptionsFilterByUID(t *testing.T) {
+	store := openExceptionStore(t)
+	minute := time.Now().UTC().Truncate(time.Minute)
+	if err := store.AppendExceptions("demo", ExceptionBatch{Groups: []ExceptionGroup{
+		{ExpUID: "a", Dump: "dump-a", FirstAt: minute, LastAt: minute, Count: 1, Minutes: []ExceptionMinute{{MinuteAt: minute, Count: 1, Message: "a"}}},
+		{ExpUID: "b", FirstAt: minute, LastAt: minute, Count: 2, Minutes: []ExceptionMinute{{MinuteAt: minute, Count: 2, Message: "b"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.Exceptions("demo", ExceptionFilter{ExpUID: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ExpUID != "b" || rows[0].Count != 2 || rows[0].Dump != "" {
+		t.Fatalf("uid filter = %+v", rows)
+	}
+	if len(rows[0].Minutes) != 1 || rows[0].Minutes[0].Message != "b" {
+		t.Fatalf("uid filter minutes = %+v", rows[0].Minutes)
+	}
+
+	// A missing fingerprint is an empty list, not an error.
+	if rows, err = store.Exceptions("demo", ExceptionFilter{ExpUID: "missing"}); err != nil || len(rows) != 0 {
+		t.Fatalf("missing uid = %+v, err %v", rows, err)
+	}
+}
+
 func TestUnresolvedExceptionCount(t *testing.T) {
 	store := openExceptionStore(t)
 	minute := time.Now().UTC().Truncate(time.Minute)

@@ -5,7 +5,6 @@
       this.state.app = Fez.hqs('app') || ''
       this.state.range = Fez.hqs('range') || '24h'
       this.state.rows = []
-      this.state.expandedKey = ''
       this.state.loaded = false
       this.state.busy = false
       this.state.error = ''
@@ -33,7 +32,6 @@
         if (!this.state.apps.includes(this.state.app)) this.state.app = this.state.apps[0] || ''
         Dboss.setQs('app', this.state.app)
         this.state.needsSelectSync = true
-        this.state.expandedKey = ''
         if (this.state.app) {
           const params = new URLSearchParams({ app: this.state.app, range: this.state.range })
           const data = await Dboss.api(`/api/exceptions?${params}`)
@@ -59,28 +57,20 @@
       }
       return {
         exp_uid: row.exp_uid,
-        dump: row.dump || '',
         resolved: !!row.is_resolved,
+        ignored: !!row.is_ignored,
         short: (row.exp_uid || '').slice(0, 12),
         message: minutes.length ? minutes[0].message : '',
         countLabel: this.number(row.count),
         lastLabel: this.time(row.last_at),
-        spanLabel: `${this.time(row.first_at)} - ${this.time(row.last_at)}`,
         clients: clients.size,
-        minutes: minutes.map((minute) => ({
-          time: this.time(minute.minute_at),
-          countLabel: this.number(minute.count),
-          usersLabel: (minute.users || []).join(', '),
-          ipsLabel: (minute.ips || []).join(', '),
-          tagsLabel: (minute.tags || []).join(', '),
-          description: minute.description || '',
-        })),
       }
     }
 
-    toggle(index) {
-      const uid = this.state.rows[index] && this.state.rows[index].exp_uid
-      this.state.expandedKey = this.state.expandedKey === uid ? '' : uid
+    open(index) {
+      const row = this.state.rows[index]
+      if (!row) return
+      window.location.hash = `#/exception?app=${encodeURIComponent(this.state.app)}&uid=${encodeURIComponent(row.exp_uid)}`
     }
 
     async resolve(index) {
@@ -93,7 +83,26 @@
           method: 'POST',
           body: JSON.stringify({ app: this.state.app, exp_uid: row.exp_uid, on }),
         })
-        this.state.rows = this.state.rows.map((item, i) => (i === index ? { ...item, resolved: on } : item))
+        this.state.rows = this.state.rows.map((item, i) => (i === index ? { ...item, resolved: on, ignored: on ? item.ignored : false } : item))
+        this.state.error = ''
+      } catch (error) {
+        this.state.error = error.message
+      } finally {
+        this.state.busy = false
+      }
+    }
+
+    async ignore(index) {
+      const row = this.state.rows[index]
+      if (!row) return
+      const on = !row.ignored
+      this.state.busy = true
+      try {
+        await Dboss.api('/api/exceptions/ignore', {
+          method: 'POST',
+          body: JSON.stringify({ app: this.state.app, exp_uid: row.exp_uid, on }),
+        })
+        this.state.rows = this.state.rows.map((item, i) => (i === index ? { ...item, ignored: on, resolved: on ? true : item.resolved } : item))
         this.state.error = ''
       } catch (error) {
         this.state.error = error.message
@@ -190,74 +199,40 @@
             <th class="num">Count</th>
             <th class="num">Clients</th>
             <th>Last seen</th>
-            <th class="exceptions-action">Resolved</th>
+            <th class="exceptions-action">Actions</th>
           </tr>
         </thead>
+        <tbody>
         {#each state.rows as row, index}
-          <tbody>
-            <tr class="log-row" class:log-row-open={state.expandedKey === row.exp_uid} class:log-row-resolved={row.resolved} onclick="fez.toggle({index})">
-              <td>
-                <div class="log-process">
-                  {row.short}
-                  {#if row.resolved}<span class="badge badge-success">resolved</span>{/if}
-                </div>
-                <div class="log-message">{row.message || '(no message)'}</div>
-              </td>
-              <td class="num">{row.countLabel}</td>
-              <td class="num">{row.clients}</td>
-              <td class="log-time">{row.lastLabel}</td>
-              <td class="exceptions-action">
-                <button class="btn btn-sm" type="button" onclick="event.stopPropagation(); fez.resolve({index})" disabled={state.busy}>
-                  {row.resolved ? 'Reopen' : 'Resolve'}
-                </button>
-              </td>
-            </tr>
-            {#if state.expandedKey === row.exp_uid}
-              <tr class="log-detail-row">
-                <td colspan="5">
-                  <div class="log-detail-head">
-                    <strong>{row.short} · {row.spanLabel}</strong>
-                    <span class="text-muted">{row.minutes.length} minute(s), last 50 shown</span>
-                  </div>
-                  {#if row.dump}
-                    <pre class="log-detail">{row.dump}</pre>
-                  {:else}
-                    <pre class="log-detail">{row.message || '(no dump)'}</pre>
-                  {/if}
-                  <table class="log-table exceptions-minutes">
-                    <thead>
-                      <tr>
-                        <th>Minute</th>
-                        <th class="num">Count</th>
-                        <th>Users</th>
-                        <th>IPs</th>
-                        <th>Description</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each row.minutes as minute}
-                        <tr>
-                          <td class="log-time">{minute.time}</td>
-                          <td class="num">{minute.countLabel}</td>
-                          <td class="log-ip">{minute.usersLabel || '-'}</td>
-                          <td class="log-ip">{minute.ipsLabel || '-'}</td>
-                          <td class="log-message">{minute.description || minute.tagsLabel || '-'}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </td>
-              </tr>
-            {/if}
-          </tbody>
+          <tr class="log-row" class:log-row-resolved={row.resolved} onclick="fez.open({index})" title="Open the full exception">
+            <td>
+              <div class="log-process">
+                {row.short}
+                {#if row.ignored}<span class="badge">ignored</span>{:else if row.resolved}<span class="badge badge-success">resolved</span>{/if}
+              </div>
+              <div class="log-message">{row.message || '(no message)'}</div>
+            </td>
+            <td class="num">{row.countLabel}</td>
+            <td class="num">{row.clients}</td>
+            <td class="log-time">{row.lastLabel}</td>
+            <td class="exceptions-action">
+              <button class="btn btn-sm" type="button" onclick="event.stopPropagation(); fez.resolve({index})" disabled={state.busy}>
+                {row.resolved ? 'Reopen' : 'Resolve'}
+              </button>
+              <button class="btn btn-sm" type="button" onclick="event.stopPropagation(); fez.ignore({index})" disabled={state.busy}>
+                {row.ignored ? 'Unignore' : 'Ignore'}
+              </button>
+            </td>
+          </tr>
         {/each}
+        </tbody>
       </table>
       {#if !state.rows.length}
         <p class="text-muted log-empty">{state.loaded ? 'No exceptions in range' : 'Loading...'}</p>
       {/if}
     </div>
     <div class="log-footer">
-      <span class="text-muted">One row per fingerprint; click to see the full dump and the last 50 minutes. Produced by an app's <code>*.exceptions.log</code>.</span>
+      <span class="text-muted">One row per fingerprint; click a row to open the full exception on its own page. Produced by an app's <code>*.exceptions.log</code>.</span>
       {#if state.busy}
         <span class="spinner" aria-hidden="true"></span>
       {/if}

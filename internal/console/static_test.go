@@ -43,6 +43,21 @@ func TestBlockedPageIsLinked(t *testing.T) {
 	}
 }
 
+// The Exceptions list opens a fingerprint on its own page (#/exception). db-shell fetches
+// tpl-exception.fez on demand, so a rename on either side would break the link silently.
+func TestExceptionPageIsLinked(t *testing.T) {
+	list, err := assets.ReadFile("static/fez/tpl-exceptions.fez")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(list), "#/exception?") {
+		t.Error("tpl-exceptions.fez must link to #/exception")
+	}
+	if _, err := assets.ReadFile("static/fez/tpl-exception.fez"); err != nil {
+		t.Fatalf("tpl-exception.fez is not embedded: %v", err)
+	}
+}
+
 // db-config-form is preloaded in index.html while tpl-config is fetched per route, so the form
 // is always compiled before the page that uses it.
 func TestConfigFormComponentIsLoaded(t *testing.T) {

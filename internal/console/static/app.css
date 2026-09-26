@@ -2758,14 +2758,68 @@ textarea.sql-editor {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The Exceptions tab sits below its stat cards; the minute table sits below the dump. */
+/* The Exceptions tab sits below its stat cards. */
 .exceptions-table { margin-top: 16px; }
-
-.exceptions-minutes { margin-top: 8px; }
 
 .exceptions-action { text-align: right; white-space: nowrap; }
 
+.exceptions-action .btn + .btn { margin-left: 6px; }
+
 .log-row-resolved { opacity: 0.55; }
+
+/* Exception detail: the fingerprint and message card, a taller dump and a compact time column. */
+.exception-identity { margin-top: 16px; }
+
+.exception-fingerprint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.exception-fingerprint code {
+  overflow: hidden;
+  font-size: var(--text-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exception-message {
+  margin: 10px 0 0;
+  font-size: var(--text-size-big);
+  word-break: break-word;
+}
+
+.exception-technical {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-size-small);
+  word-break: break-word;
+}
+
+.exception-when {
+  font-size: var(--text-size-small);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.exception-dump {
+  max-height: none;
+  padding: 16px 20px;
+}
+
+/* The occurrence log: a shrink-to-fit time column and a fixed count column. */
+.exception-occurrences th:first-child,
+.exception-occurrences td:first-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.exception-occurrences th.num,
+.exception-occurrences td.num {
+  width: 100px;
+}
 
 .log-nav {
   overflow: auto;

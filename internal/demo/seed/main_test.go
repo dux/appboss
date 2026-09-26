@@ -13,11 +13,11 @@ import (
 func TestSeedPopulatesDatabases(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "log")
 	now := time.Now()
-	if err := seed(dir, []string{"demo"}, now); err != nil {
+	if err := seed(dir, []string{"demo", "other"}, now); err != nil {
 		t.Fatal(err)
 	}
 	// A second run must recreate, not add to, what the first wrote.
-	if err := seed(dir, []string{"demo"}, now); err != nil {
+	if err := seed(dir, []string{"demo", "other"}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,6 +47,10 @@ func TestSeedPopulatesDatabases(t *testing.T) {
 	}
 	if resolved != 1 {
 		t.Fatalf("seeded resolved groups = %d, want 1", resolved)
+	}
+	others, err := store.Exceptions("other", logstore.ExceptionFilter{})
+	if err != nil || len(others) != 0 {
+		t.Fatalf("exceptions belong on the first app only: %v %d", err, len(others))
 	}
 
 	eventStore := events.NewStore(dir)

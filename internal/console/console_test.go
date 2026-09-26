@@ -319,6 +319,8 @@ func (fakeLogs) Blocked() ([]logstore.BlockedStat, error) {
 
 func (fakeLogs) SetExceptionResolved(string, string, bool) error { return nil }
 
+func (fakeLogs) SetExceptionIgnored(string, string, bool) error { return nil }
+
 func (fakeLogs) UnresolvedExceptionCount(string) (int, error) { return 3, nil }
 
 func (fakeLogs) Exceptions(string, logstore.ExceptionFilter) ([]logstore.ExceptionSummary, error) {
@@ -579,6 +581,10 @@ func TestConsoleServesLogAndRequestSearch(t *testing.T) {
 	noUID := call(t, handler, cookie, session, http.MethodPost, "/api/exceptions/resolve", `{"app":"sinatra"}`)
 	if noUID.Code != http.StatusBadRequest {
 		t.Fatalf("missing exp_uid should be a 400: %d", noUID.Code)
+	}
+	ignore := call(t, handler, cookie, session, http.MethodPost, "/api/exceptions/ignore", `{"app":"sinatra","exp_uid":"9f2e1a4b","on":true}`)
+	if ignore.Code != http.StatusOK || !strings.Contains(ignore.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected ignore: %d %s", ignore.Code, ignore.Body.String())
 	}
 	missingApp := call(t, handler, cookie, session, http.MethodGet, "/api/log/search", "")
 	if missingApp.Code != http.StatusBadRequest {

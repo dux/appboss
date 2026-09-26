@@ -17,12 +17,11 @@ type auditStore struct {
 
 func (s *auditStore) Rates(string) (logstore.Rates, error) { return logstore.Rates{}, nil }
 
-func (s *auditStore) Channels(string) ([]logstore.Channel, error) { return nil, nil }
-func (s *auditStore) Tree([]string) ([]logstore.AppTree, error)   { return nil, nil }
-func (s *auditStore) SetExceptionResolved(string, string, bool) error {
-	return nil
-}
-func (s *auditStore) RecordAudit(e logstore.AuditEntry) error { s.rows = append(s.rows, e); return nil }
+func (s *auditStore) Channels(string) ([]logstore.Channel, error)     { return nil, nil }
+func (s *auditStore) Tree([]string) ([]logstore.AppTree, error)       { return nil, nil }
+func (s *auditStore) SetExceptionResolved(string, string, bool) error { return nil }
+func (s *auditStore) SetExceptionIgnored(string, string, bool) error  { return nil }
+func (s *auditStore) RecordAudit(e logstore.AuditEntry) error         { s.rows = append(s.rows, e); return nil }
 func (s *auditStore) SearchAudit(logstore.AuditFilter) ([]logstore.AuditEntry, error) {
 	return s.rows, nil
 }
@@ -56,6 +55,12 @@ func TestDoAuditsExceptionResolve(t *testing.T) {
 	}
 	if len(store.rows) != 1 || store.rows[0].Action != ActionExceptionResolve || store.rows[0].Detail != "abc" || store.rows[0].Result != "ok" {
 		t.Fatalf("audit = %+v", store.rows)
+	}
+	if _, err := service.Do(Request{Method: ActionExceptionIgnore, App: "web", ExpUID: "abc", On: true, Actor: "admin@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.rows) != 2 || store.rows[1].Action != ActionExceptionIgnore || store.rows[1].Detail != "abc" || store.rows[1].Result != "ok" {
+		t.Fatalf("ignore audit = %+v", store.rows)
 	}
 }
 

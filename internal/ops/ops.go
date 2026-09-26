@@ -68,6 +68,7 @@ const (
 	ActionEventsSave       = "events-save"
 	ActionEventsDelete     = "events-delete"
 	ActionExceptionResolve = "exception-resolve"
+	ActionExceptionIgnore  = "exception-ignore"
 )
 
 // auditActions are the methods that write an audit row when they run.
@@ -77,7 +78,7 @@ var auditActions = map[string]bool{
 	ActionPGBackup: true, ActionPGRestore: true, ActionPGDrop: true, ActionPGDeleteDump: true, ActionPGQuery: true,
 	ActionPubsubRotate: true, ActionPubsubPublish: true, ActionAdd: true,
 	ActionEventsQuery: true, ActionEventsSave: true, ActionEventsDelete: true,
-	ActionExceptionResolve: true,
+	ActionExceptionResolve: true, ActionExceptionIgnore: true,
 }
 
 // Runtime is the supervisor surface the service drives.
@@ -329,6 +330,8 @@ func (s *Service) dispatch(request Request) (any, error) {
 		return nil, s.eventsDelete(request.App, request.Kind, request.Name)
 	case ActionExceptionResolve:
 		return nil, s.resolveException(request.App, request.ExpUID, request.On)
+	case ActionExceptionIgnore:
+		return nil, s.ignoreException(request.App, request.ExpUID, request.On)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAction, request.Method)
 	}
@@ -407,7 +410,7 @@ func auditDetail(request Request) string {
 		return request.Kind + " " + savedName(request.Data)
 	case ActionEventsDelete:
 		return request.Kind + " " + request.Name
-	case ActionExceptionResolve:
+	case ActionExceptionResolve, ActionExceptionIgnore:
 		return request.ExpUID
 	case ActionAdd:
 		detail := request.Repo

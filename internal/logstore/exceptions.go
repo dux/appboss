@@ -19,11 +19,12 @@ const ExceptionLimit = 100
 // ExceptionMinuteLimit caps the minute rows returned per group to the most recent ones.
 const ExceptionMinuteLimit = 50
 
-// ExceptionFilter narrows ExceptionGroups. A zero Since means every group; Limit is clamped to
-// ExceptionLimit.
+// ExceptionFilter narrows ExceptionGroups. A zero Since means every group, an empty ExpUID every
+// fingerprint; Limit is clamped to ExceptionLimit.
 type ExceptionFilter struct {
-	Since time.Time
-	Limit int
+	Since  time.Time
+	ExpUID string
+	Limit  int
 }
 
 // ExceptionSummary is one exception group for the console: its totals and one row per UTC minute.
@@ -35,6 +36,7 @@ type ExceptionSummary struct {
 	LastAt     time.Time            `json:"last_at"`
 	Count      int64                `json:"count"`
 	IsResolved bool                 `json:"is_resolved"`
+	IsIgnored  bool                 `json:"is_ignored"`
 	Minutes    []ExceptionMinuteRow `json:"minutes"`
 }
 
@@ -59,17 +61,25 @@ func (s *Store) Exceptions(app string, filter ExceptionFilter) ([]ExceptionSumma
 	}
 	summaries := []ExceptionSummary{}
 	// writerForPrune opens an existing database without creating one and runs the schema, so a
-	// database written before is_resolved existed gains the column before this SELECT reads it.
+	// database written before is_resolved or is_ignored existed gains the columns before this SELECT reads them.
 	w, err := s.writerForPrune(app)
 	if err != nil || w == nil {
 		return summaries, err
 	}
 	db := w.db
-	query := `SELECT exp_uid, COALESCE(dump, ''), first_at, last_at, count, is_resolved FROM exceptions`
+	query := `SELECT exp_uid, COALESCE(dump, ''), first_at, last_at, count, is_resolved, is_ignored FROM exceptions`
 	var args []any
+	where := []string{}
 	if !filter.Since.IsZero() {
-		query += ` WHERE last_at >= ?`
+		where = append(where, `last_at >= ?`)
 		args = append(args, filter.Since.UnixMilli())
+	}
+	if filter.ExpUID != "" {
+		where = append(where, `exp_uid = ?`)
+		args = append(args, filter.ExpUID)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY last_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -86,13 +96,14 @@ func (s *Store) Exceptions(app string, filter ExceptionFilter) ([]ExceptionSumma
 	for rows.Next() {
 		var summary ExceptionSummary
 		var firstAt, lastAt int64
-		var resolved int
-		if err := rows.Scan(&summary.ExpUID, &summary.Dump, &firstAt, &lastAt, &summary.Count, &resolved); err != nil {
+		var resolved, ignored int
+		if err := rows.Scan(&summary.ExpUID, &summary.Dump, &firstAt, &lastAt, &summary.Count, &resolved, &ignored); err != nil {
 			return summaries, err
 		}
 		summary.FirstAt = time.UnixMilli(firstAt).UTC()
 		summary.LastAt = time.UnixMilli(lastAt).UTC()
 		summary.IsResolved = resolved != 0
+		summary.IsIgnored = ignored != 0
 		index[summary.ExpUID] = len(summaries)
 		uids = append(uids, summary.ExpUID)
 		summaries = append(summaries, summary)
@@ -196,7 +207,8 @@ type ExceptionBatch struct {
 // AppendExceptions upserts exception groups and their minute rows, appends malformed-line
 // warnings as log rows and advances the tail offset, all in one transaction. The first nonempty
 // dump and the first occurrence's metadata per minute win; later occurrences only raise counters
-// and add distinct users/IPs (capped at maxExceptionValues).
+// and add distinct users/IPs (capped at maxExceptionValues). A new occurrence reopens a resolved
+// group; an ignored group stays resolved.
 func (s *Store) AppendExceptions(app string, batch ExceptionBatch) error {
 	if len(batch.Groups) == 0 && len(batch.Warnings) == 0 && batch.Path == "" {
 		return nil
@@ -236,7 +248,8 @@ func saveExceptionGroups(tx *sql.Tx, groups []ExceptionGroup) error {
 				dump = CASE WHEN (exceptions.dump IS NULL OR exceptions.dump = '') AND excluded.dump <> '' THEN excluded.dump ELSE exceptions.dump END,
 				first_at = MIN(exceptions.first_at, excluded.first_at),
 				last_at = MAX(exceptions.last_at, excluded.last_at),
-				count = exceptions.count + excluded.count`,
+				count = exceptions.count + excluded.count,
+				is_resolved = CASE WHEN exceptions.is_ignored <> 0 THEN 1 ELSE 0 END`,
 			group.ExpUID, group.Dump, group.FirstAt.UnixMilli(), group.LastAt.UnixMilli(), group.Count); err != nil {
 			return err
 		}
@@ -275,18 +288,31 @@ func saveExceptionMinute(tx *sql.Tx, expUID string, minute ExceptionMinute) erro
 	return err
 }
 
-// SetExceptionResolved flips the is_resolved flag on one exception group. A fingerprint that is
-// not on disk is an error, so the console never reports a resolve that did not land.
+// SetExceptionResolved marks one group resolved or open. Reopening also clears is_ignored, so a
+// group cannot stay ignored while it is open. A fingerprint that is not on disk is an error.
 func (s *Store) SetExceptionResolved(app, expUID string, resolved bool) error {
+	if resolved {
+		return s.updateException(app, expUID, `UPDATE exceptions SET is_resolved = 1 WHERE exp_uid = ?`)
+	}
+	return s.updateException(app, expUID, `UPDATE exceptions SET is_resolved = 0, is_ignored = 0 WHERE exp_uid = ?`)
+}
+
+// SetExceptionIgnored marks one group ignored, which also resolves it, or clears only the ignore
+// flag. An ignored group stays resolved when it happens again; a resolved group that is not
+// ignored is reopened by the next occurrence.
+func (s *Store) SetExceptionIgnored(app, expUID string, ignored bool) error {
+	if ignored {
+		return s.updateException(app, expUID, `UPDATE exceptions SET is_ignored = 1, is_resolved = 1 WHERE exp_uid = ?`)
+	}
+	return s.updateException(app, expUID, `UPDATE exceptions SET is_ignored = 0 WHERE exp_uid = ?`)
+}
+
+func (s *Store) updateException(app, expUID, query string) error {
 	w, err := s.writer(app)
 	if err != nil {
 		return err
 	}
-	flag := 0
-	if resolved {
-		flag = 1
-	}
-	result, err := w.db.Exec(`UPDATE exceptions SET is_resolved = ? WHERE exp_uid = ?`, flag, expUID)
+	result, err := w.db.Exec(query, expUID)
 	if err != nil {
 		return err
 	}
